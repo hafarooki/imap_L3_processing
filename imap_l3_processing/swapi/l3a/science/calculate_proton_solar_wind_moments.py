@@ -5,7 +5,6 @@ from typing import NamedTuple
 import numba
 import numpy as np
 import scipy.optimize
-import scipy.special
 from numpy import ndarray
 
 from imap_l3_processing.constants import (
@@ -15,7 +14,6 @@ from imap_l3_processing.constants import (
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import esa_voltage_to_proton_speed
 from imap_l3_processing.swapi.l3a.science.swapi_response import PassbandGrid, SWAPIResponse
-from imap_l3_processing.swapi.l3a.utils import get_rotation_matrices, get_spacecraft_velocity_rtn
 
 
 class SWParams(NamedTuple):
@@ -26,11 +24,12 @@ class SWParams(NamedTuple):
     thermal_speed: float
 
 
-POINTS, WEIGHTS = scipy.special.roots_legendre(31)
-POINTS = np.asarray(POINTS)
-WEIGHTS = np.asarray(WEIGHTS)
+N_ELEVATION = 21
+N_AZIMUTH_SG = 21
+N_AZIMUTH_OA = 21
+N_SPEED = 21
 
-EPSILON_OA = 1e-6
+EPSILON_OA = 1e-3
 EPSILON_SG = 1e-3
 
 
@@ -46,6 +45,7 @@ def fit_solar_wind_proton_moments(
     count_rate: ndarray, esa_voltage: ndarray, measurement_time: ndarray,
     swapi_response: SWAPIResponse,
 ) -> ProtonSolarWindMoments:
+    from imap_l3_processing.swapi.l3a.utils import get_rotation_matrices, get_spacecraft_velocity_rtn
     # Algorithm described in docs/swapi/solar-wind-moments.md
     # Step 1: Get RTN-to-SWAPI rotation matrices and spacecraft velocity from SPICE
     rotation_matrices = get_rotation_matrices(measurement_time)
@@ -107,7 +107,7 @@ def _get_initial_guess(
     )
 
 
-@numba.njit
+@numba.njit(nogil=True)
 def _compute_angles(bulk_velocity_rtn: ndarray, rotation_matrix: ndarray, spacecraft_velocity_rtn: ndarray):
     sc_frame_velocity = bulk_velocity_rtn - spacecraft_velocity_rtn
     bulk_velocity_xyz = rotation_matrix @ sc_frame_velocity
@@ -117,7 +117,7 @@ def _compute_angles(bulk_velocity_rtn: ndarray, rotation_matrix: ndarray, spacec
     return phi, theta
 
 
-@numba.njit
+@numba.njit(nogil=True)
 def _model_count_rates(
     density: float,
     temperature: float,  # eV
@@ -143,7 +143,45 @@ def _model_count_rates(
     return result
 
 
-@numba.njit(fastmath=True)
+@numba.njit(nogil=True)
+def _model_count_rates_time_varying(
+    density_arr: ndarray,  # (N,) per-measurement density
+    temperature_arr: ndarray,  # (N,) per-measurement temperature [eV]
+    bulk_velocity_rtn_arr: ndarray,  # (N, 3) per-measurement bulk velocity [km/s, RTN]
+    passband_grids: numba.typed.List,
+    rotation_matrices: ndarray,  # (N, 3, 3)
+    spacecraft_velocity_rtn: ndarray,  # (3,)
+) -> ndarray:
+    """Allow density/T/bulk to vary across measurements — for fitting groups of
+    sweeps during non-stationary solar wind."""
+    n = len(passband_grids)
+    result = np.empty(n)
+    for i in range(n):
+        bulk_i = bulk_velocity_rtn_arr[i]
+        phi, theta = _compute_angles(bulk_i, rotation_matrices[i], spacecraft_velocity_rtn)
+        thermal_speed = np.sqrt(temperature_arr[i] * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER
+        bulk_speed = np.linalg.norm(bulk_i)
+        sw_params = SWParams(
+            density=density_arr[i],
+            bulk_speed=bulk_speed,
+            bulk_azimuth=phi,
+            bulk_elevation=theta,
+            thermal_speed=thermal_speed,
+        )
+        result[i] = calculate_integral(passband_grids[i], sw_params)
+    return result
+
+
+@numba.njit(nogil=True)
+def _trapz_weights(a, b, n):
+    step = (b - a) / (n - 1)
+    weights = np.full(n, step)
+    weights[0] *= 0.5
+    weights[-1] *= 0.5
+    return weights
+
+
+@numba.njit(fastmath=True, nogil=True)
 def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
     sin_bulk_elevation = math.sin((math.pi / 180) * sw_params.bulk_elevation)
     cos_bulk_elevation = math.cos((math.pi / 180) * sw_params.bulk_elevation)
@@ -153,17 +191,21 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
     for region in (0, -1, 1):
         is_sunglasses = region == 0
         passband_norm = interpolate_passband(grid, is_sunglasses, elevation=0, speed=grid.central_speed)
+        if passband_norm == 0.0:
+            continue
 
         min_elevation, max_elevation, min_azimuth, max_azimuth = _get_angular_limits(sw_params, region, grid)
 
         if max_elevation <= min_elevation or max_azimuth <= min_azimuth:
             continue
 
-        elevation_points = (max_elevation - min_elevation) / 2 * POINTS + (max_elevation + min_elevation) / 2
-        elevation_weights = (max_elevation - min_elevation) / 2 * WEIGHTS
+        n_azimuth = N_AZIMUTH_SG if is_sunglasses else N_AZIMUTH_OA
 
-        azimuth_points = (max_azimuth - min_azimuth) / 2 * POINTS + (max_azimuth + min_azimuth) / 2
-        azimuth_weights = (max_azimuth - min_azimuth) / 2 * WEIGHTS
+        elevation_points = np.linspace(min_elevation, max_elevation, N_ELEVATION)
+        elevation_weights = _trapz_weights(min_elevation, max_elevation, N_ELEVATION)
+
+        azimuth_points = np.linspace(min_azimuth, max_azimuth, n_azimuth)
+        azimuth_weights = _trapz_weights(min_azimuth, max_azimuth, n_azimuth)
 
         interpolated_transmission = np.array([
             _interpolate_transmission(grid.azimuthal_transmission, grid.azimuthal_transmission_spacing, x)
@@ -196,8 +238,8 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
             if max_speed <= min_speed:
                 continue
 
-            speed_points = (max_speed - min_speed) / 2 * POINTS + (max_speed + min_speed) / 2
-            speed_weights = (max_speed - min_speed) / 2 * WEIGHTS
+            speed_points = np.linspace(min_speed, max_speed, N_SPEED)
+            speed_weights = _trapz_weights(min_speed, max_speed, N_SPEED)
 
             passband_times_speed3_row = np.array([
                 x ** 3 * interpolate_passband(grid, is_sunglasses, elevation, x)
@@ -245,7 +287,7 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
     return count_rate
 
 
-@numba.njit
+@numba.njit(nogil=True)
 def _polyval(coeffs, x):
     answer = 0.0
     for c in coeffs:
@@ -253,7 +295,7 @@ def _polyval(coeffs, x):
     return answer
 
 
-@numba.njit
+@numba.njit(nogil=True)
 def _exponential_term(sw_params: SWParams, cos_angle: float, speed: float) -> float:
     return math.exp(
         -(speed ** 2 + sw_params.bulk_speed ** 2 - 2 * speed * sw_params.bulk_speed * cos_angle)
@@ -261,7 +303,7 @@ def _exponential_term(sw_params: SWParams, cos_angle: float, speed: float) -> fl
     )
 
 
-@numba.njit
+@numba.njit(nogil=True)
 def _get_angular_limits(sw_params: SWParams, region: int, grid: PassbandGrid):
     epsilon = EPSILON_SG if region == 0 else EPSILON_OA
     angular_width = (180 / np.pi) * np.arccos(_clamp(
@@ -270,29 +312,32 @@ def _get_angular_limits(sw_params: SWParams, region: int, grid: PassbandGrid):
     ))
 
     if region == 0:
-        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, -10.5, 6.5)
+        min_elevation, max_elevation = _dynamic_limits(
+            sw_params.bulk_elevation, angular_width, grid.min_SG_elevation, grid.max_SG_elevation)
         min_azimuth, max_azimuth = _dynamic_limits(sw_params.bulk_azimuth, angular_width, -20, 20)
     elif region == -1:
-        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, -12, 10.5)
+        min_elevation, max_elevation = _dynamic_limits(
+            sw_params.bulk_elevation, angular_width, grid.min_OA_elevation, grid.max_OA_elevation)
         min_azimuth, max_azimuth = _dynamic_limits(sw_params.bulk_azimuth, angular_width, -150, -20)
     else:
-        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, -12, 10.5)
+        min_elevation, max_elevation = _dynamic_limits(
+            sw_params.bulk_elevation, angular_width, grid.min_OA_elevation, grid.max_OA_elevation)
         min_azimuth, max_azimuth = _dynamic_limits(sw_params.bulk_azimuth, angular_width, 20, 150)
 
     return min_elevation, max_elevation, min_azimuth, max_azimuth
 
 
-@numba.njit
+@numba.njit(nogil=True)
 def _dynamic_limits(center: float, width: float, lower_bound: float, upper_bound: float):
     return _clamp(center - width, lower_bound, upper_bound), _clamp(center + width, lower_bound, upper_bound)
 
 
-@numba.njit
+@numba.njit(nogil=True)
 def _clamp(x: float, lower: float, upper: float) -> float:
     return min(max(x, lower), upper)
 
 
-@numba.njit
+@numba.njit(nogil=True)
 def _interpolate_transmission(azimuthal_transmission: ndarray, spacing: float, azimuth: float) -> float:
     azimuth = (azimuth + 180) % 360 - 180
     i_float = abs(azimuth) / spacing
@@ -314,7 +359,7 @@ def _interpolate_transmission(azimuthal_transmission: ndarray, spacing: float, a
     return azimuthal_transmission[i_lower] * weight_lower + azimuthal_transmission[i_upper] * weight_upper
 
 
-@numba.njit
+@numba.njit(nogil=True)
 def interpolate_passband(grid: PassbandGrid, is_sunglasses: bool, elevation: float, speed: float) -> float:
     grid_values = grid.values_sunglasses if is_sunglasses else grid.values_open_aperture
 
@@ -340,35 +385,93 @@ def interpolate_passband(grid: PassbandGrid, is_sunglasses: bool, elevation: flo
     )
 
 
+@numba.njit(nogil=True)
+def _residuals_njit(x, count_rate, sigma, passband_grids,
+                    rotation_matrices, spacecraft_velocity_rtn):
+    density = np.exp(x[0])
+    temperature = np.exp(x[1])
+    bulk_velocity_rtn = x[2:5]
+    model = _model_count_rates(
+        density, temperature, bulk_velocity_rtn,
+        passband_grids, rotation_matrices, spacecraft_velocity_rtn,
+    )
+    return (model - count_rate) / sigma
+
+
+@numba.njit(nogil=True)
+def _residuals_njit_delta(x, fractional_times, count_rate, sigma,
+                          passband_grids, rotation_matrices,
+                          spacecraft_velocity_rtn):
+    """10-parameter residuals: 5 center + 5 linear-in-time delta.
+
+    x[0:5] = (log n, log T, v_R, v_T, v_N) at the group center.
+    x[5:10] = linear drift over the group time span (same units).
+    fractional_times in [-0.5, 0.5] maps each measurement onto its delta weight.
+    """
+    n = len(passband_grids)
+    density_arr = np.empty(n)
+    temperature_arr = np.empty(n)
+    bulk_arr = np.empty((n, 3))
+    for i in range(n):
+        ft = fractional_times[i]
+        density_arr[i] = np.exp(x[0] + ft * x[5])
+        temperature_arr[i] = np.exp(x[1] + ft * x[6])
+        bulk_arr[i, 0] = x[2] + ft * x[7]
+        bulk_arr[i, 1] = x[3] + ft * x[8]
+        bulk_arr[i, 2] = x[4] + ft * x[9]
+    model = _model_count_rates_time_varying(
+        density_arr, temperature_arr, bulk_arr,
+        passband_grids, rotation_matrices, spacecraft_velocity_rtn,
+    )
+    return (model - count_rate) / sigma
+
+
 def _optimize(
     count_rate: ndarray,
     passband_grids: numba.typed.List,
     rotation_matrices: ndarray,
     spacecraft_velocity_rtn: ndarray,
     initial_guess: ProtonSolarWindMoments,
+    fractional_times: ndarray | None = None,
 ) -> ProtonSolarWindMoments:
+    """Fit 5 (or 10) parameter Maxwellian to count rates.
+
+    If ``fractional_times`` is provided (shape ``(N,)``, values in [-0.5, 0.5]),
+    density / temperature / bulk velocity are allowed to vary linearly across
+    the group time span — adding 5 "delta" parameters — so that non-stationary
+    solar wind within the 5-sweep window is absorbed by the drift rather than
+    distorting the central moments.
+    """
     from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
     vr0, vt0, vn0 = initial_guess.bulk_velocity_rtn
-    x0 = np.array([
-        np.log(initial_guess.density),
-        np.log(initial_guess.temperature),
-        vr0, vt0, vn0,
-    ])
-
     sigma = np.sqrt(np.maximum(count_rate, 1.0))
 
-    def residuals(x):
-        density = np.exp(x[0])
-        temperature = np.exp(x[1])
-        bulk_velocity_rtn = x[2:5]
-        model = _model_count_rates(
-            density, temperature, bulk_velocity_rtn,
-            passband_grids, rotation_matrices, spacecraft_velocity_rtn,
-        )
-        return (model - count_rate) / sigma
+    if fractional_times is None:
+        x0 = np.array([
+            np.log(initial_guess.density),
+            np.log(initial_guess.temperature),
+            vr0, vt0, vn0,
+        ])
 
-    result = scipy.optimize.least_squares(residuals, x0, method='lm')
+        def residuals(x):
+            return _residuals_njit(x, count_rate, sigma, passband_grids,
+                                   rotation_matrices, spacecraft_velocity_rtn)
+    else:
+        x0 = np.array([
+            np.log(initial_guess.density),
+            np.log(initial_guess.temperature),
+            vr0, vt0, vn0,
+            0.0, 0.0, 0.0, 0.0, 0.0,
+        ])
+
+        def residuals(x):
+            return _residuals_njit_delta(x, fractional_times, count_rate, sigma,
+                                         passband_grids, rotation_matrices,
+                                         spacecraft_velocity_rtn)
+
+    result = scipy.optimize.least_squares(residuals, x0, method='lm',
+                                           xtol=1e-4, ftol=1e-4, gtol=1e-4)
 
     density = float(np.exp(result.x[0]))
     temperature = float(np.exp(result.x[1]))

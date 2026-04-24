@@ -19,15 +19,15 @@ where $\cos\alpha = \sin\theta_b \sin\theta + \cos\theta_b \cos\theta \cos(\phi 
 Substituting into the count rate integral in spherical velocity coordinates $(v, \theta, \phi)$:
 $$C(V) = \frac{n\, \mathcal{A}_0(V)}{(\sqrt{2\pi}\, v_\text{th})^3} \sum_\text{region} \int \cos\theta\, d\theta \int T(\phi)\, d\phi \int v^3\, P\!\left(\tfrac{v}{v_0}, \theta\right) \exp\!\left(-\frac{v^2 + v_b^2 - 2vv_b\cos\alpha}{2v_\text{th}^2}\right) dv.$$
 
-The sum runs over three azimuth regions: sunglasses (SG, $|\phi| \leq 20°$), left open aperture (OA, $-150° < \phi < -20°$), and right open aperture ($20° < \phi < 150°$). All three integrals use the trapezoid rule with $N = 31$ uniformly spaced points.
+The sum runs over three azimuth regions: sunglasses (SG, $|\phi| \leq 20°$), left open aperture (OA, $-150° < \phi < -20°$), and right open aperture ($20° < \phi < 150°$).
 
 **Angular limits.** Integration limits are centered on $(\theta_b, \phi_b)$ and clipped to the FOV. The half-width is where the Maxwellian drops below $\varepsilon$:
 $$\Delta\alpha = \arccos\!\left(\frac{v_\text{th}^2 \ln\varepsilon}{v_0 v_b} + 1\right),$$
-with $\varepsilon = 10^{-3}$ (SG) or $10^{-6}$ (OA). FOV bounds: elevation $[-10.5°, 6.5°]$ (SG) or $[-12°, 10.5°]$ (OA); azimuth $[-20°, 20°]$ (SG) or $[\pm 20°, \pm 150°]$ (OA).
+with $\varepsilon = 10^{-3}$. Azimuth FOV bounds: $[-20°, 20°]$ (SG) or $[\pm 20°, \pm 150°]$ (OA). Elevation FOV bounds are derived per region from the passband grid in `create_passband_grid`: each is the range of grid rows where the passband is nonzero, extended by one elevation step on each side to include the first zero.
 
-**Speed limits.** At each elevation the passband's speed acceptance is bounded by polynomials $r_\text{min}(\theta)$, $r_\text{max}(\theta)$ (fit per voltage in `create_passband_grid`), giving $v \in [v_0\, r_\text{min}(\theta),\; v_0\, r_\text{max}(\theta)]$, intersected with $[v_b - 5v_\text{th},\; v_b + 5v_\text{th}]$.
+**Speed limits.** At each elevation the passband's speed acceptance is bounded by polynomials $r_\text{min}(\theta)$, $r_\text{max}(\theta)$ (fit per voltage in `create_passband_grid` from the nonzero grid columns, extended by one speed-ratio step on each side to include the first zero), giving $v \in [v_0\, r_\text{min}(\theta),\; v_0\, r_\text{max}(\theta)]$, intersected with $[v_b - 5v_\text{th},\; v_b + 5v_\text{th}]$.
 
-The integral is evaluated in the order shown (elevation $\to$ azimuth $\to$ speed) for memory locality and JIT-compiled with Numba. See `calculate_integral(PassbandGrid, SWParams)` in `calculate_proton_solar_wind_moments.py`.
+The integral is evaluated in the order shown (elevation $\to$ azimuth $\to$ speed) for memory locality, using the trapezoid rule with $N = 31$ uniformly spaced points per dimension, and JIT-compiled with Numba. See `calculate_integral(PassbandGrid, SWParams)` in `calculate_proton_solar_wind_moments.py`.
 
 ## Fitting Procedure
 

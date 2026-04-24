@@ -8,7 +8,6 @@ from numpy.typing import NDArray
 
 SWAPI_K_FACTOR = 1.89  # eV/V
 
-_PASSBAND_LIMIT_THRESHOLD = 0.01
 _PASSBAND_LIMIT_POLY_DEG = 5
 _TARGET_ELEVATIONS = np.arange(-12, 11, 1.0)
 _TARGET_SPEED_RATIOS = np.linspace(0.9, 1.1, 101)
@@ -29,6 +28,10 @@ class PassbandGrid(NamedTuple):
     max_OA_poly: NDArray
     min_SG_poly: NDArray
     max_SG_poly: NDArray
+    min_SG_elevation: float
+    max_SG_elevation: float
+    min_OA_elevation: float
+    max_OA_elevation: float
 
 
 def _build_passband_array(values_df: pd.DataFrame, target_elevations: NDArray,
@@ -48,15 +51,15 @@ def _build_passband_array(values_df: pd.DataFrame, target_elevations: NDArray,
 
 def _fit_passband_limits(grid_values: NDArray, target_elevations: NDArray,
                          target_speed_ratios: NDArray) -> tuple[NDArray, NDArray]:
+    spacing = float(target_speed_ratios[1] - target_speed_ratios[0])
+    fallback = float(target_speed_ratios[len(target_speed_ratios) // 2])
     min_ratios = []
     max_ratios = []
-    fallback = float(target_speed_ratios[len(target_speed_ratios) // 2])
     for row in grid_values:
-        threshold = _PASSBAND_LIMIT_THRESHOLD * row.max() if row.max() > 0 else 0
-        above = target_speed_ratios[row >= threshold]
+        above = target_speed_ratios[row > 0]
         if len(above) > 0:
-            min_ratios.append(float(above[0]))
-            max_ratios.append(float(above[-1]))
+            min_ratios.append(float(above[0]) - spacing)
+            max_ratios.append(float(above[-1]) + spacing)
         else:
             min_ratios.append(fallback)
             max_ratios.append(fallback)
@@ -65,18 +68,31 @@ def _fit_passband_limits(grid_values: NDArray, target_elevations: NDArray,
     return min_poly, max_poly
 
 
+def _elevation_fov_limits(grid_values: NDArray, target_elevations: NDArray) -> tuple[float, float]:
+    spacing = float(target_elevations[1] - target_elevations[0])
+    nonzero_mask = grid_values.max(axis=1) > 0
+    nonzero_elevations = target_elevations[nonzero_mask]
+    if len(nonzero_elevations) == 0:
+        center = float(target_elevations[len(target_elevations) // 2])
+        return center, center
+    return float(nonzero_elevations[0] - spacing), float(nonzero_elevations[-1] + spacing)
+
+
 @dataclass
 class SWAPIResponse:
     azimuthal_transmission: NDArray  # shape (N,), evenly spaced at 0.1 deg intervals from 0
     central_effective_area_voltage: NDArray  # shape (M,), ESA voltages in V
     central_effective_area: NDArray  # shape (M,), effective area in cm^2
     passband_fit_coefficients: pd.DataFrame  # index: (region, energy_ratio, elevation), columns: [2, 1, 0]
+    passband_esa_voltage_limits: dict  # {region: (min_esa_voltage, max_esa_voltage)}
 
     def get_central_effective_area(self, esa_voltage: float) -> float:
         return float(np.interp(np.abs(esa_voltage), self.central_effective_area_voltage, self.central_effective_area))
 
     def get_passband_values(self, esa_voltage: float, region: str) -> pd.DataFrame:
-        log_beam_energy = np.log(SWAPI_K_FACTOR * np.abs(esa_voltage))
+        v_min, v_max = self.passband_esa_voltage_limits.get(region, (0, np.inf))
+        clamped_voltage = float(np.clip(np.abs(esa_voltage), v_min, v_max))
+        log_beam_energy = np.log(SWAPI_K_FACTOR * clamped_voltage)
         coeffs = self.passband_fit_coefficients.xs(region, level='region')
         values = np.exp(np.polyval(coeffs.values.T, log_beam_energy))
         return pd.DataFrame(values, index=coeffs.index, columns=['value'])
@@ -95,6 +111,8 @@ class SWAPIResponse:
 
         min_oa_poly, max_oa_poly = _fit_passband_limits(oa_grid, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS)
         min_sg_poly, max_sg_poly = _fit_passband_limits(sg_grid, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS)
+        min_oa_elev, max_oa_elev = _elevation_fov_limits(oa_grid, _TARGET_ELEVATIONS)
+        min_sg_elev, max_sg_elev = _elevation_fov_limits(sg_grid, _TARGET_ELEVATIONS)
 
         return PassbandGrid(
             min_elevation=float(_TARGET_ELEVATIONS[0]),
@@ -111,6 +129,10 @@ class SWAPIResponse:
             max_OA_poly=max_oa_poly,
             min_SG_poly=min_sg_poly,
             max_SG_poly=max_sg_poly,
+            min_SG_elevation=min_sg_elev,
+            max_SG_elevation=max_sg_elev,
+            min_OA_elevation=min_oa_elev,
+            max_OA_elevation=max_oa_elev,
         )
 
     @classmethod
@@ -119,6 +141,19 @@ class SWAPIResponse:
         transmission_df = pd.read_csv(azimuthal_transmission_path)
         area_df = pd.read_csv(central_effective_area_path)
         coeffs_df = pd.read_csv(passband_fit_coefficients_path, index_col=['region', 'energy_ratio', 'elevation'])
+        limit_cols = ['min_esa_voltage', 'max_esa_voltage']
+        if all(c in coeffs_df.columns for c in limit_cols):
+            limits_df = coeffs_df[limit_cols]
+            coeffs_df = coeffs_df.drop(columns=limit_cols)
+            esa_limits = {
+                region: (
+                    float(limits_df.xs(region, level='region')['min_esa_voltage'].iloc[0]),
+                    float(limits_df.xs(region, level='region')['max_esa_voltage'].iloc[0]),
+                )
+                for region in limits_df.index.get_level_values('region').unique()
+            }
+        else:
+            esa_limits = {}
         coeffs_df.columns = coeffs_df.columns.astype(int)
 
         return cls(
@@ -126,4 +161,5 @@ class SWAPIResponse:
             central_effective_area_voltage=area_df['esa_voltage'].values,
             central_effective_area=area_df['effective_area'].values,
             passband_fit_coefficients=coeffs_df,
+            passband_esa_voltage_limits=esa_limits,
         )
