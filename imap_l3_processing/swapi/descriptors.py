@@ -10,4 +10,8 @@ DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR = "density-of-neutral-helium-lut"
 HYDROGEN_INFLOW_VECTOR_DESCRIPTOR = "hydrogen-inflow-vector"
 HELIUM_INFLOW_VECTOR_DESCRIPTOR = "helium-inflow-vector"
 
+PROTON_SW_AZIMUTHAL_TRANSMISSION_DESCRIPTOR = "proton-sw-azimuthal-transmission"
+PROTON_SW_CENTRAL_EFFECTIVE_AREA_DESCRIPTOR = "proton-sw-central-effective-area"
+PROTON_SW_PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR = "proton-sw-passband-fit-coefficients"
+
 SWAPI_L3A_ALPHA_SW_DESCRIPTOR = "alpha-sw"

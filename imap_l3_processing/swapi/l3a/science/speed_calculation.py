@@ -1,6 +1,24 @@
 import numpy as np
+from numpy.typing import ArrayLike
 from uncertainties import wrap
 from uncertainties.unumpy import nominal_values
+
+from imap_l3_processing.constants import PROTON_CHARGE_COULOMBS, PROTON_MASS_KG, METERS_PER_KILOMETER
+
+SWAPI_K_FACTOR = 1.89  # eV/V, see docs/swapi/solar-wind-moments.md
+
+
+def esa_voltage_to_proton_speed(esa_voltage: ArrayLike) -> np.ndarray:
+    return (
+        np.sqrt(
+            2
+            * SWAPI_K_FACTOR
+            * PROTON_CHARGE_COULOMBS
+            * np.abs(esa_voltage)
+            / PROTON_MASS_KG
+        )
+        / METERS_PER_KILOMETER
+    )
 
 
 def get_peak_indices(count_rates, width, mask=True) -> slice:

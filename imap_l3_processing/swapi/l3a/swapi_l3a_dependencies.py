@@ -10,7 +10,8 @@ from imap_l3_processing.swapi.descriptors import SWAPI_L2_DESCRIPTOR, \
     ALPHA_TEMPERATURE_DENSITY_LOOKUP_TABLE_DESCRIPTOR, CLOCK_ANGLE_AND_FLOW_DEFLECTION_LOOKUP_TABLE_DESCRIPTOR, \
     GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR, INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR, \
     DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR, EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR, HYDROGEN_INFLOW_VECTOR_DESCRIPTOR, \
-    HELIUM_INFLOW_VECTOR_DESCRIPTOR
+    HELIUM_INFLOW_VECTOR_DESCRIPTOR, PROTON_SW_AZIMUTHAL_TRANSMISSION_DESCRIPTOR, \
+    PROTON_SW_CENTRAL_EFFECTIVE_AREA_DESCRIPTOR, PROTON_SW_PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_temperature_and_density import \
     AlphaTemperatureDensityCalibrationTable
@@ -24,6 +25,7 @@ from imap_l3_processing.swapi.l3a.science.inflow_vector import InflowVector
 from imap_l3_processing.swapi.l3a.utils import read_l2_swapi_data
 from imap_l3_processing.swapi.l3b.science.efficiency_calibration_table import EfficiencyCalibrationTable
 from imap_l3_processing.swapi.l3b.science.geometric_factor_calibration_table import GeometricFactorCalibrationTable
+from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3b.science.instrument_response_lookup_table import \
     InstrumentResponseLookupTableCollection
 
@@ -40,6 +42,7 @@ class SwapiL3ADependencies:
     density_of_neutral_helium_calibration_table: DensityOfNeutralHeliumLookupTable
     hydrogen_inflow_vector: InflowVector
     helium_inflow_vector: InflowVector
+    swapi_response: SWAPIResponse
 
     @classmethod
     def fetch_dependencies(cls, dependencies: ProcessingInputCollection):
@@ -54,6 +57,9 @@ class SwapiL3ADependencies:
         neutral_helium_table = dependencies.get_file_paths(source='swapi', descriptor=DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR)
         hydrogen_vector_paths = dependencies.get_file_paths(source='swapi', descriptor=HYDROGEN_INFLOW_VECTOR_DESCRIPTOR)
         helium_vector_paths = dependencies.get_file_paths(source='swapi', descriptor=HELIUM_INFLOW_VECTOR_DESCRIPTOR)
+        azimuthal_transmission_paths = dependencies.get_file_paths(source='swapi', descriptor=PROTON_SW_AZIMUTHAL_TRANSMISSION_DESCRIPTOR)
+        central_effective_area_paths = dependencies.get_file_paths(source='swapi', descriptor=PROTON_SW_CENTRAL_EFFECTIVE_AREA_DESCRIPTOR)
+        passband_fit_coefficients_paths = dependencies.get_file_paths(source='swapi', descriptor=PROTON_SW_PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR)
         # @formatter:on
 
         science_download_path = download(science_dependency_file[0])
@@ -68,6 +74,9 @@ class SwapiL3ADependencies:
         neutral_helium_table_path = download(neutral_helium_table[0])
         hydrogen_vector_path = download(hydrogen_vector_paths[0])
         helium_vector_path = download(helium_vector_paths[0])
+        azimuthal_transmission_path = download(azimuthal_transmission_paths[0])
+        central_effective_area_path = download(central_effective_area_paths[0])
+        passband_fit_coefficients_path = download(passband_fit_coefficients_paths[0])
 
         return cls.from_file_paths(
             science_download_path,
@@ -79,7 +88,10 @@ class SwapiL3ADependencies:
             instrument_response_table_path,
             neutral_helium_table_path,
             hydrogen_vector_path,
-            helium_vector_path
+            helium_vector_path,
+            azimuthal_transmission_path,
+            central_effective_area_path,
+            passband_fit_coefficients_path,
         )
 
     @classmethod
@@ -87,7 +99,8 @@ class SwapiL3ADependencies:
                         alpha_density_and_temperature_calibration_path: Path, clock_and_deflection_file_path: Path,
                         efficiency_calibration_path: Path, geometric_factor_calibration_path: Path,
                         instrument_response_path: Path, neutral_helium_path: Path, hydrogen_inflow_vector_path: Path,
-                        helium_inflow_vector_path: Path):
+                        helium_inflow_vector_path: Path, azimuthal_transmission_path: Path,
+                        central_effective_area_path: Path, passband_fit_coefficients_path: Path):
         swapi_l2_data = read_l2_swapi_data(CDF(str(science_dependency_path)))
         proton_density_temp_lookup = ProtonTemperatureAndDensityCalibrationTable.from_file(
             proton_density_and_temperature_calibration_path)
@@ -102,6 +115,8 @@ class SwapiL3ADependencies:
 
         hydrogen_inflow_vector = InflowVector.from_file(hydrogen_inflow_vector_path)
         helium_inflow_vector = InflowVector.from_file(helium_inflow_vector_path)
+        swapi_response = SWAPIResponse.from_files(
+            azimuthal_transmission_path, central_effective_area_path, passband_fit_coefficients_path)
 
         return cls(swapi_l2_data,
                    proton_density_temp_lookup,
@@ -112,4 +127,5 @@ class SwapiL3ADependencies:
                    instrument_response_lookup,
                    neutral_helium_lookup,
                    hydrogen_inflow_vector,
-                   helium_inflow_vector)
+                   helium_inflow_vector,
+                   swapi_response)
