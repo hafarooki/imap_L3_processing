@@ -2,7 +2,7 @@
 Numpy reference implementation of the SWAPI proton solar wind integral.
 
 Used by unit/integration tests and the integration_benchmark script to validate
-the numba production implementation in calculate_proton_solar_wind_moments.py.
+the numba optimized implementation in calculate_proton_solar_wind_moments.py.
 """
 import math
 
@@ -106,7 +106,7 @@ def reference_integral_fixed_limits(grid, sw) -> float:
 
 
 def integral(grid, sw, n_el=_N_DEFAULT, n_az_sg=_N_DEFAULT, n_az_oa=_N_DEFAULT, n_sp=_N_DEFAULT):
-    """Triple trapezoid integral matching the production calculate_integral logic but with arbitrary resolution."""
+    """Triple trapezoid integral matching the optimized calculate_integral logic but with arbitrary resolution."""
     sin_be = math.sin(math.radians(sw.bulk_elevation))
     cos_be = math.cos(math.radians(sw.bulk_elevation))
 

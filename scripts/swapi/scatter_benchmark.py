@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Scatter plot: ground truth vs production integral for 1000 random SW conditions.
+Scatter plot: ground truth vs optimized integral for 1000 random SW conditions.
 
 Ground truth: fixed-limit reference integrals from tests/.../reference_integrals.csv
-Production:   dynamic-limit integral at the N values defined below
+Optimized:    dynamic-limit integral at the N values defined below
 
 Adjust the N constants and re-run to assess accuracy.
 
@@ -48,9 +48,9 @@ def main():
 
     df = pd.read_csv(_REFERENCE_INTEGRALS_PATH)
     truths = df['integral'].to_numpy()
-    production = np.empty(len(df))
+    optimized = np.empty(len(df))
 
-    print(f"Computing {len(df)} production integrals...")
+    print(f"Computing {len(df)} optimized integrals...")
     for i, row in enumerate(df.itertuples(index=False)):
         thermal_speed = float(
             np.sqrt(row.temperature_ev * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER
@@ -63,11 +63,11 @@ def main():
             thermal_speed=thermal_speed,
         )
         grid = swapi_response.create_passband_grid(_peak_voltage(float(row.bulk_speed)))
-        production[i] = calculate_integral(grid, sw)
+        optimized[i] = calculate_integral(grid, sw)
         if (i + 1) % 100 == 0:
             print(f"  {i + 1}/{len(df)}", flush=True)
 
-    rel_errors = (production - truths) / truths
+    rel_errors = (optimized - truths) / truths
     print(f"\nMax |rel error|:    {np.abs(rel_errors).max():.2%}")
     print(f"Median |rel error|: {np.median(np.abs(rel_errors)):.2%}")
     print(f"95th pct |rel err|: {np.percentile(np.abs(rel_errors), 95):.2%}")
@@ -78,18 +78,18 @@ def main():
     colors = cmap(t_norm(log_t))
 
     fig, ax = plt.subplots(figsize=(7, 6))
-    ax.scatter(truths, production, c=colors, s=8, alpha=0.7, linewidths=0)
+    ax.scatter(truths, optimized, c=colors, s=8, alpha=0.7, linewidths=0)
 
-    positive = (truths > 0) & (production > 0)
+    positive = (truths > 0) & (optimized > 0)
     lo = 1
-    hi = max(truths[positive].max(), production[positive].max())
+    hi = max(truths[positive].max(), optimized[positive].max())
     lo, hi = lo / 2, hi * 2
     ax.plot([lo, hi], [lo, hi], 'k--', linewidth=1, label='y = x')
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
 
     ax.set_xlabel("Ground truth count rate (fixed limits)")
-    ax.set_ylabel("Production count rate (dynamic limits)")
+    ax.set_ylabel("Optimized count rate (dynamic limits)")
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.legend()

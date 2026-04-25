@@ -20,7 +20,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_pickup_ion import calculate_
     calculate_pickup_ion_values, calculate_helium_pui_temperature, calculate_helium_pui_density
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import \
     fit_solar_wind_proton_moments
-from imap_l3_processing.swapi.l3a.science.speed_calculation import extract_coarse_sweep, SWAPI_SCIENCE_BINS
+from imap_l3_processing.swapi.l3a.science.speed_calculation import extract_coarse_sweep, SWAPI_SCIENCE_BINS, SWAPI_COARSE_SWEEP_BINS
 from imap_l3_processing.swapi.l3a.swapi_l3a_dependencies import SwapiL3ADependencies
 from imap_l3_processing.swapi.l3a.utils import chunk_l2_data
 from imap_l3_processing.swapi.l3b.models import SwapiL3BCombinedVDF
@@ -87,6 +87,9 @@ class SwapiProcessor(Processor):
                     science_energies.flatten(),
                     measurement_times,
                     dependencies.swapi_response,
+                    sweep_coarse_count_rates=data_chunk.coincidence_count_rate[:, SWAPI_COARSE_SWEEP_BINS],
+                    sweep_coarse_energies=data_chunk.energy[:, SWAPI_COARSE_SWEEP_BINS],
+                    sweep_epoch=data_chunk.sci_start_time,
                 )
                 vr, vt, vn = fitting_result.bulk_velocity_rtn
                 speed = float(np.linalg.norm(fitting_result.bulk_velocity_rtn))
@@ -279,6 +282,9 @@ class SwapiProcessor(Processor):
                     science_energies.flatten(),
                     measurement_times,
                     dependencies.swapi_response,
+                    sweep_coarse_count_rates=data_chunk.coincidence_count_rate[:, SWAPI_COARSE_SWEEP_BINS],
+                    sweep_coarse_energies=data_chunk.energy[:, SWAPI_COARSE_SWEEP_BINS],
+                    sweep_epoch=data_chunk.sci_start_time,
                 )
 
                 vr, vt, vn = fitting_result.bulk_velocity_rtn
