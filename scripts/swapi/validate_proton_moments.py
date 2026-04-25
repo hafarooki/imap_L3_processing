@@ -10,8 +10,9 @@ Usage:
 Data expected under ``data-dir``:
     ./data/l2-dataset.h5                                    L2 sweep counts
     ./kernels/*.tpc, *.tls, *.tf, *.tsc, *.bsp, *.ah.bc     SPICE
-    ./paper/model_inputs/*.csv                              SWAPI response
     ./data/wind/omni_coho1hr_merged_mag_plasma_*_v*.cdf     OMNI reference
+
+SWAPI response calibration files are loaded from instrument_team_data/swapi/ in the repo.
 """
 import argparse
 import sys
@@ -38,6 +39,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     _optimize,
 )
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_SCIENCE_BINS
 
 REPO_ROOT = _THIS_REPO
 
@@ -203,17 +205,18 @@ def main():
     count_day = count_day.isel(epoch=keep)
 
     print('Loading SWAPI response model...')
-    inputs = data_dir / 'paper' / 'model_inputs'
+    _instrument_data = _THIS_REPO / 'instrument_team_data' / 'swapi'
     swapi_response = SWAPIResponse.from_files(
-        azimuthal_transmission_path=inputs / 'azimuthal_transmission.csv',
-        central_effective_area_path=inputs / 'central_effective_area.csv',
-        passband_fit_coefficients_path=inputs / 'passband_fit_coefficients.csv',
+        azimuthal_transmission_path=_instrument_data / 'imap_swapi_azimuthal_transmission.csv',
+        central_effective_area_path=_instrument_data / 'imap_swapi_central_effective_area.csv',
+        passband_fit_coefficients_path=_instrument_data / 'imap_swapi_passband_fit_coefficients.csv',
     )
 
     print('Precomputing passband grids...')
-    rep_esa_voltage = count_day.esa_energy.values.mean(axis=0) / SWAPI_K_FACTOR
-    passband_mask = np.isfinite(rep_esa_voltage) & (rep_esa_voltage > 0)
-    rep_V = rep_esa_voltage[passband_mask]
+    # Only science bins (1–71): index 0 is always discarded; bins 1–62 coarse, 63–71 fine sweep.
+    science_esa_voltage = count_day.esa_energy.values.mean(axis=0)[SWAPI_SCIENCE_BINS] / SWAPI_K_FACTOR
+    passband_mask = np.isfinite(science_esa_voltage) & (science_esa_voltage > 0)
+    rep_V = science_esa_voltage[passband_mask]
     base_grids = numba.typed.List([swapi_response.create_passband_grid(v) for v in rep_V])
     n_passbands = int(passband_mask.sum())
     n_groups = len(count_day.epoch) // sweeps_per_fit
@@ -226,7 +229,8 @@ def main():
             fit_grids.append(g)
 
     print('Precomputing SPICE quantities...')
-    passband_indices = np.where(passband_mask)[0]
+    # passband_indices are original bin numbers (1–71) needed for measurement timing
+    passband_indices = np.where(passband_mask)[0] + SWAPI_SCIENCE_BINS.start
     step_duration = 12.0 / 72
 
     # CDF epoch is the MIDDLE of the 12-s sweep, so subtract 6 s to get sweep start
@@ -270,7 +274,7 @@ def main():
             pass
 
     all_counts = count_day.values.astype(float).reshape(n_groups, sweeps_per_fit, 72)
-    all_counts_masked = np.maximum(all_counts[:, :, passband_mask], 0.0)
+    all_counts_masked = np.maximum(all_counts[:, :, SWAPI_SCIENCE_BINS][:, :, passband_mask], 0.0)
     count_rates = (all_counts_masked / SAMPLE_TIME).reshape(n_groups, n_meas)
 
     v_flat = np.tile(rep_V, sweeps_per_fit)

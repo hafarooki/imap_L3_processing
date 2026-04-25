@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""
+Generate reference ground-truth integrals for SWAPI proton solar wind.
+
+Computes 1000 reference integrals using fixed limits covering the full passband
+at high resolution. These are used as ground truth in integration_benchmark.py
+and regression tests.
+
+Fixed integration limits:
+  elevation:  -15 to 15 deg at 0.1 deg (301 pts)
+  azimuth SG: -20 to 20 deg at 0.1 deg (401 pts)
+  azimuth OA: 0.1 deg in transition |az| ∈ [20, 30], 1 deg in bulk to ±150 (221 pts/side)
+  speed: 50 samples from 0.9 to 1.1 × central_speed
+
+Solar wind parameter ranges (1000 samples, seed=42):
+  bulk_speed:      200–2000 km/s   (uniform)
+  temperature:     1–100 eV        (log-uniform)
+  bulk_azimuth:    -20 to 20 deg   (uniform)
+  bulk_elevation:  -20 to 20 deg   (uniform)
+  density:         1–100 cm⁻³      (uniform)
+
+Output: tests/swapi/l3a/science/reference_integrals.csv
+Usage:  python scripts/swapi/generate_reference_integrals.py
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import numpy as np
+import pandas as pd
+
+from imap_l3_processing.constants import METERS_PER_KILOMETER, PROTON_CHARGE_COULOMBS, PROTON_MASS_KG
+from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import SWParams
+from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
+from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from tests.swapi.l3a.science.reference_integral import reference_integral_fixed_limits
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
+_OUTPUT_PATH = _REPO_ROOT / "tests" / "swapi" / "l3a" / "science" / "reference_integrals.csv"
+
+_N_SAMPLES = 1000
+_RNG_SEED = 42
+
+_SPEED_RANGE = (200.0, 2000.0)
+_TEMP_RANGE = (1.0, 100.0)
+_AZ_RANGE = (-20.0, 20.0)
+_EL_RANGE = (-20.0, 20.0)
+_DENSITY_RANGE = (1.0, 100.0)
+
+
+def _peak_voltage(bulk_speed_km_s: float) -> float:
+    return (PROTON_MASS_KG * (bulk_speed_km_s * METERS_PER_KILOMETER) ** 2
+            / (2 * SWAPI_K_FACTOR * PROTON_CHARGE_COULOMBS))
+
+
+def _thermal_speed(temperature_ev: float) -> float:
+    return float(np.sqrt(temperature_ev * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER)
+
+
+def main():
+    print("Loading calibration data...")
+    swapi_response = SWAPIResponse.from_files(
+        _INSTRUMENT_DATA / "imap_swapi_azimuthal_transmission.csv",
+        _INSTRUMENT_DATA / "imap_swapi_central_effective_area.csv",
+        _INSTRUMENT_DATA / "imap_swapi_passband_fit_coefficients.csv",
+    )
+
+    rng = np.random.default_rng(_RNG_SEED)
+    bulk_speeds = rng.uniform(*_SPEED_RANGE, _N_SAMPLES)
+    temperatures_ev = np.exp(rng.uniform(np.log(_TEMP_RANGE[0]), np.log(_TEMP_RANGE[1]), _N_SAMPLES))
+    bulk_azimuths = rng.uniform(*_AZ_RANGE, _N_SAMPLES)
+    bulk_elevations = rng.uniform(*_EL_RANGE, _N_SAMPLES)
+    densities = rng.uniform(*_DENSITY_RANGE, _N_SAMPLES)
+
+    print(f"Computing {_N_SAMPLES} reference integrals (fixed limits, high resolution)...")
+    integrals = np.empty(_N_SAMPLES)
+    for i in range(_N_SAMPLES):
+        sw = SWParams(
+            density=float(densities[i]),
+            bulk_speed=float(bulk_speeds[i]),
+            bulk_azimuth=float(bulk_azimuths[i]),
+            bulk_elevation=float(bulk_elevations[i]),
+            thermal_speed=_thermal_speed(float(temperatures_ev[i])),
+        )
+        grid = swapi_response.create_passband_grid(_peak_voltage(float(bulk_speeds[i])))
+        integrals[i] = reference_integral_fixed_limits(grid, sw)
+        if (i + 1) % 50 == 0:
+            print(f"  {i + 1}/{_N_SAMPLES}", flush=True)
+
+    df = pd.DataFrame({
+        'bulk_speed': bulk_speeds,
+        'temperature_ev': temperatures_ev,
+        'bulk_azimuth': bulk_azimuths,
+        'bulk_elevation': bulk_elevations,
+        'density': densities,
+        'integral': integrals,
+    })
+    df.to_csv(_OUTPUT_PATH, index=False)
+    print(f"Saved {_OUTPUT_PATH}")
+
+
+if __name__ == "__main__":
+    main()

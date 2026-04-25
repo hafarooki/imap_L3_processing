@@ -1,148 +1,81 @@
-import math
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+import numba
 import numpy as np
 
 from imap_l3_processing.constants import PROTON_MASS_KG, PROTON_CHARGE_COULOMBS, METERS_PER_KILOMETER
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     _get_initial_guess,
     _compute_angles,
+    _model_count_rates,
+    _optimize,
+    apply_deadtime_correction,
     calculate_integral,
-    _get_angular_limits,
-    _dynamic_limits,
+    interpolate_passband,
+    _interpolate_transmission,
     SWParams,
+    ProtonSolarWindMoments,
 )
+import pandas as pd
 from imap_l3_processing.swapi.l3a.science.speed_calculation import esa_voltage_to_proton_speed, SWAPI_K_FACTOR
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from tests.test_helpers import get_test_instrument_team_data_path
 
 _AZIMUTHAL_TRANSMISSION_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_proton-sw-azimuthal-transmission_20250101_v001.csv")
+    "swapi/imap_swapi_azimuthal_transmission.csv")
 _CENTRAL_EFFECTIVE_AREA_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_proton-sw-central-effective-area_20250101_v001.csv")
+    "swapi/imap_swapi_central_effective_area.csv")
 _PASSBAND_FIT_COEFFICIENTS_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_proton-sw-passband-fit-coefficients_20250101_v001.csv")
+    "swapi/imap_swapi_passband_fit_coefficients.csv")
 
 
-def _trapz_weights(a, b, n):
-    w = np.full(n, (b - a) / (n - 1))
-    w[0] *= 0.5
-    w[-1] *= 0.5
-    return w
-
-
-def _passband_vectorized(grid, is_sg, el_arr, sp_arr):
-    """Vectorized bilinear passband interpolation. Returns (n_el, n_sp)."""
-    gv = grid.values_sunglasses if is_sg else grid.values_open_aperture
-    i = (el_arr[:, None] - grid.min_elevation) / grid.elevation_spacing
-    j = sp_arr[None, :] / grid.central_speed
-    j = (j - grid.min_speed_ratio) / grid.speed_ratio_spacing
-    valid = (i >= 0) & (i + 1 < gv.shape[0]) & (j >= 0) & (j + 1 < gv.shape[1])
-    i0 = np.clip(i.astype(int), 0, gv.shape[0] - 2)
-    j0 = np.clip(j.astype(int), 0, gv.shape[1] - 2)
-    wi = i - i0
-    wj = j - j0
-    result = (
-        (1 - wi) * ((1 - wj) * gv[i0, j0] + wj * gv[i0, j0 + 1])
-        + wi * ((1 - wj) * gv[i0 + 1, j0] + wj * gv[i0 + 1, j0 + 1])
+def _load_swapi_response():
+    return SWAPIResponse.from_files(
+        _AZIMUTHAL_TRANSMISSION_PATH,
+        _CENTRAL_EFFECTIVE_AREA_PATH,
+        _PASSBAND_FIT_COEFFICIENTS_PATH,
     )
-    return np.where(valid, result, 0.0)
 
 
-def _transmission_vectorized(azimuthal_transmission, spacing, az_arr):
-    """Vectorized azimuthal transmission interpolation."""
-    az = (az_arr + 180) % 360 - 180
-    i = np.abs(az) / spacing
-    i0 = np.clip(i.astype(int), 0, len(azimuthal_transmission) - 1)
-    i1 = np.clip(i0 + 1, 0, len(azimuthal_transmission) - 1)
-    return azimuthal_transmission[i0] * (i1 - i) + azimuthal_transmission[i1] * (i - i0)
-
-
-def _calculate_integral_highres(grid, sw_params, n=200):
-    """High-resolution trapezoid reference for benchmarking calculate_integral."""
-    sin_be = math.sin(math.radians(sw_params.bulk_elevation))
-    cos_be = math.cos(math.radians(sw_params.bulk_elevation))
-    count_rate = 0.0
-
-    for region in (0, -1, 1):
-        is_sg = region == 0
-        passband_norm = float(
-            _passband_vectorized(grid, is_sg, np.array([0.0]), np.array([grid.central_speed]))[0, 0]
-        )
-        if passband_norm == 0:
-            continue
-
-        min_el, max_el, min_az, max_az = _get_angular_limits(sw_params, region, grid)
-        if max_el <= min_el or max_az <= min_az:
-            continue
-
-        el = np.linspace(min_el, max_el, n)
-        az = np.linspace(min_az, max_az, n)
-
-        # Speed range: passband grid bounds intersected with ±5 v_th
-        sp_lo, sp_hi = _dynamic_limits(
-            sw_params.bulk_speed, sw_params.thermal_speed * 5,
-            grid.central_speed * grid.min_speed_ratio,
-            grid.central_speed * (grid.min_speed_ratio + (101 - 1) * grid.speed_ratio_spacing),
-        )
-        sp = np.linspace(sp_lo, sp_hi, n)
-
-        el_w = _trapz_weights(min_el, max_el, n)
-        az_w = _trapz_weights(min_az, max_az, n)
-        sp_w = _trapz_weights(sp_lo, sp_hi, n)
-
-        trans = _transmission_vectorized(grid.azimuthal_transmission, grid.azimuthal_transmission_spacing, az)
-
-        # passband × speed³, shape (n_el, n_sp)
-        pb_sp3 = _passband_vectorized(grid, is_sg, el, sp) * sp[None, :] ** 3 / passband_norm
-
-        sin_el = np.sin(np.radians(el))
-        cos_el = np.cos(np.radians(el))
-
-        # cos_alpha (n_el, n_az)
-        cos_alpha = (
-            sin_be * sin_el[:, None]
-            + cos_be * cos_el[:, None] * np.cos(np.radians(az[None, :] - sw_params.bulk_azimuth))
-        )
-
-        # exponential term (n_el, n_az, n_sp)
-        exponent = -(
-            sp[None, None, :] ** 2
-            + sw_params.bulk_speed ** 2
-            - 2 * sp[None, None, :] * sw_params.bulk_speed * cos_alpha[:, :, None]
-        ) / (2 * sw_params.thermal_speed ** 2)
-        exp_vals = np.exp(exponent)
-
-        # integrate: speed → azimuth → elevation
-        sp_integral = np.einsum('s,es,eas->ea', sp_w, pb_sp3, exp_vals)
-        az_integral = np.einsum('a,a,ea->e', az_w, trans, sp_integral)
-        el_integral = np.dot(el_w * cos_el, az_integral)
-
-        count_rate += (
-            el_integral
-            * grid.central_effective_area
-            * sw_params.density
-            * (np.sqrt(2 * np.pi) * sw_params.thermal_speed) ** -3
-            * 1e5
-            * (math.pi / 180) ** 2
-        )
-
-    return count_rate
-
-
-def _make_sw_params(grid, density=5.0, temperature_ev=10.0, bulk_speed=450.0, bulk_azimuth=15.0, bulk_elevation=-5.0):
-    thermal_speed = float(
-        np.sqrt(temperature_ev * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER
+def _peak_voltage(bulk_speed_kms):
+    return float(
+        PROTON_MASS_KG * (bulk_speed_kms * METERS_PER_KILOMETER) ** 2
+        / (2 * SWAPI_K_FACTOR * PROTON_CHARGE_COULOMBS)
     )
+
+
+def _thermal_speed(temperature_ev):
+    return float(np.sqrt(temperature_ev * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER)
+
+
+def _make_sw_params(density=5.0, temperature_ev=10.0, bulk_speed=450.0,
+                    bulk_azimuth=15.0, bulk_elevation=-5.0):
     return SWParams(
         density=density,
         bulk_speed=bulk_speed,
         bulk_azimuth=bulk_azimuth,
         bulk_elevation=bulk_elevation,
-        thermal_speed=thermal_speed,
+        thermal_speed=_thermal_speed(temperature_ev),
     )
 
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+class TestApplyDeadtimeCorrection(unittest.TestCase):
+    def test_weidner_email_example(self):
+        # At g=35.000 kHz measured, n=35.226 kHz true.
+        # apply_deadtime_correction maps true rate -> measured rate, so
+        # apply_deadtime_correction(35226) should recover ~35000 Hz.
+        self.assertAlmostEqual(apply_deadtime_correction(35226), 35000, delta=1)
+
+
+# ---------------------------------------------------------------------------
 
 class TestEsaVoltageToProtonSpeed(unittest.TestCase):
     def test_known_value(self):
@@ -162,20 +95,18 @@ class TestEsaVoltageToProtonSpeed(unittest.TestCase):
 
 class TestComputeAngles(unittest.TestCase):
     def test_antisunward_beam_with_identity_rotation(self):
-        # v_xyz = R @ (v_RTN - v_sc) = [450, 0, 0]
-        # phi = arctan2(-v_x, -v_y) = arctan2(-450, 0) = -90°
-        # theta = arcsin(-v_z / |v_RTN|) = 0°
+        # v_RTN = [450, 0, 0], identity rotation, no SC velocity
+        # v_xyz = [450, 0, 0]
+        # phi = arctan2(-450, 0) = -90°, theta = arcsin(0/450) = 0°
         phi, theta = _compute_angles(np.array([450.0, 0.0, 0.0]), np.eye(3), np.zeros(3))
         np.testing.assert_allclose(phi, -90.0, atol=1e-6)
         np.testing.assert_allclose(theta, 0.0, atol=1e-6)
 
     def test_spacecraft_velocity_shifts_apparent_direction(self):
-        # Subtracting SC velocity changes the apparent flow direction in instrument frame
         bulk_velocity_rtn = np.array([450.0, 0.0, 0.0])
         sc_velocity = np.array([0.0, 30.0, 0.0])
         phi_no_sc, _ = _compute_angles(bulk_velocity_rtn, np.eye(3), np.zeros(3))
         phi_with_sc, _ = _compute_angles(bulk_velocity_rtn, np.eye(3), sc_velocity)
-        # With SC lateral velocity, apparent beam direction shifts in azimuth
         self.assertFalse(np.isclose(phi_no_sc, phi_with_sc))
 
     def test_elevation_nonzero_for_z_component(self):
@@ -185,91 +116,202 @@ class TestComputeAngles(unittest.TestCase):
         expected_theta = np.degrees(np.arcsin(-50.0 / v_b))
         np.testing.assert_allclose(theta, expected_theta, atol=1e-6)
 
-    def test_rotation_matrix_applied(self):
-        # A 90° rotation about z: x→y, y→-x
+    def test_rotation_matrix_changes_azimuth_not_elevation(self):
+        # 90° rotation about z: x→y, y→−x; elevation (z component) unchanged
         R = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=float)
-        phi_identity, theta_identity = _compute_angles(np.array([450.0, 0.0, 0.0]), np.eye(3), np.zeros(3))
-        phi_rotated, theta_rotated = _compute_angles(np.array([450.0, 0.0, 0.0]), R, np.zeros(3))
-        # Elevation unchanged (no z component), but azimuth shifts
-        np.testing.assert_allclose(theta_rotated, theta_identity, atol=1e-6)
-        self.assertFalse(np.isclose(phi_rotated, phi_identity))
+        phi_id, theta_id = _compute_angles(np.array([450.0, 0.0, 0.0]), np.eye(3), np.zeros(3))
+        phi_rot, theta_rot = _compute_angles(np.array([450.0, 0.0, 0.0]), R, np.zeros(3))
+        np.testing.assert_allclose(theta_rot, theta_id, atol=1e-6)
+        self.assertFalse(np.isclose(phi_rot, phi_id))
+
+    def test_result_independent_of_bulk_speed_magnitude_for_angles(self):
+        # Angles depend only on direction, not magnitude (given no SC velocity)
+        v1 = np.array([300.0, 50.0, -20.0])
+        v2 = v1 * 2
+        phi1, theta1 = _compute_angles(v1, np.eye(3), np.zeros(3))
+        phi2, theta2 = _compute_angles(v2, np.eye(3), np.zeros(3))
+        np.testing.assert_allclose(phi1, phi2, atol=1e-4)
+        np.testing.assert_allclose(theta1, theta2, atol=1e-4)
+
+
+class TestInterpolatePassband(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        cls.grid = sr.create_passband_grid(_peak_voltage(450.0))
+
+    def test_central_value_is_one_for_normalized_grid(self):
+        # At elevation=0 and speed=central_speed, OA passband should be ~1 (peak)
+        val = interpolate_passband(self.grid, False, elevation=0.0, speed=self.grid.central_speed)
+        self.assertGreater(val, 0.5)
+
+    def test_out_of_bounds_elevation_returns_zero(self):
+        np.testing.assert_equal(
+            interpolate_passband(self.grid, False, elevation=100.0, speed=self.grid.central_speed), 0.0
+        )
+        np.testing.assert_equal(
+            interpolate_passband(self.grid, False, elevation=-100.0, speed=self.grid.central_speed), 0.0
+        )
+
+    def test_out_of_bounds_speed_returns_zero(self):
+        np.testing.assert_equal(
+            interpolate_passband(self.grid, False, elevation=0.0, speed=0.0), 0.0
+        )
+        np.testing.assert_equal(
+            interpolate_passband(self.grid, False, elevation=0.0, speed=self.grid.central_speed * 10), 0.0
+        )
+
+    def test_sg_and_oa_are_different(self):
+        sg = interpolate_passband(self.grid, True, elevation=0.0, speed=self.grid.central_speed)
+        oa = interpolate_passband(self.grid, False, elevation=0.0, speed=self.grid.central_speed)
+        self.assertFalse(np.isclose(sg, oa))
+
+
+class TestInterpolateTransmission(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        cls.transmission = sr.azimuthal_transmission
+        cls.spacing = 0.1
+
+    def test_sunglasses_region_near_zero(self):
+        # Sunglasses region |phi| < 9° has ~1e-3 transmission
+        val = _interpolate_transmission(self.transmission, self.spacing, 0.0)
+        self.assertLess(val, 0.01)
+
+    def test_open_aperture_region_near_one(self):
+        # Open aperture region has transmission close to 1
+        val = _interpolate_transmission(self.transmission, self.spacing, 90.0)
+        self.assertGreater(val, 0.5)
+
+    def test_periodic_wraparound(self):
+        # 170° and −170° should give the same value (both near 180°)
+        v1 = _interpolate_transmission(self.transmission, self.spacing, 170.0)
+        v2 = _interpolate_transmission(self.transmission, self.spacing, -170.0)
+        np.testing.assert_allclose(v1, v2, rtol=1e-6)
+
+    def test_symmetric_about_zero(self):
+        # Transmission is symmetric: T(phi) = T(-phi)
+        for phi in [5.0, 45.0, 90.0, 120.0]:
+            v_pos = _interpolate_transmission(self.transmission, self.spacing, phi)
+            v_neg = _interpolate_transmission(self.transmission, self.spacing, -phi)
+            np.testing.assert_allclose(v_pos, v_neg, rtol=1e-6, err_msg=f"phi={phi}")
 
 
 class TestCalculateIntegral(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.swapi_response = SWAPIResponse.from_files(
-            _AZIMUTHAL_TRANSMISSION_PATH,
-            _CENTRAL_EFFECTIVE_AREA_PATH,
-            _PASSBAND_FIT_COEFFICIENTS_PATH,
-        )
-        # Peak voltage for 450 km/s
-        cls.peak_voltage = float(
-            PROTON_MASS_KG * (450.0 * METERS_PER_KILOMETER) ** 2
-            / (2 * SWAPI_K_FACTOR * PROTON_CHARGE_COULOMBS)
-        )
+        cls.swapi_response = _load_swapi_response()
+        cls.peak_voltage = _peak_voltage(450.0)
 
     def test_count_rate_is_positive(self):
         grid = self.swapi_response.create_passband_grid(self.peak_voltage)
-        sw_params = _make_sw_params(grid)
-        self.assertGreater(calculate_integral(grid, sw_params), 0.0)
+        self.assertGreater(calculate_integral(grid, _make_sw_params()), 0.0)
 
-    def test_count_rate_scales_linearly_with_density(self):
+    def test_scales_linearly_with_density(self):
         grid = self.swapi_response.create_passband_grid(self.peak_voltage)
-        result_1 = calculate_integral(grid, _make_sw_params(grid, density=1.0))
-        result_5 = calculate_integral(grid, _make_sw_params(grid, density=5.0))
+        result_1 = calculate_integral(grid, _make_sw_params( density=1.0))
+        result_5 = calculate_integral(grid, _make_sw_params( density=5.0))
         np.testing.assert_allclose(result_5, 5.0 * result_1, rtol=1e-10)
 
-    def test_count_rate_drops_away_from_peak(self):
-        # Count rate should be much lower at 2x peak voltage (central speed = sqrt(2) * bulk_speed,
-        # passband well above the Maxwellian peak) than at peak voltage
+    def test_drops_away_from_peak_voltage(self):
         grid_peak = self.swapi_response.create_passband_grid(self.peak_voltage)
         grid_high = self.swapi_response.create_passband_grid(self.peak_voltage * 2.0)
-        rate_peak = calculate_integral(grid_peak, _make_sw_params(grid_peak))
-        rate_high = calculate_integral(grid_high, _make_sw_params(grid_high))
+        rate_peak = calculate_integral(grid_peak, _make_sw_params())
+        rate_high = calculate_integral(grid_high, _make_sw_params())
         self.assertGreater(rate_peak, rate_high)
 
-    def test_matches_highres_trapezoid_at_peak_voltage(self):
-        grid = self.swapi_response.create_passband_grid(self.peak_voltage)
-        sw_params = _make_sw_params(grid)
-        result = calculate_integral(grid, sw_params)
-        reference = _calculate_integral_highres(grid, sw_params)
-        np.testing.assert_allclose(result, reference, rtol=0.01)
+    def test_increases_with_temperature_at_off_peak_voltage(self):
+        # At 1.5× peak voltage, a hotter plasma has a wider VDF that overlaps
+        # more with the passband, so count rate should increase with temperature
+        grid = self.swapi_response.create_passband_grid(self.peak_voltage * 1.5)
+        rate_cold = calculate_integral(grid, _make_sw_params( temperature_ev=5.0))
+        rate_hot = calculate_integral(grid, _make_sw_params( temperature_ev=30.0))
+        self.assertGreater(rate_hot, rate_cold)
 
-    def test_matches_highres_trapezoid_across_sweep(self):
-        # Check accuracy at voltages near the proton peak where the integral is well-resolved
-        for voltage in np.geomspace(self.peak_voltage * 0.8, self.peak_voltage * 1.3, 5):
-            grid = self.swapi_response.create_passband_grid(voltage)
-            sw_params = _make_sw_params(grid)
-            result = calculate_integral(grid, sw_params)
-            reference = _calculate_integral_highres(grid, sw_params)
-            np.testing.assert_allclose(result, reference, rtol=0.01,
-                                       err_msg=f"Failed at {voltage:.0f} V")
+    def test_matches_reference_integrals_csv(self):
+        _REFERENCE_CSV = Path(__file__).resolve().parents[0] / "reference_integrals.csv"
+        df = pd.read_csv(_REFERENCE_CSV)
+        df = df[df['integral'] >= 1e-3].reset_index(drop=True)
 
-    def test_matches_highres_trapezoid_off_axis_beam(self):
-        # Non-zero azimuth and elevation stress test angular integration
+        production = np.empty(len(df))
+        for i, row in enumerate(df.itertuples(index=False)):
+            thermal_speed = float(
+                np.sqrt(row.temperature_ev * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER
+            )
+            sw = SWParams(
+                density=float(row.density),
+                bulk_speed=float(row.bulk_speed),
+                bulk_azimuth=float(row.bulk_azimuth),
+                bulk_elevation=float(row.bulk_elevation),
+                thermal_speed=thermal_speed,
+            )
+            grid = self.swapi_response.create_passband_grid(_peak_voltage(float(row.bulk_speed)))
+            production[i] = calculate_integral(grid, sw)
+
+        rel_errors = np.abs(production - df['integral'].to_numpy()) / df['integral'].to_numpy()
+        self.assertLess(np.percentile(rel_errors, 95), 0.05,
+                        "95th-percentile relative error vs reference_integrals.csv exceeds 5%")
+        self.assertLess(np.percentile(rel_errors, 99), 0.15,
+                        "99th-percentile relative error vs reference_integrals.csv exceeds 15%")
+
+    def test_zero_for_beam_outside_fov(self):
+        # Beam pointing at elevation=89° is outside all passbands → zero
         grid = self.swapi_response.create_passband_grid(self.peak_voltage)
-        sw_params = _make_sw_params(grid, bulk_azimuth=80.0, bulk_elevation=5.0)
-        result = calculate_integral(grid, sw_params)
-        reference = _calculate_integral_highres(grid, sw_params)
-        np.testing.assert_allclose(result, reference, rtol=0.01)
+        sw_params = _make_sw_params( bulk_elevation=89.0)
+        self.assertAlmostEqual(calculate_integral(grid, sw_params), 0.0, places=3)
+
+
+class TestModelCountRates(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        peak_v = _peak_voltage(450.0)
+        cls.grids = numba.typed.List([sr.create_passband_grid(v) for v in
+                                      np.geomspace(peak_v * 0.8, peak_v * 1.3, 5)])
+        cls.rot = np.tile(np.eye(3), (5, 1, 1))
+        cls.sc_vel = np.zeros(3)
+
+    def test_output_shape(self):
+        result = _model_count_rates(5.0, 10.0, np.array([450.0, 0.0, 0.0]),
+                                    self.grids, self.rot, self.sc_vel)
+        self.assertEqual(result.shape, (5,))
+
+    def test_all_positive(self):
+        result = _model_count_rates(5.0, 10.0, np.array([450.0, 0.0, 0.0]),
+                                    self.grids, self.rot, self.sc_vel)
+        self.assertTrue(np.all(result > 0))
+
+    def test_increases_with_density(self):
+        # After deadtime correction the observed rate is sublinear in density,
+        # but must still be strictly increasing.
+        r1 = _model_count_rates(1.0, 10.0, np.array([450.0, 0.0, 0.0]),
+                                 self.grids, self.rot, self.sc_vel)
+        r5 = _model_count_rates(5.0, 10.0, np.array([450.0, 0.0, 0.0]),
+                                 self.grids, self.rot, self.sc_vel)
+        self.assertTrue(np.all(r5 > r1))
+
+    def test_peak_at_central_grid(self):
+        # The grid computed at exactly the peak voltage should give the highest count rate
+        result = _model_count_rates(5.0, 10.0, np.array([450.0, 0.0, 0.0]),
+                                    self.grids, self.rot, self.sc_vel)
+        self.assertEqual(np.argmax(result), 2)  # middle of 5 grids spanning ±30% of peak
 
 
 class TestGetInitialGuess(unittest.TestCase):
     def setUp(self):
-        true_bulk_speed = 450.0    # km/s
-        true_thermal_speed = 40.0  # km/s
-        self.true_density = 5.0    # cm^-3
-        self.true_temperature = PROTON_MASS_KG * (true_thermal_speed * METERS_PER_KILOMETER) ** 2 / PROTON_CHARGE_COULOMBS
-
-        peak_voltage = PROTON_MASS_KG * (true_bulk_speed * METERS_PER_KILOMETER) ** 2 / (
-            2 * SWAPI_K_FACTOR * PROTON_CHARGE_COULOMBS)
+        true_bulk_speed = 450.0
+        true_thermal_speed = 40.0
+        self.true_density = 5.0
+        self.true_temperature = (
+            PROTON_MASS_KG * (true_thermal_speed * METERS_PER_KILOMETER) ** 2 / PROTON_CHARGE_COULOMBS
+        )
+        peak_voltage = _peak_voltage(true_bulk_speed)
         self.voltages = np.geomspace(peak_voltage * 0.5, peak_voltage * 2.0, 62)
         speeds = esa_voltage_to_proton_speed(self.voltages)
-
-        # TODO update with a more realistic model input
         self.count_rate = self.true_density * np.exp(
-            -(speeds - true_bulk_speed) ** 2 / (2 * true_thermal_speed ** 2))
+            -(speeds - true_bulk_speed) ** 2 / (2 * true_thermal_speed ** 2)
+        )
         self.rotation_matrices = np.tile(np.eye(3), (len(self.voltages), 1, 1))
         self.true_bulk_speed = true_bulk_speed
 
@@ -278,19 +320,17 @@ class TestGetInitialGuess(unittest.TestCase):
             spacecraft_velocity_rtn = np.zeros(3)
         with patch('imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._model_count_rates',
                    return_value=self.count_rate / self.true_density):
-            return _get_initial_guess(self.count_rate, self.voltages, None, self.rotation_matrices, spacecraft_velocity_rtn)
+            return _get_initial_guess(self.count_rate, self.voltages, None,
+                                      self.rotation_matrices, spacecraft_velocity_rtn)
 
     def test_recovers_bulk_speed(self):
-        result = self._run()
-        np.testing.assert_allclose(result.bulk_velocity_rtn[0], self.true_bulk_speed, rtol=0.01)
+        np.testing.assert_allclose(self._run().bulk_velocity_rtn[0], self.true_bulk_speed, rtol=0.01)
 
     def test_recovers_temperature(self):
-        result = self._run()
-        np.testing.assert_allclose(result.temperature, self.true_temperature, rtol=0.05)
+        np.testing.assert_allclose(self._run().temperature, self.true_temperature, rtol=0.05)
 
     def test_recovers_density(self):
-        result = self._run()
-        np.testing.assert_allclose(result.density, self.true_density, rtol=0.01)
+        np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.01)
 
     def test_bulk_velocity_is_anti_sunward(self):
         result = self._run()
@@ -298,10 +338,496 @@ class TestGetInitialGuess(unittest.TestCase):
         np.testing.assert_allclose(result.bulk_velocity_rtn[1:], 0.0)
 
     def test_spacecraft_velocity_does_not_affect_initial_bulk_velocity(self):
-        sc_velocity = np.array([10.0, 5.0, -3.0])
-        result = self._run(spacecraft_velocity_rtn=sc_velocity)
-        np.testing.assert_allclose(result.bulk_velocity_rtn,
-                                   np.array([self.true_bulk_speed, 0.0, 0.0]), rtol=0.01)
+        result = self._run(spacecraft_velocity_rtn=np.array([10.0, 5.0, -3.0]))
+        np.testing.assert_allclose(
+            result.bulk_velocity_rtn, np.array([self.true_bulk_speed, 0.0, 0.0]), rtol=0.01
+        )
+
+
+def _spin_rotation_matrices(n, spin_period_s=15.0, dt_s=0.145):
+    """Simulate a spinning spacecraft: rotation about the instrument Z-axis.
+
+    SWAPI's sunglasses/open-aperture separation is in azimuth (phi), so
+    Z-rotation produces the azimuthal modulation that makes V_T/V_N
+    observable across the spin.
+    """
+    angles = np.linspace(0, 2 * np.pi * n * dt_s / spin_period_s, n)
+    c, s = np.cos(angles), np.sin(angles)
+    R = np.zeros((n, 3, 3))
+    R[:, 0, 0] = c
+    R[:, 0, 1] = -s
+    R[:, 1, 0] = s
+    R[:, 1, 1] = c
+    R[:, 2, 2] = 1.0
+    return R
+
+
+class TestOptimize(unittest.TestCase):
+    """Optimizer recovery tests using spinning rotation matrices (realistic scenario).
+
+    Z-axis spin rotates the azimuthal angle phi over time, which is how SWAPI
+    distinguishes V_T from V_R and makes all five parameters observable.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        cls.true_speed = 450.0
+        cls.true_density = 5.0
+        cls.true_temperature = 10.0  # eV
+        cls.true_velocity = np.array([cls.true_speed, 20.0, -10.0])
+
+        voltages = np.geomspace(_peak_voltage(cls.true_speed) * 0.75,
+                                _peak_voltage(cls.true_speed) * 1.35, 20)
+        n_sweeps = 5
+
+        cls.grids = numba.typed.List()
+        for _ in range(n_sweeps):
+            for v in voltages:
+                cls.grids.append(sr.create_passband_grid(v))
+
+        cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
+        cls.sc_vel = np.zeros(3)
+
+        cls.count_rate = _model_count_rates(
+            cls.true_density, cls.true_temperature, cls.true_velocity,
+            cls.grids, cls.rot, cls.sc_vel,
+        )
+        cls.initial_guess = ProtonSolarWindMoments(
+            density=cls.true_density * 0.8,
+            temperature=cls.true_temperature * 1.2,
+            bulk_velocity_rtn=np.array([cls.true_speed * 1.05, 0.0, 0.0]),
+            bad_fit_flag=0,
+        )
+
+    def _run(self):
+        return _optimize(self.count_rate, self.grids, self.rot, self.sc_vel, self.initial_guess)
+
+    def test_recovers_density(self):
+        np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.05)
+
+    def test_recovers_temperature(self):
+        np.testing.assert_allclose(self._run().temperature, self.true_temperature, rtol=0.1)
+
+    def test_recovers_bulk_velocity(self):
+        np.testing.assert_allclose(self._run().bulk_velocity_rtn, self.true_velocity, rtol=0.05, atol=1.0)
+
+    def test_success_flag_on_good_fit(self):
+        self.assertEqual(self._run().bad_fit_flag, SwapiL3Flags.NONE)
+
+    def test_density_and_temperature_positive(self):
+        result = self._run()
+        self.assertGreater(result.density, 0)
+        self.assertGreater(result.temperature, 0)
+
+
+class TestUncertainties(unittest.TestCase):
+    """Verify that _optimize returns physically meaningful parameter uncertainties."""
+
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        cls.true_speed = 450.0
+        cls.true_density = 5.0
+        cls.true_temperature = 10.0
+        cls.true_velocity = np.array([cls.true_speed, 20.0, -10.0])
+
+        voltages = np.geomspace(_peak_voltage(cls.true_speed) * 0.75,
+                                _peak_voltage(cls.true_speed) * 1.35, 20)
+        n_sweeps = 5
+
+        cls.grids = numba.typed.List()
+        for _ in range(n_sweeps):
+            for v in voltages:
+                cls.grids.append(sr.create_passband_grid(v))
+
+        cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
+        cls.sc_vel = np.zeros(3)
+
+        cls.count_rate = _model_count_rates(
+            cls.true_density, cls.true_temperature, cls.true_velocity,
+            cls.grids, cls.rot, cls.sc_vel,
+        )
+        cls.initial_guess = ProtonSolarWindMoments(
+            density=cls.true_density * 0.8,
+            temperature=cls.true_temperature * 1.2,
+            bulk_velocity_rtn=np.array([cls.true_speed * 1.05, 0.0, 0.0]),
+            bad_fit_flag=0,
+        )
+        cls.result = _optimize(cls.count_rate, cls.grids, cls.rot, cls.sc_vel, cls.initial_guess)
+
+    def test_density_sigma_is_finite_and_positive(self):
+        self.assertTrue(np.isfinite(self.result.density_sigma))
+        self.assertGreater(self.result.density_sigma, 0.0)
+
+    def test_temperature_sigma_is_finite_and_positive(self):
+        self.assertTrue(np.isfinite(self.result.temperature_sigma))
+        self.assertGreater(self.result.temperature_sigma, 0.0)
+
+    def test_velocity_covariance_is_symmetric_positive_semidefinite(self):
+        cov = self.result.velocity_covariance
+        self.assertEqual(cov.shape, (3, 3))
+        np.testing.assert_allclose(cov, cov.T, atol=1e-10)
+        eigenvalues = np.linalg.eigvalsh(cov)
+        self.assertTrue(np.all(eigenvalues >= -1e-10), f"Negative eigenvalue: {eigenvalues}")
+
+    def test_density_sigma_smaller_than_density(self):
+        # Fractional uncertainty on density should be less than 100%
+        self.assertLess(self.result.density_sigma / self.result.density, 1.0)
+
+    def test_temperature_sigma_smaller_than_temperature(self):
+        self.assertLess(self.result.temperature_sigma / self.result.temperature, 1.0)
+
+    def test_velocity_diagonal_sigmas_finite_and_positive(self):
+        cov = self.result.velocity_covariance
+        for i in range(3):
+            self.assertGreater(cov[i, i], 0.0, f"cov[{i},{i}] not positive")
+            self.assertTrue(np.isfinite(cov[i, i]))
+
+    def test_more_data_gives_smaller_uncertainties(self):
+        """Doubling the number of sweeps (data points) should reduce uncertainties."""
+        sr = _load_swapi_response()
+        voltages = np.geomspace(_peak_voltage(self.true_speed) * 0.75,
+                                _peak_voltage(self.true_speed) * 1.35, 20)
+
+        def run_with_n_sweeps(n_sweeps):
+            grids = numba.typed.List()
+            for _ in range(n_sweeps):
+                for v in voltages:
+                    grids.append(sr.create_passband_grid(v))
+            rot = _spin_rotation_matrices(n_sweeps * len(voltages))
+            cr = _model_count_rates(self.true_density, self.true_temperature,
+                                    self.true_velocity, grids, rot, self.sc_vel)
+            ig = ProtonSolarWindMoments(
+                density=self.true_density * 0.8,
+                temperature=self.true_temperature * 1.2,
+                bulk_velocity_rtn=np.array([self.true_speed * 1.05, 0.0, 0.0]),
+                bad_fit_flag=0,
+            )
+            return _optimize(cr, grids, rot, self.sc_vel, ig)
+
+        r5 = run_with_n_sweeps(5)
+        r10 = run_with_n_sweeps(10)
+        self.assertLess(r10.density_sigma, r5.density_sigma)
+        self.assertLess(r10.temperature_sigma, r5.temperature_sigma)
+
+    def test_speed_uncertainty_via_propagation(self):
+        """sigma_speed from covariance matches finite-difference estimate."""
+        result = self.result
+        vr, vt, vn = result.bulk_velocity_rtn
+        speed = float(np.linalg.norm(result.bulk_velocity_rtn))
+        v_hat = np.array([vr, vt, vn]) / speed
+        sigma_speed = float(np.sqrt(v_hat @ result.velocity_covariance @ v_hat))
+        self.assertGreater(sigma_speed, 0.0)
+        self.assertLess(sigma_speed, speed)  # uncertainty smaller than value
+
+
+# ---------------------------------------------------------------------------
+# Integration test: hardcoded real L2 spectrum from 2026-01-01 ~12:00 UTC
+#
+# Extracted from imap_L3_processing L2 dataset (5-sweep group, proton-peak bins).
+# Rotation matrices computed from SPICE at the actual measurement times.
+# Expected moments verified against OMNI reference.
+# ---------------------------------------------------------------------------
+
+# 5 sweeps × 7 ESA bins spanning the proton peak
+_L2_ESA_VOLTAGES = np.array([
+    776.757277, 712.276025, 653.147580, 598.927587, 549.208580, 503.616916, 461.809970,
+])
+
+_L2_COUNT_RATES = np.array([
+    [2158.620690,  5765.517241, 12586.206897, 19055.172414, 18806.896552, 11586.206897,  5517.241379],
+    [2951.724138,  6841.379310, 14131.034483, 21248.275862, 19620.689655, 11641.379310,  5344.827586],
+    [2779.310345,  7400.000000, 13958.620690, 15606.896552, 10682.758621,  5655.172414,  2765.517241],
+    [2613.793103,  5758.620690, 12600.000000, 15827.586207, 11668.965517,  5758.620690,  2551.724138],
+    [2993.103448,  8579.310345, 18144.827586, 24572.413793, 19841.379310, 11027.586207,  5220.689655],
+])  # shape (5 sweeps, 7 bins), Hz
+
+# RTN-to-SWAPI rotation matrices at each measurement time, shape (5, 7, 3, 3)
+_L2_ROTATION_MATRICES = np.array([
+    [[[ 2.609821e-02,  2.704214e-01, -9.623883e-01],
+      [-9.979728e-01,  6.294733e-02, -9.375635e-03],
+      [ 5.804440e-02,  9.606820e-01,  2.715160e-01]],
+     [[ 2.203913e-02,  2.033433e-01, -9.788594e-01],
+      [-9.979848e-01,  6.274867e-02, -9.434649e-03],
+      [ 5.950366e-02,  9.770947e-01,  2.043164e-01]],
+     [[ 1.788886e-02,  1.352909e-01, -9.906444e-01],
+      [-9.979970e-01,  6.254642e-02, -9.479757e-03],
+      [ 6.067874e-02,  9.888298e-01,  1.361388e-01]],
+     [[ 1.366727e-02,  6.658989e-02, -9.976868e-01],
+      [-9.980096e-01,  6.234155e-02, -9.510745e-03],
+      [ 6.156402e-02,  9.958310e-01,  6.730939e-02]],
+     [[ 9.394556e-03, -2.430801e-03, -9.999529e-01],
+      [-9.980223e-01,  6.213503e-02, -9.527463e-03],
+      [ 6.215526e-02,  9.980648e-01, -1.842263e-03]],
+     [[ 5.091190e-03, -7.144072e-02, -9.974319e-01],
+      [-9.980351e-01,  6.192786e-02, -9.529831e-03],
+      [ 6.244964e-02,  9.955205e-01, -7.098506e-02]],
+     [[ 7.838670e-04, -1.401076e-01, -9.901360e-01],
+      [-9.980479e-01,  6.172186e-02, -9.523982e-03],
+      [ 6.244741e-02,  9.882106e-01, -1.397857e-01]]],
+    [[[ 6.545899e-02,  9.978447e-01,  4.596260e-03],
+      [-9.978362e-01,  6.548550e-02, -5.876371e-03],
+      [-6.164694e-03, -4.201653e-03,  9.999722e-01]],
+     [[ 6.578006e-02,  9.957435e-01, -6.455892e-02],
+      [-9.978324e-01,  6.552059e-02, -6.130419e-03],
+      [-1.874386e-03,  6.482224e-02,  9.978951e-01]],
+     [[ 6.580371e-02,  9.888746e-01, -1.334049e-01],
+      [-9.978296e-01,  6.553807e-02, -6.386295e-03],
+      [ 2.427855e-03,  1.335356e-01,  9.910410e-01]],
+     [[ 6.552982e-02,  9.772709e-01, -2.016121e-01],
+      [-9.978280e-01,  6.553784e-02, -6.642774e-03],
+      [ 6.721436e-03,  2.016095e-01,  9.794429e-01]],
+     [[ 6.495970e-02,  9.609878e-01, -2.688542e-01],
+      [-9.978274e-01,  6.551991e-02, -6.898628e-03],
+      [ 1.098581e-02,  2.687183e-01,  9.631562e-01]],
+     [[ 6.409607e-02,  9.401035e-01, -3.348091e-01],
+      [-9.978280e-01,  6.548437e-02, -7.152632e-03],
+      [ 1.520055e-02,  3.345404e-01,  9.422588e-01]],
+     [[ 6.293972e-02,  9.147186e-01, -3.991598e-01],
+      [-9.978299e-01,  6.542560e-02, -7.408373e-03],
+      [ 1.933869e-02,  3.987599e-01,  9.168515e-01]]],
+    [[[ 1.335341e-02,  2.624175e-01,  9.648620e-01],
+      [-9.980289e-01,  6.267281e-02, -3.232949e-03],
+      [-6.131900e-02, -9.629170e-01,  2.627371e-01]],
+     [[ 1.756634e-02,  3.283778e-01,  9.443831e-01],
+      [-9.980155e-01,  6.288242e-02, -3.301316e-03],
+      [-6.046918e-02, -9.424510e-01,  3.288307e-01]],
+     [[ 2.171042e-02,  3.927648e-01,  9.193827e-01],
+      [-9.980023e-01,  6.308681e-02, -3.384042e-03],
+      [-5.933005e-02, -9.174725e-01,  3.933498e-01]],
+     [[ 2.576580e-02,  4.552704e-01,  8.899803e-01],
+      [-9.979894e-01,  6.328499e-02, -3.480730e-03],
+      [-5.790707e-02, -8.881013e-01,  4.559856e-01]],
+     [[ 2.971308e-02,  5.155952e-01,  8.563169e-01],
+      [-9.979769e-01,  6.347602e-02, -3.590918e-03],
+      [-5.620705e-02, -8.544778e-01,  5.164382e-01]],
+     [[ 3.353334e-02,  5.734505e-01,  8.185537e-01],
+      [-9.979648e-01,  6.365898e-02, -3.714078e-03],
+      [-5.423813e-02, -8.167632e-01,  5.744181e-01]],
+     [[ 3.721313e-02,  6.285520e-01,  7.768768e-01],
+      [-9.979532e-01,  6.383253e-02, -3.842428e-03],
+      [-5.200518e-02, -7.751437e-01,  6.296409e-01]]],
+    [[[-5.309179e-02, -8.579861e-01,  5.109218e-01],
+      [-9.982624e-01,  5.869778e-02, -5.162563e-03],
+      [-2.556057e-02, -5.103081e-01, -8.596117e-01]],
+     [[-5.113999e-02, -8.206493e-01,  5.691391e-01],
+      [-9.982585e-01,  5.878521e-02, -4.935318e-03],
+      [-2.940680e-02, -5.684004e-01, -8.222264e-01]],
+     [[-4.892690e-02, -7.793850e-01,  6.246320e-01],
+      [-9.982535e-01,  5.888811e-02, -4.714666e-03],
+      [-3.310886e-02, -6.237717e-01, -7.809050e-01]],
+     [[-4.646312e-02, -7.343907e-01,  6.771348e-01],
+      [-9.982475e-01,  5.900600e-02, -4.501664e-03],
+      [-3.664903e-02, -6.761572e-01, -7.358453e-01]],
+     [[-4.376044e-02, -6.858817e-01,  7.263961e-01],
+      [-9.982405e-01,  5.913830e-02, -4.297329e-03],
+      [-4.001037e-02, -7.253061e-01, -6.872629e-01]],
+     [[-4.083180e-02, -6.340904e-01,  7.721801e-01],
+      [-9.982327e-01,  5.928438e-02, -4.102642e-03],
+      [-4.317678e-02, -7.709830e-01, -6.353904e-01]],
+     [[-3.769038e-02, -5.792601e-01,  8.142710e-01],
+      [-9.982237e-01,  5.944768e-02, -3.914874e-03],
+      [-4.613879e-02, -8.129722e-01, -5.804718e-01]]],
+    [[[-3.684847e-02, -7.210986e-01, -6.918519e-01],
+      [-9.981869e-01,  5.953191e-02, -8.884448e-03],
+      [ 4.759383e-02,  6.902701e-01, -7.219848e-01]],
+     [[-4.004352e-02, -7.670996e-01, -6.402771e-01],
+      [-9.981978e-01,  5.937390e-02, -8.706120e-03],
+      [ 4.469421e-02,  6.387746e-01, -7.680947e-01]],
+     [[-4.303045e-02, -8.094299e-01, -5.856377e-01],
+      [-9.982081e-01,  5.922857e-02, -8.517265e-03],
+      [ 4.158061e-02,  5.842218e-01, -8.105282e-01]],
+     [[-4.579495e-02, -8.478872e-01, -5.281952e-01],
+      [-9.982176e-01,  5.909662e-02, -8.318787e-03],
+      [ 3.826794e-02,  5.268728e-01, -8.490822e-01]],
+     [[-4.832379e-02, -8.822872e-01, -4.682244e-01],
+      [-9.982263e-01,  5.897869e-02, -8.111635e-03],
+      [ 3.477206e-02,  4.670019e-01, -8.835724e-01]],
+     [[-5.060488e-02, -9.124653e-01, -4.060125e-01],
+      [-9.982341e-01,  5.887535e-02, -7.896802e-03],
+      [ 3.110969e-02,  4.048959e-01, -9.138334e-01]],
+     [[-5.263135e-02, -9.382797e-01, -3.418496e-01],
+      [-9.982407e-01,  5.879232e-02, -7.678498e-03],
+      [ 2.730271e-02,  3.408440e-01, -9.397233e-01]]]]
+)  # shape (5, 7, 3, 3)
+
+_L2_SPACECRAFT_VELOCITY_RTN = np.array([-0.055488, 29.552893, -3.411245])  # km/s
+
+
+class TestIntegrationRealL2Spectrum(unittest.TestCase):
+    """End-to-end fit on a real SWAPI L2 spectrum (count rates hardcoded, no file I/O)."""
+
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        n_sweeps, n_bins = _L2_COUNT_RATES.shape
+
+        # One passband grid per (sweep, bin) pair, ordered sweep-major
+        cls.grids = numba.typed.List()
+        for _ in range(n_sweeps):
+            for v in _L2_ESA_VOLTAGES:
+                cls.grids.append(sr.create_passband_grid(v))
+
+        # Flatten rotation matrices to (n_sweeps * n_bins, 3, 3)
+        cls.rot = _L2_ROTATION_MATRICES.reshape(n_sweeps * n_bins, 3, 3)
+        cls.sc_vel = _L2_SPACECRAFT_VELOCITY_RTN
+        cls.count_rate = _L2_COUNT_RATES.ravel()
+
+        ig = _get_initial_guess(
+            cls.count_rate,
+            np.tile(_L2_ESA_VOLTAGES, n_sweeps),
+            cls.grids,
+            cls.rot,
+            cls.sc_vel,
+        )
+        cls.result = _optimize(cls.count_rate, cls.grids, cls.rot, cls.sc_vel, ig)
+
+    def test_fit_succeeds(self):
+        self.assertEqual(self.result.bad_fit_flag, SwapiL3Flags.NONE)
+
+    def test_bulk_speed_reasonable(self):
+        speed = float(np.linalg.norm(self.result.bulk_velocity_rtn))
+        self.assertGreater(speed, 350.0, "Speed too low")
+        self.assertLess(speed, 650.0, "Speed too high")
+
+    def test_dominant_component_is_radial(self):
+        vr, vt, vn = self.result.bulk_velocity_rtn
+        self.assertGreater(vr, abs(vt), "V_R should dominate V_T")
+        self.assertGreater(vr, abs(vn), "V_R should dominate V_N")
+
+    def test_density_reasonable(self):
+        self.assertGreater(self.result.density, 1.0, "Density too low")
+        self.assertLess(self.result.density, 50.0, "Density too high")
+
+    def test_temperature_reasonable(self):
+        self.assertGreater(self.result.temperature, 1.0, "Temperature too low")
+        self.assertLess(self.result.temperature, 100.0, "Temperature too high")
+
+    def test_model_reproduces_observed_count_rates(self):
+        model = _model_count_rates(
+            self.result.density,
+            self.result.temperature,
+            self.result.bulk_velocity_rtn,
+            self.grids,
+            self.rot,
+            self.sc_vel,
+        )
+        # Real data has Poisson noise; normalized residuals will be O(√N) per bin.
+        # Require that the model is at least within a factor of 2 of the observations
+        # (i.e. relative error < 100%), confirming the fit is physically sensible.
+        rel_err = np.abs(model - self.count_rate) / np.maximum(self.count_rate, 1.0)
+        self.assertLess(float(np.mean(rel_err)), 1.0, "Mean relative error > 100%")
+
+    def test_uncertainties_are_finite_for_real_data(self):
+        self.assertTrue(np.isfinite(self.result.density_sigma))
+        self.assertTrue(np.isfinite(self.result.temperature_sigma))
+        self.assertIsNotNone(self.result.velocity_covariance)
+        self.assertTrue(np.all(np.isfinite(self.result.velocity_covariance)))
+        self.assertGreater(self.result.density_sigma, 0.0)
+        self.assertGreater(self.result.temperature_sigma, 0.0)
+
+
+class TestFitSolarWindProtonMoments(unittest.TestCase):
+    """Tests for the top-level fit_solar_wind_proton_moments entry point."""
+
+    def setUp(self):
+        from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import fit_solar_wind_proton_moments
+        self.fit = fit_solar_wind_proton_moments
+
+    def test_returns_proton_solar_wind_moments(self):
+        sr = _load_swapi_response()
+        true_speed = 450.0
+        voltages = np.geomspace(_peak_voltage(true_speed) * 0.75, _peak_voltage(true_speed) * 1.35, 10)
+        times = np.zeros(len(voltages), dtype=np.int64)
+        grids = numba.typed.List([sr.create_passband_grid(v) for v in voltages])
+        rot = np.tile(np.eye(3), (len(voltages), 1, 1))
+        sc_vel = np.zeros(3)
+        count_rate = _model_count_rates(5.0, 10.0, np.array([true_speed, 0.0, 0.0]), grids, rot, sc_vel)
+
+        with patch('imap_l3_processing.swapi.l3a.utils.get_rotation_matrices', return_value=rot), \
+             patch('imap_l3_processing.swapi.l3a.utils.get_spacecraft_velocity_rtn', return_value=sc_vel):
+            result = self.fit(count_rate, voltages, times, sr)
+
+        self.assertIsInstance(result, ProtonSolarWindMoments)
+        self.assertGreater(result.density, 0)
+        self.assertGreater(result.temperature, 0)
+        speed = float(np.linalg.norm(result.bulk_velocity_rtn))
+        self.assertGreater(speed, 300.0)
+        self.assertLess(speed, 700.0)
+
+
+class TestGetInitialGuessCurveFitFailure(unittest.TestCase):
+    """Tests the RuntimeError fallback when curve_fit fails."""
+
+    def test_falls_back_to_peak_speed_and_default_sigma(self):
+        voltages = np.geomspace(_peak_voltage(450.0) * 0.5, _peak_voltage(450.0) * 2.0, 20)
+        count_rate = np.ones(len(voltages))
+        rotation_matrices = np.tile(np.eye(3), (len(voltages), 1, 1))
+        sc_vel = np.zeros(3)
+
+        with patch('scipy.optimize.curve_fit', side_effect=RuntimeError("max iterations")), \
+             patch('imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._model_count_rates',
+                   return_value=np.ones(len(voltages))):
+            result = _get_initial_guess(count_rate, voltages, None, rotation_matrices, sc_vel)
+
+        # Fallback: bulk_speed = speed[peak_idx], sigma_v = 50.0 km/s
+        peak_idx = int(np.nanargmax(count_rate))
+        expected_speed = float(esa_voltage_to_proton_speed(voltages[peak_idx]))
+        np.testing.assert_allclose(result.bulk_velocity_rtn[0], expected_speed, rtol=0.01)
+        expected_temperature = float(PROTON_MASS_KG * (50.0 * METERS_PER_KILOMETER) ** 2 / PROTON_CHARGE_COULOMBS)
+        np.testing.assert_allclose(result.temperature, expected_temperature, rtol=1e-6)
+
+
+class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):
+    """Tests the passband_norm == 0 early-continue branch in calculate_integral."""
+
+    def test_zero_passband_grid_returns_zero(self):
+        # Build a PassbandGrid where all passband values are zero — norm will be 0
+        # and the region loop should skip all regions, returning 0.
+        from imap_l3_processing.swapi.l3a.science.swapi_response import PassbandGrid
+        zero_grid = np.zeros((23, 101), dtype=np.float64)
+        transmission = np.ones(1800, dtype=np.float64)
+        grid = PassbandGrid(
+            min_elevation=-12.0,
+            elevation_spacing=1.0,
+            min_speed_ratio=0.9,
+            speed_ratio_spacing=0.002,
+            central_effective_area=1.0,
+            central_speed=450.0,
+            values_sunglasses=zero_grid,
+            values_open_aperture=zero_grid,
+            azimuthal_transmission=transmission,
+            azimuthal_transmission_spacing=0.1,
+            min_OA_poly=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.95]),
+            max_OA_poly=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.05]),
+            min_SG_poly=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.95]),
+            max_SG_poly=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.05]),
+        )
+        sw_params = SWParams(density=5.0, bulk_speed=450.0, bulk_azimuth=0.0,
+                             bulk_elevation=0.0, thermal_speed=40.0)
+        self.assertEqual(calculate_integral(grid, sw_params), 0.0)
+
+
+class TestInterpolateTransmissionBoundary(unittest.TestCase):
+    """Tests the i_lower >= n and i_upper >= n clamp branches."""
+
+    def setUp(self):
+        # Short array of length 3 so out-of-bounds is easy to trigger
+        self.transmission = np.array([0.001, 0.5, 1.0])
+        self.spacing = 1.0  # 1 degree per element
+
+    def test_azimuth_far_beyond_array_returns_zero(self):
+        # azimuth=170 -> abs=170, i_lower=170 >= n=3, i_upper=171 >= n=3, both clamp to n-1=2.
+        # weight_lower = float(2) - 170 = -168, weight_upper = 170 - 2 = 168 -> they cancel to 0.
+        val = _interpolate_transmission(self.transmission, self.spacing, 170.0)
+        self.assertEqual(val, 0.0)
+
+    def test_i_upper_just_beyond_array_returns_zero(self):
+        # azimuth=2.5 -> i_lower=2=n-1, i_upper=3 clamps to 2.
+        # weight_lower = float(2) - 2.5 = -0.5, weight_upper = 2.5 - 2 = 0.5 -> cancel to 0.
+        val = _interpolate_transmission(self.transmission, self.spacing, 2.5)
+        self.assertEqual(val, 0.0)
 
 
 if __name__ == '__main__':

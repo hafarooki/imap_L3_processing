@@ -7,6 +7,15 @@ from imap_l3_processing.constants import PROTON_CHARGE_COULOMBS, PROTON_MASS_KG,
 
 SWAPI_K_FACTOR = 1.89  # eV/V, see docs/swapi/solar-wind-moments.md
 
+# SWAPI ESA sweep bin layout (72 bins total, indices 0–71):
+#   Index 0       : always discarded (hardware artifact, never science data)
+#   Indices 1–62  : coarse sweep passbands (62 bins, uniform energy steps)
+#   Indices 63–71 : fine sweep passbands (9 bins, higher resolution near the proton peak)
+SWAPI_DISCARDED_BIN = 0
+SWAPI_COARSE_SWEEP_BINS = slice(1, 63)   # indices 1–62
+SWAPI_FINE_SWEEP_BINS = slice(63, 72)    # indices 63–71
+SWAPI_SCIENCE_BINS = slice(1, 72)        # indices 1–71, all usable bins (coarse + fine)
+
 
 def esa_voltage_to_proton_speed(esa_voltage: ArrayLike) -> np.ndarray:
     return (

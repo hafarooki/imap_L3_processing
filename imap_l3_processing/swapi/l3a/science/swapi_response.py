@@ -8,7 +8,6 @@ from numpy.typing import NDArray
 
 SWAPI_K_FACTOR = 1.89  # eV/V
 
-_PASSBAND_LIMIT_POLY_DEG = 5
 _TARGET_ELEVATIONS = np.arange(-12, 11, 1.0)
 _TARGET_SPEED_RATIOS = np.linspace(0.9, 1.1, 101)
 
@@ -24,14 +23,10 @@ class PassbandGrid(NamedTuple):
     values_open_aperture: NDArray
     azimuthal_transmission: NDArray
     azimuthal_transmission_spacing: float
-    min_OA_poly: NDArray
-    max_OA_poly: NDArray
-    min_SG_poly: NDArray
-    max_SG_poly: NDArray
-    min_SG_elevation: float
-    max_SG_elevation: float
-    min_OA_elevation: float
-    max_OA_elevation: float
+    min_OA_boundary: NDArray  # shape (2, n): row 0 = elevations, row 1 = min speed ratios
+    max_OA_boundary: NDArray  # shape (2, n): row 0 = elevations, row 1 = max speed ratios
+    min_SG_boundary: NDArray
+    max_SG_boundary: NDArray
 
 
 def _build_passband_array(values_df: pd.DataFrame, target_elevations: NDArray,
@@ -49,33 +44,37 @@ def _build_passband_array(values_df: pd.DataFrame, target_elevations: NDArray,
     return result.copy(order='C')
 
 
-def _fit_passband_limits(grid_values: NDArray, target_elevations: NDArray,
+def eval_boundary_min(boundary: NDArray, elevations: NDArray) -> NDArray:
+    """Evaluate the min (left) speed-ratio boundary at each elevation using the most
+    expansive of the two nearest stored grid points — always at or outside the passband."""
+    idx = np.clip(np.searchsorted(boundary[0], elevations, side='right') - 1, 0, boundary.shape[1] - 1)
+    idx_next = np.clip(idx + 1, 0, boundary.shape[1] - 1)
+    return np.minimum(boundary[1][idx], boundary[1][idx_next])
+
+
+def eval_boundary_max(boundary: NDArray, elevations: NDArray) -> NDArray:
+    """Evaluate the max (right) speed-ratio boundary at each elevation using the most
+    expansive of the two nearest stored grid points — always at or outside the passband."""
+    idx = np.clip(np.searchsorted(boundary[0], elevations, side='right') - 1, 0, boundary.shape[1] - 1)
+    idx_next = np.clip(idx + 1, 0, boundary.shape[1] - 1)
+    return np.maximum(boundary[1][idx], boundary[1][idx_next])
+
+
+def _passband_boundaries(grid_values: NDArray, target_elevations: NDArray,
                          target_speed_ratios: NDArray) -> tuple[NDArray, NDArray]:
+    """Return (min_boundary, max_boundary) each shape (2, n_active):
+    row 0 = elevation values, row 1 = boundary speed ratio (one grid step outside nonzero region)."""
     spacing = float(target_speed_ratios[1] - target_speed_ratios[0])
-    fallback = float(target_speed_ratios[len(target_speed_ratios) // 2])
-    min_ratios = []
-    max_ratios = []
-    for row in grid_values:
+    active_elevations, min_ratios, max_ratios = [], [], []
+    for elev, row in zip(target_elevations, grid_values):
         above = target_speed_ratios[row > 0]
         if len(above) > 0:
+            active_elevations.append(float(elev))
             min_ratios.append(float(above[0]) - spacing)
             max_ratios.append(float(above[-1]) + spacing)
-        else:
-            min_ratios.append(fallback)
-            max_ratios.append(fallback)
-    min_poly = np.polyfit(target_elevations, min_ratios, _PASSBAND_LIMIT_POLY_DEG)
-    max_poly = np.polyfit(target_elevations, max_ratios, _PASSBAND_LIMIT_POLY_DEG)
-    return min_poly, max_poly
+    elevs = np.array(active_elevations)
+    return np.vstack([elevs, np.array(min_ratios)]), np.vstack([elevs, np.array(max_ratios)])
 
-
-def _elevation_fov_limits(grid_values: NDArray, target_elevations: NDArray) -> tuple[float, float]:
-    spacing = float(target_elevations[1] - target_elevations[0])
-    nonzero_mask = grid_values.max(axis=1) > 0
-    nonzero_elevations = target_elevations[nonzero_mask]
-    if len(nonzero_elevations) == 0:
-        center = float(target_elevations[len(target_elevations) // 2])
-        return center, center
-    return float(nonzero_elevations[0] - spacing), float(nonzero_elevations[-1] + spacing)
 
 
 @dataclass
@@ -109,10 +108,8 @@ class SWAPIResponse:
         oa_grid = _build_passband_array(oa_values, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS)
         sg_grid = _build_passband_array(sg_values, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS)
 
-        min_oa_poly, max_oa_poly = _fit_passband_limits(oa_grid, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS)
-        min_sg_poly, max_sg_poly = _fit_passband_limits(sg_grid, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS)
-        min_oa_elev, max_oa_elev = _elevation_fov_limits(oa_grid, _TARGET_ELEVATIONS)
-        min_sg_elev, max_sg_elev = _elevation_fov_limits(sg_grid, _TARGET_ELEVATIONS)
+        min_oa_boundary, max_oa_boundary = _passband_boundaries(oa_grid, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS)
+        min_sg_boundary, max_sg_boundary = _passband_boundaries(sg_grid, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS)
 
         return PassbandGrid(
             min_elevation=float(_TARGET_ELEVATIONS[0]),
@@ -125,14 +122,10 @@ class SWAPIResponse:
             values_sunglasses=sg_grid,
             azimuthal_transmission=self.azimuthal_transmission,
             azimuthal_transmission_spacing=0.1,
-            min_OA_poly=min_oa_poly,
-            max_OA_poly=max_oa_poly,
-            min_SG_poly=min_sg_poly,
-            max_SG_poly=max_sg_poly,
-            min_SG_elevation=min_sg_elev,
-            max_SG_elevation=max_sg_elev,
-            min_OA_elevation=min_oa_elev,
-            max_OA_elevation=max_oa_elev,
+            min_OA_boundary=min_oa_boundary,
+            max_OA_boundary=max_oa_boundary,
+            min_SG_boundary=min_sg_boundary,
+            max_SG_boundary=max_sg_boundary,
         )
 
     @classmethod
@@ -142,18 +135,15 @@ class SWAPIResponse:
         area_df = pd.read_csv(central_effective_area_path)
         coeffs_df = pd.read_csv(passband_fit_coefficients_path, index_col=['region', 'energy_ratio', 'elevation'])
         limit_cols = ['min_esa_voltage', 'max_esa_voltage']
-        if all(c in coeffs_df.columns for c in limit_cols):
-            limits_df = coeffs_df[limit_cols]
-            coeffs_df = coeffs_df.drop(columns=limit_cols)
-            esa_limits = {
-                region: (
-                    float(limits_df.xs(region, level='region')['min_esa_voltage'].iloc[0]),
-                    float(limits_df.xs(region, level='region')['max_esa_voltage'].iloc[0]),
-                )
-                for region in limits_df.index.get_level_values('region').unique()
-            }
-        else:
-            esa_limits = {}
+        limits_df = coeffs_df[limit_cols]
+        coeffs_df = coeffs_df.drop(columns=limit_cols)
+        esa_limits = {
+            region: (
+                float(limits_df.xs(region, level='region')['min_esa_voltage'].iloc[0]),
+                float(limits_df.xs(region, level='region')['max_esa_voltage'].iloc[0]),
+            )
+            for region in limits_df.index.get_level_values('region').unique()
+        }
         coeffs_df.columns = coeffs_df.columns.astype(int)
 
         return cls(

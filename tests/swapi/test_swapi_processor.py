@@ -35,9 +35,7 @@ class TestSwapiProcessor(TestCase):
     @patch('imap_l3_processing.swapi.swapi_processor.SwapiL3PickupIonData')
     @patch('imap_l3_processing.utils.write_cdf')
     @patch('imap_l3_processing.swapi.swapi_processor.chunk_l2_data')
-    @patch('imap_l3_processing.swapi.swapi_processor.calculate_proton_solar_wind_speed')
-    @patch('imap_l3_processing.swapi.swapi_processor.calculate_clock_angle')
-    @patch('imap_l3_processing.swapi.swapi_processor.calculate_deflection_angle')
+    @patch('imap_l3_processing.swapi.swapi_processor.fit_solar_wind_proton_moments')
     @patch('imap_l3_processing.swapi.swapi_processor.SwapiL3ADependencies')
     @patch('imap_l3_processing.swapi.swapi_processor.calculate_pickup_ion_values')
     @patch('imap_l3_processing.swapi.swapi_processor.calculate_ten_minute_velocities')
@@ -47,10 +45,10 @@ class TestSwapiProcessor(TestCase):
     def test_process_l3a_pui(self, mock_spicepy, mock_calculate_helium_pui_temperature,
                              mock_calculate_helium_pui_density,
                              mock_calculate_ten_minute_velocities, mock_calculate_pickup_ion,
-                             mock_swapi_l3_dependencies_class, mock_calculate_deflection_angle,
-                             mock_calculate_clock_angle,
-                             mock_calculate_proton_solar_wind_speed, mock_chunk_l2_data, mock_write_cdf,
+                             mock_swapi_l3_dependencies_class,
+                             mock_fit_solar_wind_proton_moments, mock_chunk_l2_data, mock_write_cdf,
                              mock_pickup_ion_data_constructor, mock_imap_attribute_manager):
+        from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import ProtonSolarWindMoments
         instrument = 'swapi'
         incoming_data_level = 'l2'
         dependency_start_date = datetime.strftime(datetime(2025, 1, 1), "%Y%m%d")
@@ -64,23 +62,22 @@ class TestSwapiProcessor(TestCase):
 
         mock_spicepy.ktotal.return_value = 0
 
-        proton_sw_speed_fit_chisq = 9
-
-        returned_proton_sw_speed = ufloat(400000, 2)
-        mock_calculate_proton_solar_wind_speed.return_value = (
-            returned_proton_sw_speed, sentinel.a, sentinel.phi, sentinel.b, proton_sw_speed_fit_chisq)
-
-        returned_proton_sw_clock_angle = ufloat(200, 0.25)
-        mock_calculate_clock_angle.return_value = returned_proton_sw_clock_angle
-
-        returned_proton_sw_deflection_angle = ufloat(5, 0.001)
-        mock_calculate_deflection_angle.return_value = returned_proton_sw_deflection_angle
+        returned_bulk_velocity_rtn = np.array([400.0, 10.0, 5.0])
+        mock_fit_solar_wind_proton_moments.return_value = ProtonSolarWindMoments(
+            density=5.0,
+            temperature=12000.0,
+            bulk_velocity_rtn=returned_bulk_velocity_rtn,
+            bad_fit_flag=SwapiL3Flags.NONE,
+            density_sigma=0.5,
+            temperature_sigma=100.0,
+            velocity_covariance=np.eye(3),
+        )
 
         initial_epoch = 10
 
         epoch = np.array([initial_epoch, 11, 12, 13])
         epoch_for_fifty_sweeps = np.arange(initial_epoch, 50)
-        energy = np.array([15000, 16000, 17000, 18000, 19000])
+        energy = np.tile([15000, 16000, 17000, 18000, 19000], (4, 1))
         coincidence_count_rate = np.array(
             [[4, 5, 6, 7, 8], [9, 10, 11, 12, 13], [14, 15, 16, 17, 18], [19, 20, 21, 22, 23]])
         coincidence_count_rate_uncertainty = np.array(
@@ -187,10 +184,15 @@ class TestSwapiProcessor(TestCase):
         self.assertEqual(expected_fitting_params, passed_in_fitting_params)
         self.assertEqual(mock_helium_inflow_vector, helium_inflow_vector)
 
-        mock_calculate_ten_minute_velocities.assert_called_with([returned_proton_sw_speed.nominal_value],
-                                                                [returned_proton_sw_deflection_angle.nominal_value],
-                                                                [returned_proton_sw_clock_angle.nominal_value],
-                                                                np.array([SwapiL3Flags.NONE]))
+        vr, vt, vn = returned_bulk_velocity_rtn
+        expected_speed = np.linalg.norm(returned_bulk_velocity_rtn)
+        expected_clock_angle = np.degrees(np.arctan2(vt, vn))
+        expected_deflection_angle = np.degrees(np.arctan2(np.sqrt(vt ** 2 + vn ** 2), vr))
+        ten_min_speeds, ten_min_deflections, ten_min_clocks, ten_min_flags = mock_calculate_ten_minute_velocities.call_args.args
+        np.testing.assert_allclose(ten_min_speeds, [expected_speed])
+        np.testing.assert_allclose(ten_min_deflections, [expected_deflection_angle])
+        np.testing.assert_allclose(ten_min_clocks, [expected_clock_angle])
+        np.testing.assert_array_equal(ten_min_flags, np.array([SwapiL3Flags.NONE]))
         mock_manager.add_global_attribute.assert_has_calls([call("Data_version", outgoing_version),
                                                             call("Generation_date",
                                                                  date.today().strftime("%Y%m%d")),
@@ -223,26 +225,25 @@ class TestSwapiProcessor(TestCase):
     @patch('imap_l3_processing.swapi.swapi_processor.SwapiL3PickupIonData')
     @patch('imap_l3_processing.utils.write_cdf')
     @patch('imap_l3_processing.swapi.swapi_processor.chunk_l2_data')
-    @patch('imap_l3_processing.swapi.swapi_processor.calculate_proton_solar_wind_speed')
-    @patch('imap_l3_processing.swapi.swapi_processor.estimate_deflection_and_clock_angles')
+    @patch('imap_l3_processing.swapi.swapi_processor.fit_solar_wind_proton_moments')
     @patch('imap_l3_processing.swapi.swapi_processor.SwapiL3ADependencies')
     @patch('imap_l3_processing.swapi.swapi_processor.calculate_pickup_ion_values')
     @patch('imap_l3_processing.swapi.swapi_processor.calculate_ten_minute_velocities')
     @patch('imap_l3_processing.swapi.swapi_processor.calculate_helium_pui_density')
     @patch('imap_l3_processing.swapi.swapi_processor.calculate_helium_pui_temperature')
     @patch('imap_l3_processing.processor.spiceypy')
-    def test_process_l3a_pui_proton_sw_fit_chisq_too_large_with_pui_quality_flags(self, mock_spicepy,
-                                                                                  mock_calculate_helium_pui_temperature,
-                                                                                  mock_calculate_helium_pui_density,
-                                                                                  mock_calculate_ten_minute_velocities,
-                                                                                  mock_calculate_pickup_ion,
-                                                                                  mock_swapi_l3_dependencies_class,
-                                                                                  mock_estimate_deflection_and_clock_angles,
-                                                                                  mock_calculate_proton_solar_wind_speed,
-                                                                                  mock_chunk_l2_data,
-                                                                                  mock_write_cdf,
-                                                                                  mock_pickup_ion_data_constructor,
-                                                                                  mock_imap_attribute_manager):
+    def test_process_l3a_pui_bad_fit_flag_propagated_to_quality_flags(self, mock_spicepy,
+                                                                       mock_calculate_helium_pui_temperature,
+                                                                       mock_calculate_helium_pui_density,
+                                                                       mock_calculate_ten_minute_velocities,
+                                                                       mock_calculate_pickup_ion,
+                                                                       mock_swapi_l3_dependencies_class,
+                                                                       mock_fit_solar_wind_proton_moments,
+                                                                       mock_chunk_l2_data,
+                                                                       mock_write_cdf,
+                                                                       mock_pickup_ion_data_constructor,
+                                                                       mock_imap_attribute_manager):
+        from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import ProtonSolarWindMoments
         instrument = 'swapi'
         incoming_data_level = 'l2'
         dependency_start_date = datetime.strftime(datetime(2025, 1, 1), "%Y%m%d")
@@ -256,23 +257,21 @@ class TestSwapiProcessor(TestCase):
 
         mock_spicepy.ktotal.return_value = 0
 
-        proton_sw_speed_fit_chisq = 11
-
-        returned_proton_sw_speed = ufloat(400000, 2)
-        mock_calculate_proton_solar_wind_speed.return_value = (
-            returned_proton_sw_speed, sentinel.a, sentinel.phi, sentinel.b, proton_sw_speed_fit_chisq)
-
-        returned_proton_sw_clock_angle = 200
-        returned_proton_sw_deflection_angle = 5
-
-        mock_estimate_deflection_and_clock_angles.return_value = \
-            (returned_proton_sw_deflection_angle, returned_proton_sw_clock_angle)
+        mock_fit_solar_wind_proton_moments.return_value = ProtonSolarWindMoments(
+            density=5.0,
+            temperature=12000.0,
+            bulk_velocity_rtn=np.array([400.0, 10.0, 5.0]),
+            bad_fit_flag=SwapiL3Flags.HI_CHI_SQ,
+            density_sigma=0.5,
+            temperature_sigma=100.0,
+            velocity_covariance=np.eye(3),
+        )
 
         initial_epoch = 10
 
         epoch = np.array([initial_epoch, 11, 12, 13])
         epoch_for_fifty_sweeps = np.arange(initial_epoch, 50)
-        energy = np.array([15000, 16000, 17000, 18000, 19000])
+        energy = np.tile([15000, 16000, 17000, 18000, 19000], (4, 1))
         coincidence_count_rate = np.array(
             [[4, 5, 6, 7, 8], [9, 10, 11, 12, 13], [14, 15, 16, 17, 18], [19, 20, 21, 22, 23]])
         coincidence_count_rate_uncertainty = np.array(
@@ -284,14 +283,13 @@ class TestSwapiProcessor(TestCase):
         chunk_of_fifty = SwapiL2Data(epoch_for_fifty_sweeps, energy * 2, coincidence_count_rate * 2,
                                      coincidence_count_rate_uncertainty * 2)
 
-        expected_fitting_params = FittingParameters(1, 2, 3, 4, SwapiL3Flags.HI_CHI_SQ)
+        expected_fitting_params = FittingParameters(1, 2, 3, 4, SwapiL3Flags.NONE)
         mock_calculate_pickup_ion.return_value = expected_fitting_params
         mock_calculate_helium_pui_density.return_value = 5
         mock_calculate_helium_pui_temperature.return_value = 6
 
-        pui_quality_flags = [SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED]
         mock_calculate_ten_minute_velocities.return_value = (np.array([[17, 18, 19]]),
-                                                             pui_quality_flags)
+                                                             [SwapiL3Flags.HI_CHI_SQ])
 
         science_input = ScienceInput(
             f'imap_{instrument}_{incoming_data_level}_{SWAPI_L2_DESCRIPTOR}_{dependency_start_date}_{version}.cdf')
@@ -307,123 +305,28 @@ class TestSwapiProcessor(TestCase):
         ]
 
         ancillary_inputs = [AncillaryInput(file_name) for file_name in input_file_names[1:]]
-
         dependencies = ProcessingInputCollection(science_input, *ancillary_inputs)
-
         input_metadata = InputMetadata(instrument, outgoing_data_level, start_date, end_date, input_version)
-
         pickup_ion_data = mock_pickup_ion_data_constructor.return_value
         expected_pickup_ion_metadata = replace(input_metadata, descriptor="pui-he")
         pickup_ion_data.input_metadata = expected_pickup_ion_metadata
-
         input_metadata.descriptor = "pui-he"
 
-        expected_cdf_path = (config["DATA_DIR"] / "imap" / "swapi" / "l3a" / "2025" / "09" /
-                             f"imap_swapi_l3a_pui-he_{start_date_as_str}_{input_version}.cdf")
-
-        mock_chunk_l2_data.side_effect = [
-            [chunk_of_five],
-            [chunk_of_fifty],
-        ]
-
+        mock_chunk_l2_data.side_effect = [[chunk_of_five], [chunk_of_fifty]]
         mock_l3a_dependencies = mock_swapi_l3_dependencies_class.fetch_dependencies.return_value
         mock_l3a_dependencies.data = sentinel.swapi_l2_data
-
         mock_manager = mock_imap_attribute_manager.return_value
 
-        swapi_processor = SwapiProcessor(
-            dependencies, input_metadata)
-        product = swapi_processor.process()
+        swapi_processor = SwapiProcessor(dependencies, input_metadata)
+        swapi_processor.process()
 
-        actual_science_input = swapi_processor.dependencies.get_science_inputs()[0]
-        self.assertEqual(actual_science_input.get_time_range()[0].strftime("%Y%m%d"), dependency_start_date)
-
-        mock_swapi_l3_dependencies_class.fetch_dependencies.assert_called_once_with(dependencies)
-
-        mock_instrument_response_calibration_table = mock_l3a_dependencies.instrument_response_calibration_table
-        mock_geometric_factor_calibration_table = mock_l3a_dependencies.geometric_factor_calibration_table
-        mock_efficiency_lut = mock_l3a_dependencies.efficiency_calibration_table
-        mock_density_of_neutral_helium_calibration_table = mock_l3a_dependencies.density_of_neutral_helium_calibration_table
-        mock_hydrogen_inflow_vector = mock_l3a_dependencies.hydrogen_inflow_vector
-        mock_helium_inflow_vector = mock_l3a_dependencies.helium_inflow_vector
-
-        mock_chunk_l2_data.assert_has_calls([call(sentinel.swapi_l2_data, 5),
-                                             call(sentinel.swapi_l2_data, 50)])
-
-        coincident_rates, l2_energy, sci_start_time = mock_calculate_proton_solar_wind_speed.call_args.args
-
-        np.testing.assert_array_equal(chunk_of_five.coincidence_count_rate, nominal_values(coincident_rates))
-        np.testing.assert_array_equal(chunk_of_five.coincidence_count_rate_uncertainty,
-                                      std_devs(coincident_rates))
-        np.testing.assert_array_equal(chunk_of_five.energy, l2_energy)
-        np.testing.assert_array_equal(chunk_of_five.sci_start_time, sci_start_time)
-
-        mock_estimate_deflection_and_clock_angles.assert_called_once_with(returned_proton_sw_speed.nominal_value)
-
-        mock_calculate_ten_minute_velocities.assert_called_with([returned_proton_sw_speed.nominal_value],
-                                                                [returned_proton_sw_deflection_angle],
-                                                                [returned_proton_sw_clock_angle],
-                                                                np.array([SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED]))
-
-        instrument_response_lut, geometric_factor_lut, energies, count_rates, pui_epoch, \
-            sw_velocity_vector, density_of_neutral_helium_lut, efficiency_lut, hydrogen_inflow_vector, helium_inflow_vector = mock_calculate_pickup_ion.call_args.args
-
-        self.assertEqual(mock_instrument_response_calibration_table, instrument_response_lut)
-        self.assertEqual(mock_efficiency_lut, efficiency_lut)
-        self.assertEqual(mock_geometric_factor_calibration_table, geometric_factor_lut)
-        self.assertEqual(mock_density_of_neutral_helium_calibration_table, density_of_neutral_helium_lut)
-        np.testing.assert_array_equal(chunk_of_fifty.energy, energies)
-        np.testing.assert_array_equal(chunk_of_fifty.coincidence_count_rate, count_rates)
-        self.assertEqual(chunk_of_fifty.sci_start_time[0] + FIVE_MINUTES_IN_NANOSECONDS, pui_epoch)
-        self.assertEqual(mock_hydrogen_inflow_vector, hydrogen_inflow_vector)
-        self.assertEqual(mock_helium_inflow_vector, helium_inflow_vector)
-        np.testing.assert_array_equal([17, 18, 19], sw_velocity_vector)
-
-        actual_he_epoch, sw_velocity_vector, density_of_neutral_helium_lut, passed_in_fitting_params, helium_inflow_vector = mock_calculate_helium_pui_density.call_args.args
-
-        self.assertEqual(chunk_of_fifty.sci_start_time[0] + FIVE_MINUTES_IN_NANOSECONDS, actual_he_epoch)
-        np.testing.assert_array_equal([17, 18, 19], sw_velocity_vector)
-        self.assertEqual(mock_density_of_neutral_helium_calibration_table, density_of_neutral_helium_lut)
-        self.assertEqual(expected_fitting_params, passed_in_fitting_params)
-        self.assertEqual(mock_helium_inflow_vector, helium_inflow_vector)
-
-        actual_he_epoch, sw_velocity_vector, density_of_neutral_helium_lut, passed_in_fitting_params, helium_inflow_vector = mock_calculate_helium_pui_temperature.call_args.args
-
-        self.assertEqual(chunk_of_fifty.sci_start_time[0] + FIVE_MINUTES_IN_NANOSECONDS, actual_he_epoch)
-        np.testing.assert_array_equal([17, 18, 19], sw_velocity_vector)
-        self.assertEqual(mock_density_of_neutral_helium_calibration_table, density_of_neutral_helium_lut)
-        self.assertEqual(expected_fitting_params, passed_in_fitting_params)
-        self.assertEqual(mock_helium_inflow_vector, helium_inflow_vector)
-
-        mock_manager.add_global_attribute.assert_has_calls([call("Data_version", outgoing_version),
-                                                            call("Generation_date",
-                                                                 date.today().strftime("%Y%m%d")),
-                                                            call("Logical_source",
-                                                                 f"imap_swapi_l3a_pui-he"),
-                                                            call("Logical_file_id",
-                                                                 f"imap_swapi_l3a_pui-he_{start_date_as_str}_{input_version}"),
-                                                            ])
+        _, _, _, ten_min_flags = mock_calculate_ten_minute_velocities.call_args.args
+        np.testing.assert_array_equal(ten_min_flags, np.array([SwapiL3Flags.HI_CHI_SQ]))
 
         actual_pui_metadata, actual_pui_epoch, actual_pui_cooling_index, actual_pui_ionization_rate, \
             actual_pui_cutoff_speed, actual_pui_background_rate, actual_pui_density, actual_pui_temperature, \
             actual_quality_flags = mock_pickup_ion_data_constructor.call_args.args
-        self.assertEqual(expected_pickup_ion_metadata, actual_pui_metadata)
-        np.testing.assert_array_equal(np.array([initial_epoch + FIVE_MINUTES_IN_NANOSECONDS]), actual_pui_epoch)
-        np.testing.assert_array_equal(np.array([1]), actual_pui_cooling_index)
-        np.testing.assert_array_equal(np.array([2]), actual_pui_ionization_rate)
-        np.testing.assert_array_equal(np.array([3]), actual_pui_cutoff_speed)
-        np.testing.assert_array_equal(np.array([4]), actual_pui_background_rate)
-        np.testing.assert_array_equal(np.array([5]), actual_pui_density)
-        np.testing.assert_array_equal(np.array([6]), actual_pui_temperature)
-
-        expected_swapi_flag = SwapiL3Flags.HI_CHI_SQ | SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED
-        np.testing.assert_array_equal(actual_quality_flags, np.array(expected_swapi_flag))
-
-        mock_manager.add_instrument_attrs.assert_called_once_with("swapi", "l3a", "pui-he")
-
-        self.assertEqual(input_file_names, pickup_ion_data.parent_file_names)
-        mock_write_cdf.assert_called_once_with(str(expected_cdf_path), pickup_ion_data, mock_manager)
-        self.assertEqual([expected_cdf_path], product)
+        np.testing.assert_array_equal(actual_quality_flags, np.array(SwapiL3Flags.HI_CHI_SQ))
 
     @patch('imap_l3_processing.utils.ImapAttributeManager')
     @patch('imap_l3_processing.swapi.swapi_processor.SwapiL3ProtonSolarWindData')
@@ -460,12 +363,15 @@ class TestSwapiProcessor(TestCase):
             temperature=returned_temperature,
             bulk_velocity_rtn=returned_bulk_velocity_rtn,
             bad_fit_flag=SwapiL3Flags.NONE,
+            density_sigma=0.5,
+            temperature_sigma=100.0,
+            velocity_covariance=np.eye(3),
         )
 
         initial_epoch = 10
 
         epoch = np.array([initial_epoch, 11, 12, 13])
-        energy = np.array([15000, 16000, 17000, 18000, 19000])
+        energy = np.tile([15000, 16000, 17000, 18000, 19000], (4, 1))
         coincidence_count_rate = np.array(
             [[4, 5, 6, 7, 8], [9, 10, 11, 12, 13], [14, 15, 16, 17, 18], [19, 20, 21, 22, 23]])
         coincidence_count_rate_uncertainty = np.array(
@@ -523,8 +429,8 @@ class TestSwapiProcessor(TestCase):
 
         fit_call_args = mock_fit_solar_wind_proton_moments.call_args
         np.testing.assert_array_equal(
-            coincidence_count_rate.flatten(), fit_call_args.args[0])
-        np.testing.assert_array_equal(energy.flatten(), fit_call_args.args[1])
+            coincidence_count_rate[:, 1:].flatten(), fit_call_args.args[0])
+        np.testing.assert_array_equal(energy[:, 1:].flatten(), fit_call_args.args[1])
         self.assertIs(swapi_l3a_dependencies.swapi_response, fit_call_args.args[3])
 
         (actual_proton_metadata, actual_proton_epoch, actual_proton_sw_speed, actual_proton_sw_temperature,
@@ -596,11 +502,14 @@ class TestSwapiProcessor(TestCase):
             temperature=10000.0,
             bulk_velocity_rtn=np.array([400.0, 0.0, 0.0]),
             bad_fit_flag=SwapiL3Flags.HI_CHI_SQ,
+            density_sigma=0.5,
+            temperature_sigma=100.0,
+            velocity_covariance=np.eye(3),
         )
 
         initial_epoch = 10
         epoch = np.array([initial_epoch, 11, 12, 13])
-        energy = np.array([15000, 16000, 17000, 18000, 19000])
+        energy = np.tile([15000, 16000, 17000, 18000, 19000], (4, 1))
         coincidence_count_rate = np.array(
             [[4, 5, 6, 7, 8], [9, 10, 11, 12, 13], [14, 15, 16, 17, 18], [19, 20, 21, 22, 23]])
         coincidence_count_rate_uncertainty = np.array(

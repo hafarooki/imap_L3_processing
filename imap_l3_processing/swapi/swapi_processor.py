@@ -18,15 +18,9 @@ from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_temperature
     calculate_alpha_solar_wind_temperature_and_density_for_combined_sweeps
 from imap_l3_processing.swapi.l3a.science.calculate_pickup_ion import calculate_ten_minute_velocities, \
     calculate_pickup_ion_values, calculate_helium_pui_temperature, calculate_helium_pui_density
-from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_clock_and_deflection_angles import \
-    calculate_deflection_angle, calculate_clock_angle
-from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_speed import calculate_proton_solar_wind_speed, \
-    estimate_deflection_and_clock_angles
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import \
     fit_solar_wind_proton_moments
-from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_temperature_and_density import \
-    calculate_proton_solar_wind_temperature_and_density
-from imap_l3_processing.swapi.l3a.science.speed_calculation import extract_coarse_sweep
+from imap_l3_processing.swapi.l3a.science.speed_calculation import extract_coarse_sweep, SWAPI_SCIENCE_BINS
 from imap_l3_processing.swapi.l3a.swapi_l3a_dependencies import SwapiL3ADependencies
 from imap_l3_processing.swapi.l3a.utils import chunk_l2_data
 from imap_l3_processing.swapi.l3b.models import SwapiL3BCombinedVDF
@@ -39,8 +33,6 @@ from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from imap_l3_processing.utils import save_data
 
 logger = logging.getLogger(__name__)
-
-MAXIMUM_ALLOWED_PROTON_SW_FITTING_CHI_SQ = 10
 
 
 class SwapiProcessor(Processor):
@@ -82,21 +74,40 @@ class SwapiProcessor(Processor):
             deflection_angle = ufloat(np.nan, np.nan)
             quality_flag = SwapiL3Flags.NONE
             try:
-                coincidence_count_rates_with_uncertainty = uarray(data_chunk.coincidence_count_rate,
-                                                                  data_chunk.coincidence_count_rate_uncertainty)
-                proton_solar_wind_speed, a, phi, b, chi_sq = calculate_proton_solar_wind_speed(
-                    coincidence_count_rates_with_uncertainty, data_chunk.energy, data_chunk.sci_start_time)
-                if chi_sq <= MAXIMUM_ALLOWED_PROTON_SW_FITTING_CHI_SQ:
-                    clock_angle = calculate_clock_angle(dependencies.clock_angle_and_flow_deflection_calibration_table,
-                                                        proton_solar_wind_speed, a, phi, b)
-                    deflection_angle = calculate_deflection_angle(
-                        dependencies.clock_angle_and_flow_deflection_calibration_table,
-                        proton_solar_wind_speed, a, phi, b)
+                if np.any(np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))):
+                    raise ValueError("Fill values in input data")
+                science_count_rates = data_chunk.coincidence_count_rate[:, SWAPI_SCIENCE_BINS]
+                science_energies = data_chunk.energy[:, SWAPI_SCIENCE_BINS]
+                passband_indices = np.arange(SWAPI_SCIENCE_BINS.start, SWAPI_SCIENCE_BINS.stop)
+                measurement_times = (data_chunk.sci_start_time[:, np.newaxis]
+                                     + passband_indices * (12 / 72 * ONE_SECOND_IN_NANOSECONDS)
+                                     - 6 * ONE_SECOND_IN_NANOSECONDS).flatten()
+                fitting_result = fit_solar_wind_proton_moments(
+                    science_count_rates.flatten(),
+                    science_energies.flatten(),
+                    measurement_times,
+                    dependencies.swapi_response,
+                )
+                vr, vt, vn = fitting_result.bulk_velocity_rtn
+                speed = float(np.linalg.norm(fitting_result.bulk_velocity_rtn))
+                cov_v = fitting_result.velocity_covariance
+                v_hat = np.array([vr, vt, vn]) / speed
+                speed_sigma = float(np.sqrt(v_hat @ cov_v @ v_hat))
+                vtn2 = float(vt ** 2 + vn ** 2)
+                vtn = float(np.sqrt(vtn2))
+                speed2 = speed ** 2
+                if vtn2 > 0:
+                    g_clock = np.array([0.0, vn / vtn2, -vt / vtn2])
+                    clock_sigma = float(np.degrees(np.sqrt(g_clock @ cov_v @ g_clock)))
+                    g_defl = np.array([-vtn / speed2, vr * vt / (vtn * speed2), vr * vn / (vtn * speed2)])
+                    defl_sigma = float(np.degrees(np.sqrt(g_defl @ cov_v @ g_defl)))
                 else:
-                    deflection_angle, clock_angle = estimate_deflection_and_clock_angles(
-                        proton_solar_wind_speed.nominal_value)
-                    quality_flag |= SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED
-
+                    clock_sigma = np.nan
+                    defl_sigma = np.nan
+                proton_solar_wind_speed = ufloat(speed, speed_sigma)
+                clock_angle = ufloat(np.degrees(np.arctan2(vt, vn)), clock_sigma)
+                deflection_angle = ufloat(np.degrees(np.arctan2(vtn, vr)), defl_sigma)
+                quality_flag |= fitting_result.bad_fit_flag
             except Exception as e:
                 logger.info(f"Exception occurred at epoch {epoch}, continuing with fill value", exc_info=True)
             proton_solar_wind_speeds.append(proton_solar_wind_speed)
@@ -253,31 +264,48 @@ class SwapiProcessor(Processor):
             try:
                 if np.any(np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))):
                     raise ValueError("Fill values in input data")
-                coincidence_count_rates_with_uncertainty = uarray(data_chunk.coincidence_count_rate,
-                                                                  data_chunk.coincidence_count_rate_uncertainty)
-                
-                n_sweeps, n_passbands = data_chunk.coincidence_count_rate.shape
-                passband_indices = np.arange(n_passbands)
-                # TODO verify that this is correct
+                science_count_rates = data_chunk.coincidence_count_rate[:, SWAPI_SCIENCE_BINS]
+                science_energies = data_chunk.energy[:, SWAPI_SCIENCE_BINS]
+                science_uncertainties = data_chunk.coincidence_count_rate_uncertainty[:, SWAPI_SCIENCE_BINS]
+                coincidence_count_rates_with_uncertainty = uarray(science_count_rates, science_uncertainties)
+
+                # passband_indices are the original bin numbers (1–71) used for measurement timing
+                passband_indices = np.arange(SWAPI_SCIENCE_BINS.start, SWAPI_SCIENCE_BINS.stop)
                 measurement_times = (data_chunk.sci_start_time[:, np.newaxis]
                                      + passband_indices * (12 / 72 * ONE_SECOND_IN_NANOSECONDS)
                                      - 6 * ONE_SECOND_IN_NANOSECONDS).flatten()
                 fitting_result = fit_solar_wind_proton_moments(
                     nominal_values(coincidence_count_rates_with_uncertainty).flatten(),
-                    data_chunk.energy.flatten(),
+                    science_energies.flatten(),
                     measurement_times,
                     dependencies.swapi_response,
                 )
 
                 vr, vt, vn = fitting_result.bulk_velocity_rtn
-                speed = np.linalg.norm(fitting_result.bulk_velocity_rtn)
-                proton_solar_wind_speed = ufloat(speed, 0)
-                proton_density = ufloat(fitting_result.density, 0)
-                proton_temperature = ufloat(fitting_result.temperature, 0)
-                # TODO: use correct clock/deflection angle convention per instrument definition
-                clock_angle = ufloat(np.degrees(np.arctan2(vt, vn)), 0)
-                deflection_angle = ufloat(
-                    np.degrees(np.arctan2(np.sqrt(vt ** 2 + vn ** 2), vr)), 0)
+                speed = float(np.linalg.norm(fitting_result.bulk_velocity_rtn))
+
+                cov_v = fitting_result.velocity_covariance  # (3, 3)
+                v_hat = np.array([vr, vt, vn]) / speed
+                speed_sigma = float(np.sqrt(v_hat @ cov_v @ v_hat))
+
+                vtn2 = float(vt ** 2 + vn ** 2)
+                vtn = float(np.sqrt(vtn2))
+                speed2 = speed ** 2
+
+                if vtn2 > 0:
+                    g_clock = np.array([0.0, vn / vtn2, -vt / vtn2])
+                    clock_sigma = float(np.degrees(np.sqrt(g_clock @ cov_v @ g_clock)))
+                    g_defl = np.array([-vtn / speed2, vr * vt / (vtn * speed2), vr * vn / (vtn * speed2)])
+                    defl_sigma = float(np.degrees(np.sqrt(g_defl @ cov_v @ g_defl)))
+                else:
+                    clock_sigma = np.nan
+                    defl_sigma = np.nan
+
+                proton_solar_wind_speed = ufloat(speed, speed_sigma)
+                proton_density = ufloat(fitting_result.density, fitting_result.density_sigma)
+                proton_temperature = ufloat(fitting_result.temperature, fitting_result.temperature_sigma)
+                clock_angle = ufloat(np.degrees(np.arctan2(vt, vn)), clock_sigma)
+                deflection_angle = ufloat(np.degrees(np.arctan2(vtn, vr)), defl_sigma)
                 quality_flag |= fitting_result.bad_fit_flag
 
             except Exception as e:
