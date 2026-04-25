@@ -31,8 +31,16 @@ N_AZIMUTH_SG = 21
 N_AZIMUTH_OA = 41
 N_SPEED = 11
 
+# Gauss-Legendre quadrature nodes and weights on the standard interval [-1, 1].
+# Precomputed once at module load and rescaled to each integration window inside
+# `calculate_integral`. Read as module-level globals from inside the JIT region.
+_GL_NODES_ELEVATION, _GL_WEIGHTS_ELEVATION = np.polynomial.legendre.leggauss(N_ELEVATION)
+_GL_NODES_AZIMUTH_SG, _GL_WEIGHTS_AZIMUTH_SG = np.polynomial.legendre.leggauss(N_AZIMUTH_SG)
+_GL_NODES_AZIMUTH_OA, _GL_WEIGHTS_AZIMUTH_OA = np.polynomial.legendre.leggauss(N_AZIMUTH_OA)
+_GL_NODES_SPEED, _GL_WEIGHTS_SPEED = np.polynomial.legendre.leggauss(N_SPEED)
+
 EPSILON_OA = 1e-6
-EPSILON_SG = 1e-3
+EPSILON_SG = 1e-6
 
 # Non-paralyzable detector deadtime (Tsoulfanidis 1995, p. 74): n = g / (1 - g*tau)
 # Rearranged for forward model (true rate -> measured rate): g = n / (1 + n*tau)
@@ -259,12 +267,22 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
         # TODO choose speed points dynamically for each elevation by zero-trimming;
         # must fit a linear model to the minimum and maximum point for integration
 
-        elevation_points = np.linspace(min_elevation, max_elevation, N_ELEVATION)
-        elevation_weights = _trapz_weights(min_elevation, max_elevation, N_ELEVATION)
+        # Gauss-Legendre points/weights, transformed from [-1, 1] to the integration window.
+        half_el = 0.5 * (max_elevation - min_elevation)
+        mid_el = 0.5 * (max_elevation + min_elevation)
+        elevation_points = mid_el + half_el * _GL_NODES_ELEVATION
+        elevation_weights = half_el * _GL_WEIGHTS_ELEVATION
 
-        N_AZIMUTH = N_AZIMUTH_SG if is_sunglasses else N_AZIMUTH_OA
-        azimuth_points = np.linspace(min_azimuth, max_azimuth, N_AZIMUTH)
-        azimuth_weights = _trapz_weights(min_azimuth, max_azimuth, N_AZIMUTH)
+        if is_sunglasses:
+            az_nodes = _GL_NODES_AZIMUTH_SG
+            az_weights = _GL_WEIGHTS_AZIMUTH_SG
+        else:
+            az_nodes = _GL_NODES_AZIMUTH_OA
+            az_weights = _GL_WEIGHTS_AZIMUTH_OA
+        half_az = 0.5 * (max_azimuth - min_azimuth)
+        mid_az = 0.5 * (max_azimuth + min_azimuth)
+        azimuth_points = mid_az + half_az * az_nodes
+        azimuth_weights = half_az * az_weights
 
         interpolated_transmission = np.array([_interpolate_transmission(grid, x)
                                               for x in azimuth_points])
@@ -279,15 +297,17 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
             
             min_speed, max_speed = _dynamic_limits(
                 sw_params.bulk_speed,
-                sw_params.thermal_speed * 5,
+                sw_params.thermal_speed * 10,
                 passband_lower_speed,
                 passband_upper_speed
             )
-            speed_points = np.linspace(min_speed, max_speed, N_SPEED)
-            speed_weights = _trapz_weights(min_speed, max_speed, N_SPEED)
-
             if max_speed <= min_speed:
                 continue
+
+            half_sp = 0.5 * (max_speed - min_speed)
+            mid_sp = 0.5 * (max_speed + min_speed)
+            speed_points = mid_sp + half_sp * _GL_NODES_SPEED
+            speed_weights = half_sp * _GL_WEIGHTS_SPEED
 
             passband_times_speed3_row = np.array([
                 x ** 3 * interpolate_passband(grid, is_sunglasses, elevation, x)
@@ -331,15 +351,6 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
         )
         
     return count_rate
-
-
-@numba.njit
-def _trapz_weights(a, b, n):
-    step = (b - a) / (n - 1)
-    weights = np.full(n, step)
-    weights[0] *= 0.5
-    weights[-1] *= 0.5
-    return weights
 
 
 @numba.njit(nogil=True)
@@ -394,10 +405,17 @@ def _get_angular_limits(sw_params: SWParams, region: int, grid: PassbandGrid):
     ))
 
     if region == 0:
-        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, -10.5, 6.5)
+        # SG passband stored at integer elevations in [-10, 6]; bilinear interp extends
+        # the nonzero region by one half-cell to [-11, 7]. Truncating earlier (e.g. at 6.5)
+        # misses cases where bulk_elevation is just outside the SG range — the integrand has
+        # a "second peak" near the top transition cell where the rising Maxwellian (toward
+        # bulk_el) outweighs the falling passband.
+        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, -11.0, 7.0)
         min_azimuth, max_azimuth = _dynamic_limits(sw_params.bulk_azimuth, angular_width, -20.0, 20.0)
     else:
-        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, -12.0, 10.5)
+        # OA passband stored at integer elevations in [-11, 9]; bilinear interp extends to
+        # [-12, 10] (the el=-12/+10 grid rows are already ~0).
+        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, -12.0, 10.0)
         if region == -1:
             min_azimuth, max_azimuth = _dynamic_limits(sw_params.bulk_azimuth, angular_width, -150.0, -20.0)
         else:

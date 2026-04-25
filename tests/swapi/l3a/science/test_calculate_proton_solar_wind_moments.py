@@ -258,8 +258,8 @@ class TestCalculateIntegral(unittest.TestCase):
         self.assertGreater(rate_hot, rate_cold)
 
     def test_nonzero_for_bulk_elevation_outside_sg_passband_range(self):
-        # bulk_elevation=8° is above the SG active elevation range (−10.5 to 6.5)
-        # but within the OA range (−12 to 10.5). The elevation window is clamped to
+        # bulk_elevation=8° is above the SG active elevation range (−11 to 7)
+        # but within the OA range (−12 to 10). The elevation window is clamped to
         # the passband bounds, so the OA contribution is nonzero.
         grid = self.swapi_response.create_passband_grid(self.peak_voltage)
         sw_params = _make_sw_params(bulk_elevation=8.0)
@@ -1049,10 +1049,12 @@ class TestInterpolateTransmissionBoundary(unittest.TestCase):
 
 class TestGetAngularLimits(unittest.TestCase):
     """Verify _get_angular_limits clamps to the correct per-region passband bounds:
-      SG  (region=0):  elevation ∈ [−10.5°, 6.5°],  azimuth ∈ [−20°, 20°]
-      OA− (region=−1): elevation ∈ [−12°, 10.5°],   azimuth ∈ [−150°, −20°]
-      OA+ (region=+1): elevation ∈ [−12°, 10.5°],   azimuth ∈ [20°, 150°]
-    and that a centered window well inside the bounds is not artificially clamped."""
+      SG  (region=0):  elevation ∈ [−11°, 7°],   azimuth ∈ [−20°, 20°]
+      OA− (region=−1): elevation ∈ [−12°, 10°],  azimuth ∈ [−150°, −20°]
+      OA+ (region=+1): elevation ∈ [−12°, 10°],  azimuth ∈ [20°, 150°]
+    Bounds are set to the bilinear-interpolation transition cells of each passband, not
+    just the active grid extent — this captures the small-but-nonzero contribution that
+    matters when bulk direction is just outside the FOV."""
 
     @classmethod
     def setUpClass(cls):
@@ -1060,18 +1062,18 @@ class TestGetAngularLimits(unittest.TestCase):
         cls.grid = sr.create_passband_grid(_peak_voltage(450.0))
 
     def test_sg_elevation_clamped_to_sg_passband_bounds(self):
-        # bulk_elevation outside the SG active range should be clamped to [-10.5, 6.5]
+        # bulk_elevation outside the SG active range should be clamped to [-11, 7]
         sw = _make_sw_params(bulk_elevation=12.0)
         min_el, max_el, _, _ = _get_angular_limits(sw, 0, self.grid)
-        self.assertGreaterEqual(min_el, -10.5)
-        self.assertLessEqual(max_el, 6.5)
+        self.assertGreaterEqual(min_el, -11.0)
+        self.assertLessEqual(max_el, 7.0)
 
     def test_oa_elevation_clamped_to_oa_passband_bounds(self):
-        # bulk_elevation outside the OA active range should be clamped to [-12, 10.5]
+        # bulk_elevation outside the OA active range should be clamped to [-12, 10]
         sw = _make_sw_params(bulk_elevation=15.0)
         min_el, max_el, _, _ = _get_angular_limits(sw, 1, self.grid)
         self.assertGreaterEqual(min_el, -12.0)
-        self.assertLessEqual(max_el, 10.5)
+        self.assertLessEqual(max_el, 10.0)
 
     def test_sg_azimuth_limited_to_sg_range(self):
         sw = _make_sw_params(bulk_azimuth=0.0)
@@ -1095,8 +1097,8 @@ class TestGetAngularLimits(unittest.TestCase):
         # bulk_elevation well inside SG range: window should equal [center±width] unmodified
         sw = _make_sw_params(bulk_elevation=0.0, temperature_ev=1.0)  # narrow window
         min_el, max_el, _, _ = _get_angular_limits(sw, 0, self.grid)
-        self.assertGreater(min_el, -10.5)
-        self.assertLess(max_el, 6.5)
+        self.assertGreater(min_el, -11.0)
+        self.assertLess(max_el, 7.0)
 
 
 if __name__ == '__main__':
