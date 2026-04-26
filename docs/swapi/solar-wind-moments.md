@@ -11,6 +11,8 @@
 ## TODO
 
 - [ ] Check uncertainty estimation soundness
+- [ ] Demonstrate convergance of solution in variety of SW conditions
+- [ ] Try including Poisson statistics
 - [ ] Validate integration test
 - [ ] Validate unit tests top-bottom
 - [ ] Alphas
