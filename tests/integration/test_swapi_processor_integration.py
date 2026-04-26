@@ -86,7 +86,7 @@ class SwapiProcessorIntegration(unittest.TestCase):
                     "--descriptor", "proton-sw",
                     "--start-date", "20260120",
                     "--version", "v001",
-                    "--dependency", "imap_swapi_l3a_proton-sw_20260120_v001.json",
+                    "--dependency", "imap_swapi_l3a_proton-sw_20260425_v001.json",
                 ])
 
                 self.assertEqual(0, result.returncode)
