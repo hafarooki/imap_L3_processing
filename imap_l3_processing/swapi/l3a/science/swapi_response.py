@@ -111,6 +111,7 @@ class SWAPIResponse:
     _max_SG_boundary: NDArray = field(default_factory=lambda: np.empty((2, 0)))
     _oa_active_el_range: tuple = (-12.0, 10.5)
     _sg_active_el_range: tuple = (-10.5, 7.0)
+    _grid_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def get_central_effective_area(self, esa_voltage: float) -> float:
         return float(np.interp(np.abs(esa_voltage), self.central_effective_area_voltage, self.central_effective_area))
@@ -124,6 +125,14 @@ class SWAPIResponse:
         return pd.DataFrame(values, index=coeffs.index, columns=['value'])
 
     def create_passband_grid(self, esa_voltage: float) -> PassbandGrid:
+        # Cached by voltage: pandas pivot/unstack inside _build_passband_array dominates
+        # this function (~1.8 ms per call), and fits typically reuse the same 72 ESA
+        # voltages across many sweeps and many fits within one processor run.
+        cache_key = float(esa_voltage)
+        cached = self._grid_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         from imap_l3_processing.swapi.l3a.science.speed_calculation import esa_voltage_to_proton_speed
 
         central_speed = float(esa_voltage_to_proton_speed(esa_voltage))
@@ -135,7 +144,7 @@ class SWAPIResponse:
         oa_grid = _build_passband_array(oa_values, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS)
         sg_grid = _build_passband_array(sg_values, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS)
 
-        return PassbandGrid(
+        grid = PassbandGrid(
             min_elevation=float(_TARGET_ELEVATIONS[0]),
             elevation_spacing=float(_TARGET_ELEVATIONS[1] - _TARGET_ELEVATIONS[0]),
             min_speed_ratio=float(_TARGET_SPEED_RATIOS[0]),
@@ -153,6 +162,8 @@ class SWAPIResponse:
             oa_active_el_range=self._oa_active_el_range,
             sg_active_el_range=self._sg_active_el_range,
         )
+        self._grid_cache[cache_key] = grid
+        return grid
 
     @classmethod
     def from_files(cls, azimuthal_transmission_path: Path, central_effective_area_path: Path,
