@@ -10,7 +10,7 @@
 
 ## TODO
 
-- [ ] Validate usage of `esa_voltage` parameter throughout — `fit_solar_wind_proton_moments`, `create_passband_grid`, and `esa_voltage_to_proton_speed` all take what the processor passes as `data_chunk.energy` (ESA center energy in eV).
+- [x] Validate usage of `esa_voltage` parameter throughout — `fit_solar_wind_proton_moments`, `create_passband_grid`, and `esa_voltage_to_proton_speed` all take true ESA voltage (V). The processor and validate script now divide L2's `esa_energy` field by `SWAPI_L2_K_FACTOR` (= 1.93) before passing it to the fitter. See "Two k-factors" below.
 - [ ] Alphas
 - [ ] Remove old SW model from pickup ion code (?)
 - [ ] Dynamic calculation of pickup ion geometric factor (?)
@@ -32,7 +32,15 @@ where $f^s$ is the VDF of species $s$ and $\mathcal{A}^s$ is the effective area.
 
 The effective area is decomposed as
 $$\mathcal{A}^s(v, \theta, \phi, V) = \mathcal{A}_0^s(V) \cdot P^s\!\left(\dfrac{v}{v_0^s},\, \theta,\, \phi,\, V\right) \cdot T(\phi),$$
-where $v_0^s = \sqrt{2 k^* q^s |V| / m^s}$ is the central speed ($k^* = 1.89$ eV/V), $\mathcal{A}_0^s(V)$ is the central effective area (from lab measurements, interpolated at each $V$), $P^s$ is the energy-angle passband (from SIMION, separate sunglasses/open-aperture grids, normalized to $P(1, 0°, V) = 1$), and $T(\phi)$ is the azimuthal transmission factor ($T \approx 10^{-3}$ at $|\phi| < 9°$). $T$ is an even function; the calibration table covers $|\phi|$ only, and `_interpolate_transmission` indexes it by $|\phi|$ after wrapping $\phi$ to $(-180°, 180°]$.
+where $v_0^s = \sqrt{2 k^* q^s |V| / m^s}$ is the central speed ($k^* = 1.89$ eV/V; see "Two k-factors" below), $\mathcal{A}_0^s(V)$ is the central effective area (from lab measurements, interpolated at each $V$), $P^s$ is the energy-angle passband (from SIMION, separate sunglasses/open-aperture grids, normalized to $P(1, 0°, V) = 1$), and $T(\phi)$ is the azimuthal transmission factor ($T \approx 10^{-3}$ at $|\phi| < 9°$). $T$ is an even function; the calibration table covers $|\phi|$ only, and `_interpolate_transmission` indexes it by $|\phi|$ after wrapping $\phi$ to $(-180°, 180°]$.
+
+#### Two k-factors
+
+The L2 product labels its energy axis using an outdated SWAPI k-factor:
+$$\texttt{esa\_energy}_\text{L2} = k_\text{L2} \cdot |V|, \qquad k_\text{L2} = 1.93\ \text{eV/V}.$$
+The L3 fitter expects true ESA voltage $V$ as input, so any code that reads L2's `esa_energy` and feeds it to `fit_solar_wind_proton_moments`, `create_passband_grid`, or `esa_voltage_to_proton_speed` must first divide by $k_\text{L2}$.
+
+All internal L3 physics — passband normalization, central speed $v_0^s$, the polynomial fits in $\log(k^*|V|)$ — uses the revised k-factor $k^* = 1.89$ eV/V from high-resolution SIMION simulations. The two values are exposed as `SWAPI_L2_K_FACTOR` and `SWAPI_K_FACTOR` in `imap_l3_processing/swapi/l3a/science/speed_calculation.py`. Mixing them silently shifts the fitted moments by ~1–2%.
 
 ![Central effective area and azimuthal transmission](figures/calibration_curves.png)
 

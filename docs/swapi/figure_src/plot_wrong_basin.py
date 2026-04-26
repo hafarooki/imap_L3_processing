@@ -12,28 +12,36 @@ at the flipped solution is enough to detect the wrong-basin convergence.
 Output: docs/swapi/figures/wrong_basin.png
 Usage:  python docs/swapi/figure_src/plot_wrong_basin.py
 """
+
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import numpy as np
 import numba
 import spacepy.pycdf
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
-    SWAPI_SCIENCE_BINS, SWAPI_K_FACTOR,
+    SWAPI_SCIENCE_BINS,
+    SWAPI_L2_K_FACTOR,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    _model_count_rates, _residuals_njit, SWAPI_LIVETIME_S,
+    _model_count_rates,
+    _residuals_njit,
+    SWAPI_LIVETIME_S,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
-_TEST_L2_CDF = _REPO_ROOT / "tests/test_data/swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf"
+_TEST_L2_CDF = (
+    _REPO_ROOT / "tests/test_data/swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf"
+)
 _OUTPUT_DIR = _REPO_ROOT / "docs" / "swapi" / "figures"
 
 _N_SWEEPS = 5
@@ -72,7 +80,9 @@ def main():
         _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
     )
     with spacepy.pycdf.CDF(str(_TEST_L2_CDF)) as cdf:
-        voltages = cdf['esa_energy'][...].mean(axis=0)[SWAPI_SCIENCE_BINS] / SWAPI_K_FACTOR
+        voltages = (
+            cdf["esa_energy"][...].mean(axis=0)[SWAPI_SCIENCE_BINS] / SWAPI_L2_K_FACTOR
+        )
     base_grids = numba.typed.List([sr.create_passband_grid(v) for v in voltages])
     tiled = numba.typed.List()
     for _ in range(_N_SWEEPS):
@@ -83,7 +93,11 @@ def main():
 
     true_vel = np.array([CASE_V_R, CASE_VT, CASE_VN])
     cr_clean = _model_count_rates(CASE_DENSITY, CASE_T_EV, true_vel, tiled, rot, sc_vel)
-    cr = np.random.default_rng(CASE_SEED).poisson(np.maximum(cr_clean, 0.0)).astype(float)
+    cr = (
+        np.random.default_rng(CASE_SEED)
+        .poisson(np.maximum(cr_clean, 0.0))
+        .astype(float)
+    )
     sigma = np.sqrt(np.maximum(cr * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
 
     print("Computing χ² grid (n, T, v_R held at truth)...")
@@ -99,8 +113,9 @@ def main():
     fig, ax = plt.subplots(figsize=(9, 7))
     log_chi2 = np.log10(chi2)
     cf = ax.contourf(grid_vT, grid_vN, log_chi2, levels=30, cmap="viridis")
-    ax.contour(grid_vT, grid_vN, log_chi2, levels=10,
-               colors="white", linewidths=0.5, alpha=0.5)
+    ax.contour(
+        grid_vT, grid_vN, log_chi2, levels=10, colors="white", linewidths=0.5, alpha=0.5
+    )
     cbar = plt.colorbar(cf, ax=ax)
     cbar.set_label(r"$\log_{10}\chi^2$", fontsize=11)
 
@@ -113,24 +128,57 @@ def main():
     chi2_mirror = chi2[iN_mirror, iT_mirror]
 
     # Truth (global minimum)
-    ax.plot(CASE_VT, CASE_VN, "*", color="lime", ms=28, mec="black", mew=2,
-            label=f"Truth (global min): ({CASE_VT:+.1f}, {CASE_VN:+.1f}),  "
-                  f"$\\chi^2 \\approx {chi2_truth:.0f}$",
-            zorder=5)
+    ax.plot(
+        CASE_VT,
+        CASE_VN,
+        "*",
+        color="lime",
+        ms=28,
+        mec="black",
+        mew=2,
+        label=f"Truth (global min): ({CASE_VT:+.1f}, {CASE_VN:+.1f}),  "
+        f"$\\chi^2 \\approx {chi2_truth:.0f}$",
+        zorder=5,
+    )
     # Mirror (local minimum)
-    ax.plot(-CASE_VT, -CASE_VN, "X", color="red", ms=20, mec="black", mew=2,
-            label=f"Spin-axis mirror (local min): ({-CASE_VT:+.1f}, {-CASE_VN:+.1f}),  "
-                  f"$\\chi^2 \\approx {chi2_mirror:.0f}$ ({chi2_mirror/chi2_truth:.0f}× truth)",
-            zorder=5)
+    ax.plot(
+        -CASE_VT,
+        -CASE_VN,
+        "X",
+        color="red",
+        ms=20,
+        mec="black",
+        mew=2,
+        label=f"Spin-axis mirror (local min): ({-CASE_VT:+.1f}, {-CASE_VN:+.1f}),  "
+        f"$\\chi^2 \\approx {chi2_mirror:.0f}$ ({chi2_mirror / chi2_truth:.0f}× truth)",
+        zorder=5,
+    )
     # Saddle / starting point
-    ax.plot(0, 0, "s", color="white", ms=14, mec="black", mew=2,
-            label="Initial guess (0, 0): saddle between basins", zorder=5)
+    ax.plot(
+        0,
+        0,
+        "s",
+        color="white",
+        ms=14,
+        mec="black",
+        mew=2,
+        label="Initial guess (0, 0): saddle between basins",
+        zorder=5,
+    )
 
     # Arrows from saddle to each basin
-    ax.annotate("", xy=(CASE_VT, CASE_VN), xytext=(0, 0),
-                arrowprops=dict(arrowstyle="->", color="lime", lw=2))
-    ax.annotate("", xy=(-CASE_VT, -CASE_VN), xytext=(0, 0),
-                arrowprops=dict(arrowstyle="->", color="red", lw=2))
+    ax.annotate(
+        "",
+        xy=(CASE_VT, CASE_VN),
+        xytext=(0, 0),
+        arrowprops=dict(arrowstyle="->", color="lime", lw=2),
+    )
+    ax.annotate(
+        "",
+        xy=(-CASE_VT, -CASE_VN),
+        xytext=(0, 0),
+        arrowprops=dict(arrowstyle="->", color="red", lw=2),
+    )
 
     ax.set_xlabel("$v_T$ (km/s)", fontsize=12)
     ax.set_ylabel("$v_N$ (km/s)", fontsize=12)

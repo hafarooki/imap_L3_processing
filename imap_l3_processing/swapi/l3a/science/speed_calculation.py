@@ -4,18 +4,29 @@ from numpy.typing import ArrayLike
 from uncertainties import umath, unumpy, wrap
 from uncertainties.unumpy import nominal_values
 
-from imap_l3_processing.constants import PROTON_CHARGE_COULOMBS, PROTON_MASS_KG, METERS_PER_KILOMETER
+from imap_l3_processing.constants import (
+    PROTON_CHARGE_COULOMBS,
+    PROTON_MASS_KG,
+    METERS_PER_KILOMETER,
+)
 
-SWAPI_K_FACTOR = 1.89  # eV/V, see docs/swapi/solar-wind-moments.md
+# Revised SWAPI ESA k-factor from high-resolution SIMION simulations (Q ≈ 1.89 eV/V at θ = 0).
+# Used internally by L3 for passband normalization and central-speed conversions.
+SWAPI_K_FACTOR = 1.89
+
+# Outdated k-factor used by the L2 product to label its `esa_energy` field as
+# `esa_energy = SWAPI_L2_K_FACTOR × |voltage|`. Different from SWAPI_K_FACTOR — divide L2's
+# `esa_energy` by this to recover true ESA voltage before any L3 processing.
+SWAPI_L2_K_FACTOR = 1.93
 
 # SWAPI ESA sweep bin layout (72 bins total, indices 0–71):
 #   Index 0       : always discarded (hardware artifact, never science data)
 #   Indices 1–62  : coarse sweep passbands (62 bins, uniform energy steps)
 #   Indices 63–71 : fine sweep passbands (9 bins, higher resolution near the proton peak)
 SWAPI_DISCARDED_BIN = 0
-SWAPI_COARSE_SWEEP_BINS = slice(1, 63)   # indices 1–62
-SWAPI_FINE_SWEEP_BINS = slice(63, 72)    # indices 63–71
-SWAPI_SCIENCE_BINS = slice(1, 72)        # indices 1–71, all usable bins (coarse + fine)
+SWAPI_COARSE_SWEEP_BINS = slice(1, 63)  # indices 1–62
+SWAPI_FINE_SWEEP_BINS = slice(63, 72)  # indices 63–71
+SWAPI_SCIENCE_BINS = slice(1, 72)  # indices 1–71, all usable bins (coarse + fine)
 
 
 def esa_voltage_to_proton_speed(esa_voltage: ArrayLike) -> np.ndarray:
@@ -33,16 +44,20 @@ def esa_voltage_to_proton_speed(esa_voltage: ArrayLike) -> np.ndarray:
 
 def get_peak_indices(count_rates, width, mask=True) -> slice:
     max_indices = np.argwhere(
-            (count_rates == np.max(count_rates, where=mask, initial=0)) & mask)
+        (count_rates == np.max(count_rates, where=mask, initial=0)) & mask
+    )
     left_min_index = np.min(max_indices)
     right_min_index = np.max(max_indices)
 
     if right_min_index - left_min_index > 1:
         raise Exception("Count rates contains multiple distinct peaks")
 
-    return slice(max(0, left_min_index - width), right_min_index + width+1)
+    return slice(max(0, left_min_index - width), right_min_index + width + 1)
 
-def find_peak_center_of_mass_index(peak_slice, count_rates, minimum_count_rate=0, minimum_bin_count=0):
+
+def find_peak_center_of_mass_index(
+    peak_slice, count_rates, minimum_count_rate=0, minimum_bin_count=0
+):
     count_rates = np.asarray(count_rates)
     indices = np.arange(len(count_rates))
     peak_indices = indices[peak_slice]
@@ -55,11 +70,16 @@ def find_peak_center_of_mass_index(peak_slice, count_rates, minimum_count_rate=0
         raise Exception("Too few bins after removing low count rates")
 
     filtered_peak_counts = peak_counts[at_least_minimum]
-    center_of_mass_index = np.sum(filtered_peak_indices * filtered_peak_counts) / np.sum(filtered_peak_counts)
+    center_of_mass_index = np.sum(
+        filtered_peak_indices * filtered_peak_counts
+    ) / np.sum(filtered_peak_counts)
     return center_of_mass_index
 
+
 def interpolate_energy(center_of_mass_index, energies):
-    interpolate_lambda = lambda x: np.exp(np.interp(x, np.arange(len(energies)), np.log(energies)))
+    interpolate_lambda = lambda x: np.exp(
+        np.interp(x, np.arange(len(energies)), np.log(energies))
+    )
     interpolate = wrap(interpolate_lambda)
     return interpolate(center_of_mass_index)
 
@@ -84,10 +104,18 @@ def calculate_sw_speed(particle_mass, particle_charge, energy):
     dimensions = np.asanyarray(energy).ndim
     if dimensions > 0:
         if isinstance(np.ravel(energy)[0], uncertainties.UFloat):
-            return unumpy.sqrt(2 * energy * particle_charge / particle_mass) / METERS_PER_KILOMETER
-        return np.sqrt(2 * energy * particle_charge / particle_mass) / METERS_PER_KILOMETER
+            return (
+                unumpy.sqrt(2 * energy * particle_charge / particle_mass)
+                / METERS_PER_KILOMETER
+            )
+        return (
+            np.sqrt(2 * energy * particle_charge / particle_mass) / METERS_PER_KILOMETER
+        )
     else:
-        return umath.sqrt(2 * energy * particle_charge / particle_mass) / METERS_PER_KILOMETER
+        return (
+            umath.sqrt(2 * energy * particle_charge / particle_mass)
+            / METERS_PER_KILOMETER
+        )
 
 
 def calculate_sw_speed_h_plus(energy):

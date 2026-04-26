@@ -36,7 +36,8 @@ from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_SCIENCE_BINS
 from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
 
-K = 1.89  # SWAPI ESA k-factor eV/V
+K = 1.89  # SWAPI revised ESA k-factor eV/V (from SIMION) — used internally for L3 physics
+K_L2 = 1.93  # outdated k-factor used by L2 to compute its esa_energy = K_L2 × |V| field
 T_LIVE = 0.145  # s per passband
 N_SW = 5  # sweeps per fit
 V_LO, V_HI = 0.75, 1.35  # proton-core fit window as fraction of peak V
@@ -92,7 +93,7 @@ def main():
         / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
     )
 
-    sci_V = day.esa_energy.values.mean(0)[SWAPI_SCIENCE_BINS] / K
+    sci_V = day.esa_energy.values.mean(0)[SWAPI_SCIENCE_BINS] / K_L2
     pb_mask = np.isfinite(sci_V) & (sci_V > 0)
     rep_V = sci_V[pb_mask]
     n_pb, n_g = len(rep_V), len(day.epoch) // N_SW
