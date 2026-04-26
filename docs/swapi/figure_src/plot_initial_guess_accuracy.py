@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
 Scatter plots comparing the initial guess and final optimizer output against
-ground truth for 100 random solar wind parameter sets.
+ground truth for 1000 random solar wind parameter sets.
 
-Synthetic count rates are generated from the forward model with realistic SWAPI
-geometry (5 sweeps × 72 voltage steps over 60 s, 15 s spin period, spin axis =
-boresight = +Y_SWAPI) and Poisson noise, then passed through _get_initial_guess
-(Gaussian fit + density scaling, no sine-fit since no SPICE) and _optimize
-(Levenberg-Marquardt).
+Uses the real SWAPI 71-bin science voltage sweep (from the test L2 CDF) with 5
+sweeps per fit — matching the production processor exactly. Synthetic count rates
+are generated from the forward model with realistic SWAPI geometry (spin axis =
+boresight = +Y_SWAPI, 15 s spin period) and Poisson noise.
+
+Because all cases share the same voltage sweep, passband grids are built once and
+reused. The optimizer is parallelised across cases via ThreadPoolExecutor (numba
+functions release the GIL).
 
 Solar wind parameter ranges (seed=7):
   bulk_speed:   300–800 km/s   (uniform)
@@ -22,55 +25,60 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-import math
+import time
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import numba
-import scipy.optimize
+import spacepy.pycdf
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from imap_l3_processing.constants import PROTON_CHARGE_COULOMBS, PROTON_MASS_KG, METERS_PER_KILOMETER
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
-from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR, esa_voltage_to_proton_speed
+from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_SCIENCE_BINS, SWAPI_K_FACTOR
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     _get_initial_guess,
     _optimize,
     _model_count_rates,
-    ProtonSolarWindMoments,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
+_TEST_L2_CDF = _REPO_ROOT / "tests/test_data/swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf"
 _OUTPUT_DIR = _REPO_ROOT / "docs" / "swapi" / "figures"
 
-_N_SAMPLES = 100
+_N_SAMPLES = 1000
 _RNG_SEED = 7
 _N_SWEEPS = 5
-_N_BINS = 72                # 72 ESA voltage steps per sweep
-_SWEEP_S = 12.0             # 12 s per sweep
-_SPIN_S  = 15.0             # spacecraft spin period
-_DT_S    = _SWEEP_S / _N_BINS
+_SWEEP_S = 12.0
+_SPIN_S = 15.0
+_N_BINS = 71  # SWAPI_SCIENCE_BINS = slice(1, 72)
+_DT_S = _SWEEP_S / 72  # bin spacing within a 72-bin sweep
 
 _R_BASE_RTN_TO_SWAPI = np.array([[ 0.0, 1.0, 0.0],
                                   [-1.0, 0.0, 0.0],
                                   [ 0.0, 0.0, 1.0]])
 
 
-def _peak_voltage(v_km_s: float) -> float:
-    return (PROTON_MASS_KG * (v_km_s * METERS_PER_KILOMETER) ** 2
-            / (2 * SWAPI_K_FACTOR * PROTON_CHARGE_COULOMBS))
+def _load_science_voltages() -> np.ndarray:
+    """Return the 71 science bin voltages from a real L2 CDF."""
+    with spacepy.pycdf.CDF(str(_TEST_L2_CDF)) as cdf:
+        esa_energy = cdf['esa_energy'][...]  # shape (n_sweeps, 72), in eV
+    return esa_energy.mean(axis=0)[SWAPI_SCIENCE_BINS] / SWAPI_K_FACTOR
 
 
 def _spin_rotation_matrices(n: int) -> np.ndarray:
-    """Realistic SWAPI geometry: spin axis = boresight (+Y_SWAPI = -R_RTN).
+    """Rotation matrices for n consecutive bin measurements across N_SWEEPS sweeps.
 
-    R(t) = R_spin_around_Y(2*pi*t/T_spin) @ R_base, where R_base maps the
-    nominal anti-sunward bulk to -Y_SWAPI so phi=theta=0 at zero spin phase.
-    Spin around the boresight leaves the dominant Y component unchanged and
-    only introduces small phi/theta wobble of order arcsin(v_T,N / v_R).
+    Each sweep is _SWEEP_S = 12 s with 72 bins of _DT_S = 12/72 s spacing; bin 0
+    is discarded so we use bins 1-71. Times within sweep s are
+        t = s * 12 + bin_idx * 12/72,   bin_idx in {1, ..., 71}
+    so there is a 2*_DT_S gap from bin 71 of one sweep to bin 1 of the next.
     """
-    times = np.arange(n) * _DT_S
+    sweep_idx = np.arange(n) // _N_BINS
+    bin_in_sweep = (np.arange(n) % _N_BINS) + 1
+    times = sweep_idx * _SWEEP_S + bin_in_sweep * _DT_S
     alphas = 2.0 * np.pi * times / _SPIN_S
     R = np.empty((n, 3, 3))
     for i, a in enumerate(alphas):
@@ -82,7 +90,7 @@ def _spin_rotation_matrices(n: int) -> np.ndarray:
     return R
 
 
-def _run_cases(sr: SWAPIResponse) -> dict:
+def _run_cases(sr: SWAPIResponse, voltages: np.ndarray) -> dict:
     rng = np.random.default_rng(_RNG_SEED)
     bulk_speeds  = rng.uniform(300, 800, _N_SAMPLES)
     temperatures = np.exp(rng.uniform(np.log(2), np.log(50), _N_SAMPLES))
@@ -90,52 +98,56 @@ def _run_cases(sr: SWAPIResponse) -> dict:
     vTs          = rng.uniform(-50, 50, _N_SAMPLES)
     vNs          = rng.uniform(-50, 50, _N_SAMPLES)
 
-    n_meas = _N_SWEEPS * _N_BINS
     sc_vel = np.zeros(3)
 
-    out = {k: np.empty(_N_SAMPLES) for k in
-           ("true_n", "true_T", "true_vR", "true_vT", "true_vN",
-            "init_n", "init_T", "init_vR", "init_vT", "init_vN",
-            "fit_n",  "fit_T",  "fit_vR",  "fit_vT",  "fit_vN")}
-    out["bad_flag"] = np.zeros(_N_SAMPLES, dtype=bool)
+    # All cases share the same voltage sweep → build grids once.
+    print("  Building passband grids (once for all cases)...")
+    t0 = time.perf_counter()
+    base_grids = numba.typed.List([sr.create_passband_grid(v) for v in voltages])
+    # Tile for N_SWEEPS: [sweep0_bin0..bin70, sweep1_bin0..bin70, ...]
+    tiled_grids = numba.typed.List()
+    for _ in range(_N_SWEEPS):
+        for g in base_grids:
+            tiled_grids.append(g)
+    print(f"  Grids done in {time.perf_counter() - t0:.2f}s.")
 
-    for i in range(_N_SAMPLES):
+    # Rotation matrices: same structure for every case (synthetic geometry).
+    rot = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
+    esa_full = np.tile(voltages, _N_SWEEPS)
+
+    def run_one(i):
         v_b = float(bulk_speeds[i])
         T   = float(temperatures[i])
         n   = float(densities[i])
-        vT_i = float(vTs[i])
-        vN_i = float(vNs[i])
-        true_vel = np.array([v_b, vT_i, vN_i])
+        vT  = float(vTs[i])
+        vN  = float(vNs[i])
+        true_vel = np.array([v_b, vT, vN])
 
-        voltages = np.geomspace(_peak_voltage(v_b) * 0.3, _peak_voltage(v_b) * 3.0, _N_BINS)
-        grids = numba.typed.List([sr.create_passband_grid(v)
-                                  for _ in range(_N_SWEEPS) for v in voltages])
-        rot = _spin_rotation_matrices(n_meas)
-        esa_full = np.tile(voltages, _N_SWEEPS)
+        cr = _model_count_rates(n, T, true_vel, tiled_grids, rot, sc_vel)
+        cr = np.random.default_rng(i).poisson(np.maximum(cr, 0.0)).astype(float)
 
-        count_rate = _model_count_rates(n, T, true_vel, grids, rot, sc_vel)
-        count_rate = rng.poisson(np.maximum(count_rate, 0.0)).astype(float)
+        ig     = _get_initial_guess(cr, esa_full, tiled_grids, rot, sc_vel)
+        result = _optimize(cr, tiled_grids, rot, sc_vel, ig)
 
-        ig     = _get_initial_guess(count_rate, esa_full, grids, rot, sc_vel)
-        result = _optimize(count_rate, grids, rot, sc_vel, ig)
+        return (n, T, v_b, vT, vN,
+                ig.density, ig.temperature,
+                ig.bulk_velocity_rtn[0], ig.bulk_velocity_rtn[1], ig.bulk_velocity_rtn[2],
+                result.density, result.temperature,
+                result.bulk_velocity_rtn[0], result.bulk_velocity_rtn[1], result.bulk_velocity_rtn[2],
+                bool(result.bad_fit_flag))
 
-        out["true_n"][i] = n;   out["true_T"][i] = T
-        out["true_vR"][i] = v_b; out["true_vT"][i] = vT_i; out["true_vN"][i] = vN_i
+    print(f"  Running {_N_SAMPLES} fits in parallel...")
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor() as pool:
+        rows = list(pool.map(run_one, range(_N_SAMPLES)))
+    print(f"  Fits done in {time.perf_counter() - t0:.1f}s.")
 
-        out["init_n"][i] = ig.density;       out["init_T"][i] = ig.temperature
-        out["init_vR"][i] = ig.bulk_velocity_rtn[0]
-        out["init_vT"][i] = ig.bulk_velocity_rtn[1]
-        out["init_vN"][i] = ig.bulk_velocity_rtn[2]
-
-        out["fit_n"][i] = result.density;    out["fit_T"][i] = result.temperature
-        out["fit_vR"][i] = result.bulk_velocity_rtn[0]
-        out["fit_vT"][i] = result.bulk_velocity_rtn[1]
-        out["fit_vN"][i] = result.bulk_velocity_rtn[2]
-        out["bad_flag"][i] = bool(result.bad_fit_flag)
-
-        if (i + 1) % 20 == 0:
-            print(f"  {i+1}/{_N_SAMPLES}  (bad flags so far: {out['bad_flag'][:i+1].sum()})")
-
+    keys = ("true_n", "true_T", "true_vR", "true_vT", "true_vN",
+            "init_n", "init_T", "init_vR", "init_vT", "init_vN",
+            "fit_n",  "fit_T",  "fit_vR",  "fit_vT",  "fit_vN",
+            "bad_flag")
+    out = {k: np.array([r[j] for r in rows]) for j, k in enumerate(keys)}
+    out["bad_flag"] = out["bad_flag"].astype(bool)
     return out
 
 
@@ -157,25 +169,33 @@ def main():
         _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
     )
 
-    # JIT warm-up
+    print("Loading real SWAPI science voltages...")
+    voltages = _load_science_voltages()
+    print(f"  {len(voltages)} bins, {voltages.min():.1f}–{voltages.max():.1f} V")
+
     print("Warming up JIT...")
-    _v0 = 450.0
-    _vols0 = np.geomspace(_peak_voltage(_v0) * 0.3, _peak_voltage(_v0) * 3.0, _N_BINS)
-    _grids0 = numba.typed.List([sr.create_passband_grid(v) for _ in range(_N_SWEEPS) for v in _vols0])
+    _grids0 = numba.typed.List([sr.create_passband_grid(v) for v in voltages])
+    _tiled0 = numba.typed.List()
+    for _ in range(_N_SWEEPS):
+        for g in _grids0:
+            _tiled0.append(g)
     _rot0 = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
-    _cr0 = _model_count_rates(5.0, 10.0, np.array([_v0, 0.0, 0.0]), _grids0, _rot0, np.zeros(3))
-    _ig0 = _get_initial_guess(_cr0, np.tile(_vols0, _N_SWEEPS), _grids0, _rot0, np.zeros(3))
-    _optimize(_cr0, _grids0, _rot0, np.zeros(3), _ig0)
-    print("JIT ready. Running cases...")
+    _esa0 = np.tile(voltages, _N_SWEEPS)
+    _sc0  = np.zeros(3)
+    _cr0  = _model_count_rates(8.0, 10.0, np.array([500.0, 0.0, 0.0]), _tiled0, _rot0, _sc0)
+    _ig0  = _get_initial_guess(_cr0, _esa0, _tiled0, _rot0, _sc0)
+    _optimize(_cr0, _tiled0, _rot0, _sc0, _ig0)
+    print("JIT ready.")
 
-    data = _run_cases(sr)
+    t_total = time.perf_counter()
+    data = _run_cases(sr, voltages)
+    print(f"Total wall time: {time.perf_counter() - t_total:.1f}s")
+
     n_bad = data["bad_flag"].sum()
-    print(f"Done. Bad-fit flags: {n_bad}/{_N_SAMPLES}")
+    print(f"Bad-fit flags: {n_bad}/{_N_SAMPLES}")
 
-    # --- Figure ---
     good = ~data["bad_flag"]
 
-    # Column spec: (axis label, true key, init key, fit key, scale)
     cols = [
         ("Density (cm⁻³)",    "true_n",  "init_n",  "fit_n",  "log"),
         ("Temperature (eV)",   "true_T",  "init_T",  "fit_T",  "log"),
@@ -187,8 +207,8 @@ def main():
     fig, axes = plt.subplots(1, 5, figsize=(17, 4))
     fig.suptitle(
         f"Initial guess vs. final optimizer vs. ground truth\n"
-        f"({_N_SAMPLES} random cases, {_N_SWEEPS} sweeps × {_N_BINS} steps, "
-        f"spin axis = boresight, Poisson noise)",
+        f"({_N_SAMPLES} random cases, {_N_SWEEPS} sweeps × {_N_BINS} bins, "
+        f"real SWAPI voltage sweep, Poisson noise)",
         fontsize=11,
     )
 
@@ -200,19 +220,16 @@ def main():
         init  = data[ik]
         fit   = data[fk]
 
-        # 1:1 reference
         lo = np.nanmin(np.concatenate([truth, init, fit]))
         hi = np.nanmax(np.concatenate([truth, init, fit]))
         ref = np.linspace(lo, hi, 200)
         ax.plot(ref, ref, "k--", lw=0.8, alpha=0.4, zorder=0)
 
-        # Good cases
-        ax.scatter(truth[good], init[good],  s=14, alpha=0.55, color=C_INIT,
+        ax.scatter(truth[good], init[good], s=6, alpha=0.35, color=C_INIT,
                    marker="o", zorder=2, label="Initial guess")
-        ax.scatter(truth[good], fit[good],   s=14, alpha=0.65, color=C_FIT,
+        ax.scatter(truth[good], fit[good],  s=6, alpha=0.45, color=C_FIT,
                    marker="^", zorder=3, label="Final fit")
 
-        # Bad-flag cases (X markers, same colours)
         if n_bad:
             ax.scatter(truth[~good], init[~good], s=30, alpha=0.9, color=C_INIT,
                        marker="X", edgecolors="k", linewidths=0.4, zorder=4)
@@ -228,9 +245,8 @@ def main():
         if scale == "log":
             ax.set_xscale("log"); ax.set_yscale("log")
 
-        # RMSE annotations
-        lbl_i = _rmse_label(truth[good], init[good],  scale)
-        lbl_f = _rmse_label(truth[good], fit[good],   scale)
+        lbl_i = _rmse_label(truth[good], init[good], scale)
+        lbl_f = _rmse_label(truth[good], fit[good],  scale)
         ax.annotate(
             f"Init  {lbl_i}\nFit    {lbl_f}",
             xy=(0.04, 0.97), xycoords="axes fraction",

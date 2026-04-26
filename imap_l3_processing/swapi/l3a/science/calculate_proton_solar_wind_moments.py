@@ -149,8 +149,7 @@ def _get_initial_guess(
         / PROTON_CHARGE_COULOMBS
     )
 
-    # Initial bulk velocity is purely anti-sunward; the optimizer recovers the
-    # transverse components from the spin-phase modulation in the data.
+    # Initial transverse velocity is zero; `_optimize` handles the wrong-basin trap.
     bulk_velocity_rtn = np.array([float(bulk_speed), 0.0, 0.0])
 
     # Scale density so that the unit model count rate matches the mean observed count rate
@@ -546,13 +545,19 @@ def _optimize(
             spacecraft_velocity_rtn,
         )
 
-    # diff_step=1e-4: the default step (~1.5e-8) is below the GL quadrature noise floor for cold
-    # plasma (T <= 5 eV), corrupting the Jacobian for vT/vN and freezing all parameters. 1e-4 is
-    # the empirical optimum: above the noise floor, small enough that linearization error is negligible
-    # (1e-2 degrades accuracy, 1e-1 fails outright).
-    result = scipy.optimize.least_squares(
-        residuals, x0, method="lm", diff_step=1e-4
-    )
+    # See docs/swapi/solar-wind-moments.md for diff_step rationale.
+    result = scipy.optimize.least_squares(residuals, x0, method="lm", diff_step=1e-4)
+
+    # Wrong-basin detection via spin-axis mirror flip; see docs/swapi/solar-wind-moments.md.
+    chi2 = float(np.sum(result.fun**2))
+    x_flipped = result.x.copy()
+    x_flipped[3] = -x_flipped[3]
+    x_flipped[4] = -x_flipped[4]
+    chi2_flipped = float(np.sum(residuals(x_flipped) ** 2))
+    if chi2_flipped < chi2:
+        result = scipy.optimize.least_squares(
+            residuals, x_flipped, method="lm", diff_step=1e-4
+        )
 
     density = float(np.exp(result.x[0]))
     temperature = float(np.exp(result.x[1]))
