@@ -549,10 +549,14 @@ def _optimize(
     result = scipy.optimize.least_squares(residuals, x0, method="lm", diff_step=1e-4)
 
     # Wrong-basin detection via spin-axis mirror flip; see docs/swapi/solar-wind-moments.md.
+    # Spin axis in RTN = body-Y direction expressed in RTN coords = row 1 of R[i].
+    # 180° rotation about that axis: v' = 2(v·s)s − v.
     chi2 = float(np.sum(result.fun**2))
+    spin_axis_rtn = rotation_matrices[0, 1, :]
+    v_rtn = result.x[2:5]
+    v_flipped = 2.0 * float(np.dot(v_rtn, spin_axis_rtn)) * spin_axis_rtn - v_rtn
     x_flipped = result.x.copy()
-    x_flipped[3] = -x_flipped[3]
-    x_flipped[4] = -x_flipped[4]
+    x_flipped[2:5] = v_flipped
     chi2_flipped = float(np.sum(residuals(x_flipped) ** 2))
     if chi2_flipped < chi2:
         result = scipy.optimize.least_squares(

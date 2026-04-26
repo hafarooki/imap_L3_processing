@@ -3,7 +3,7 @@
 Scatter plots comparing the initial guess and final optimizer output against
 ground truth for 1000 random solar wind parameter sets.
 
-Uses the real SWAPI 71-bin science voltage sweep (from the test L2 CDF) with 5
+Uses realistic SWAPI 71-bin science voltage sweep (from the test L2 CDF) with 5
 sweeps per fit — matching the production processor exactly. Synthetic count rates
 are generated from the forward model with realistic SWAPI geometry (spin axis =
 boresight = +Y_SWAPI, 15 s spin period) and Poisson noise.
@@ -62,7 +62,7 @@ _R_BASE_RTN_TO_SWAPI = np.array([[ 0.0, 1.0, 0.0],
 
 
 def _load_science_voltages() -> np.ndarray:
-    """Return the 71 science bin voltages from a real L2 CDF."""
+    """Return the 71 science bin voltages from a realistic L2 CDF."""
     with spacepy.pycdf.CDF(str(_TEST_L2_CDF)) as cdf:
         esa_energy = cdf['esa_energy'][...]  # shape (n_sweeps, 72), in eV
     return esa_energy.mean(axis=0)[SWAPI_SCIENCE_BINS] / SWAPI_K_FACTOR
@@ -124,7 +124,7 @@ def _run_cases(sr: SWAPIResponse, voltages: np.ndarray) -> dict:
         true_vel = np.array([v_b, vT, vN])
 
         cr = _model_count_rates(n, T, true_vel, tiled_grids, rot, sc_vel)
-        cr = np.random.default_rng(i).poisson(np.maximum(cr, 0.0)).astype(float)
+        cr = np.random.default_rng(i).poisson(np.maximum(cr * .145, 0.0)).astype(float) / .145
 
         ig     = _get_initial_guess(cr, esa_full, tiled_grids, rot, sc_vel)
         result = _optimize(cr, tiled_grids, rot, sc_vel, ig)
@@ -169,7 +169,7 @@ def main():
         _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
     )
 
-    print("Loading real SWAPI science voltages...")
+    print("Loading realistic SWAPI science voltages...")
     voltages = _load_science_voltages()
     print(f"  {len(voltages)} bins, {voltages.min():.1f}–{voltages.max():.1f} V")
 
@@ -208,7 +208,7 @@ def main():
     fig.suptitle(
         f"Initial guess vs. final optimizer vs. ground truth\n"
         f"({_N_SAMPLES} random cases, {_N_SWEEPS} sweeps × {_N_BINS} bins, "
-        f"real SWAPI voltage sweep, Poisson noise)",
+        f"realistic SWAPI voltage sweep, Poisson noise)",
         fontsize=11,
     )
 
