@@ -48,7 +48,7 @@ _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
 _TEST_L2_CDF = _REPO_ROOT / "tests/test_data/swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf"
 _OUTPUT_DIR = _REPO_ROOT / "docs" / "swapi" / "figures"
 
-_N_SAMPLES = 1000
+_N_SAMPLES = 10000
 _RNG_SEED = 7
 _N_SWEEPS = 5
 _SWEEP_S = 12.0
