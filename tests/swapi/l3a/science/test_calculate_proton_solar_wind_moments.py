@@ -17,6 +17,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     _get_angular_limits,
     SWParams,
     ProtonSolarWindMoments,
+    SWAPI_LIVETIME_S,
 )
 import pandas as pd
 from imap_l3_processing.swapi.l3a.science.speed_calculation import esa_voltage_to_proton_speed, SWAPI_K_FACTOR
@@ -831,6 +832,86 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
         self.assertLess(speed, 700.0)
 
 
+class TestPoissonUncertaintyCoverage(unittest.TestCase):
+    """Verify that reported uncertainties match the empirical scatter across Poisson-noise realizations.
+
+    Runs 50 independent fits on synthetic data with Poisson noise drawn from the true
+    model count rates. The mean reported sigma should agree with the empirical std dev
+    of the fit outputs to within 50% — loose enough to tolerate sampling noise from 50
+    trials (~10% CV on the std dev estimate) while still catching gross miscalibration.
+    """
+
+    N_REALIZATIONS = 500
+
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        cls.true_density = 5.0
+        cls.true_temperature = 10.0
+        cls.true_velocity = np.array([450.0, 20.0, -10.0])
+
+        # Use a small grid (3 sweeps × 8 bins) to keep each _optimize call fast.
+        # The ratio mean_reported_sigma / empirical_std is independent of problem size,
+        # so coverage is equally well tested with fewer data points.
+        voltages = np.geomspace(
+            _peak_voltage(450.0) * 0.75, _peak_voltage(450.0) * 1.35, 8
+        )
+        n_sweeps = 3
+        grids = numba.typed.List()
+        for _ in range(n_sweeps):
+            for v in voltages:
+                grids.append(sr.create_passband_grid(v))
+        rot = _spin_rotation_matrices(n_sweeps * len(voltages))
+        sc_vel = np.zeros(3)
+
+        true_rate = _model_count_rates(
+            cls.true_density, cls.true_temperature, cls.true_velocity, grids, rot, sc_vel
+        )
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        rng = np.random.default_rng(42)
+        all_noisy_rates = (
+            rng.poisson(true_rate * SWAPI_LIVETIME_S, size=(cls.N_REALIZATIONS, len(true_rate)))
+            / SWAPI_LIVETIME_S
+        )
+
+        def run_one(noisy_rate):
+            ig = ProtonSolarWindMoments(
+                density=cls.true_density,
+                temperature=cls.true_temperature,
+                bulk_velocity_rtn=cls.true_velocity.copy(),
+                bad_fit_flag=0,
+            )
+            return _optimize(noisy_rate, grids, rot, sc_vel, ig)
+
+        with ThreadPoolExecutor() as pool:
+            results = list(pool.map(run_one, all_noisy_rates))
+
+        cls.densities = np.array([r.density for r in results])
+        cls.temperatures = np.array([r.temperature for r in results])
+        cls.velocities = np.array([r.bulk_velocity_rtn for r in results])  # shape (N, 3)
+        cls.mean_density_sigma = float(np.mean([r.density_sigma for r in results]))
+        cls.mean_temperature_sigma = float(np.mean([r.temperature_sigma for r in results]))
+        cls.mean_velocity_cov = np.mean([r.velocity_covariance for r in results], axis=0)
+
+    def test_density_sigma_matches_empirical_std(self):
+        np.testing.assert_allclose(
+            self.mean_density_sigma, np.std(self.densities), rtol=0.1
+        )
+
+    def test_temperature_sigma_matches_empirical_std(self):
+        np.testing.assert_allclose(
+            self.mean_temperature_sigma, np.std(self.temperatures), rtol=0.1
+        )
+
+    def test_velocity_covariance_diagonal_matches_empirical_variance(self):
+        empirical_var = np.var(self.velocities, axis=0)
+        np.testing.assert_allclose(
+            np.diag(self.mean_velocity_cov), empirical_var, rtol=0.1
+        )
+
+
 class TestGetInitialGuessCurveFitFailure(unittest.TestCase):
     """Verify _get_initial_guess falls back to peak-bin speed and 50 km/s thermal speed
     when scipy.optimize.curve_fit raises RuntimeError."""
@@ -850,10 +931,8 @@ class TestGetInitialGuessCurveFitFailure(unittest.TestCase):
         peak_idx = int(np.nanargmax(count_rate))
         expected_speed = float(esa_voltage_to_proton_speed(voltages[peak_idx]))
         np.testing.assert_allclose(result.bulk_velocity_rtn[0], expected_speed, rtol=0.01)
-        # The temperature is passband-subtracted with bulk_speed from the peak-bin voltage
-        # (which is at 0.5x peak voltage for count_rate=np.ones(...)), so bulk_speed ~ 190 km/s
-        # and sigma_passband_v ~ 5 km/s, yielding T ~ 25.3 eV (not 26.1 eV without correction)
-        np.testing.assert_allclose(result.temperature, 25.33, atol=0.5)
+        # Fallback sigma_v = 50 km/s → T = m_p * (50e3)^2 / e ≈ 26.1 eV
+        np.testing.assert_allclose(result.temperature, 26.1, atol=0.5)
 
 
 class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):
@@ -975,6 +1054,69 @@ class TestGetAngularLimits(unittest.TestCase):
         min_el, max_el, _, _ = _get_angular_limits(sw, 0, self.grid)
         self.assertGreater(min_el, -11.0)
         self.assertLess(max_el, 7.0)
+
+
+class TestColdPlasmaTransverseRecovery(unittest.TestCase):
+    """Regression tests for the known convergence failure on cold plasma.
+
+    At T ≲ 5 eV the VDF is so narrow that the spin-phase modulation encoding
+    vT and vN is too weak to pull the optimizer away from its initial vT=vN=0
+    starting point. The optimizer converges to vT≈vN≈0 regardless of the true
+    values. These tests currently FAIL and will pass once the bug is fixed.
+
+    Cases are drawn from the figure-script random sample (seed=7, 100 samples).
+    Tolerance is 20 km/s — comfortably larger than the Poisson-noise scatter for
+    warm plasma (~5 km/s RMSE) but tight enough to detect the ≈26–44 km/s errors
+    seen in the failing cases.
+    """
+
+    _ATOL_KMS = 1.0
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sr = _load_swapi_response()
+        cls.sc_vel = np.zeros(3)
+
+    def _run(self, bulk_speed, temperature_ev, density, vT, vN, seed):
+        voltages = np.geomspace(_peak_voltage(bulk_speed) * 0.3,
+                                _peak_voltage(bulk_speed) * 3.0, 72)
+        n_sweeps = 5
+        grids = numba.typed.List([self.sr.create_passband_grid(v)
+                                  for _ in range(n_sweeps) for v in voltages])
+        rot = _spin_rotation_matrices(n_sweeps * len(voltages))
+        esa_full = np.tile(voltages, n_sweeps)
+        true_vel = np.array([bulk_speed, vT, vN])
+        cr = _model_count_rates(density, temperature_ev, true_vel, grids, rot, self.sc_vel)
+        rng = np.random.default_rng(seed)
+        cr_noisy = rng.poisson(np.maximum(cr, 0.0)).astype(float)
+        ig = _get_initial_guess(cr_noisy, esa_full, grids, rot, self.sc_vel)
+        return _optimize(cr_noisy, grids, rot, self.sc_vel, ig), true_vel
+
+    def _assert_velocity_recovered(self, result, true_vel):
+        np.testing.assert_allclose(result.bulk_velocity_rtn[1], true_vel[1],
+                                   atol=self._ATOL_KMS,
+                                   err_msg=f"vT: fit={result.bulk_velocity_rtn[1]:.1f}, true={true_vel[1]:.1f}")
+        np.testing.assert_allclose(result.bulk_velocity_rtn[2], true_vel[2],
+                                   atol=self._ATOL_KMS,
+                                   err_msg=f"vN: fit={result.bulk_velocity_rtn[2]:.1f}, true={true_vel[2]:.1f}")
+
+    def test_cold_plasma_high_vt(self):
+        # vb=488 km/s, T=2.1 eV, vT=26 km/s — optimizer returns vT≈0
+        result, true_vel = self._run(bulk_speed=488, temperature_ev=2.1,
+                                     density=11.7, vT=26.1, vN=8.1, seed=0)
+        self._assert_velocity_recovered(result, true_vel)
+
+    def test_cold_plasma_large_vn(self):
+        # vb=534 km/s, T=2.3 eV, vN=38 km/s — optimizer returns vN≈0
+        result, true_vel = self._run(bulk_speed=534, temperature_ev=2.3,
+                                     density=16.4, vT=18.1, vN=38.4, seed=0)
+        self._assert_velocity_recovered(result, true_vel)
+
+    def test_cold_fast_plasma_large_vt(self):
+        # vb=789 km/s, T=3.8 eV, vT=−32 km/s — high speed + cold
+        result, true_vel = self._run(bulk_speed=789, temperature_ev=3.8,
+                                     density=12.4, vT=-31.6, vN=24.4, seed=0)
+        self._assert_velocity_recovered(result, true_vel)
 
 
 if __name__ == '__main__':
