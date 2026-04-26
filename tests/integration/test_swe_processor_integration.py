@@ -58,10 +58,10 @@ class SweProcessorIntegration(unittest.TestCase):
         if expected_file_path.parent.exists():
             expected_file_path.unlink(missing_ok=True)
 
-        input_files = []
-        for file in Path("tests/integration/test_data/swe").iterdir():
-            if file.is_file():
-                input_files.append(file)
+        input_files = [f for f in Path("tests/integration/test_data/swe").iterdir() if f.is_file()]
+        # pck00011.tpc and imap_130.tf were moved to the shared SPICE dir; pull them in here.
+        spice_dir = Path("tests/integration/test_data/spice")
+        input_files += [spice_dir / "pck00011.tpc", spice_dir / "imap_130.tf"]
         os.environ["IMAP_DATA_DIR"] = str(OUTPUT_DATA_DIR)
         with mock_imap_data_access(OUTPUT_DATA_DIR, input_files):
             result = subprocess.run(

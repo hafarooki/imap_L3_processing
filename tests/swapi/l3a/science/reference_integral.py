@@ -1,174 +1,155 @@
 """
-Numpy reference implementation of the SWAPI proton solar wind integral.
+Numba reference for the SWAPI proton solar wind integral with fixed limits.
+Mirrors the math in docs/swapi/solar-wind-moments.md.
 
-Used by unit/integration tests and the integration_benchmark script to validate
-the numba optimized implementation in calculate_proton_solar_wind_moments.py.
+  * ``reference_integral_fixed_limits(grid, sw)`` — single sample.
+  * ``reference_integrals_batch(grids, sws)``     — parallel across samples.
+
+Fixed integration grid:
+  elevation:  -15 to 15 deg @ 0.1° (301 pts)
+  azimuth SG: -20 to 20 deg @ 0.1° (401 pts)
+  azimuth OA: 0.1° in transition |az| ∈ [20, 30], 1° to ±150° (221 pts/side)
+              — split at the |az| < 20° dead band so trapezoid doesn't
+                bridge the gap.
+  speed:      50 samples from 0.9 to 1.1 × central_speed
 """
 import math
 
 import numpy as np
-
-from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    _get_angular_limits,
-)
-from imap_l3_processing.swapi.l3a.science.swapi_response import (
-    eval_boundary_min,
-    eval_boundary_max,
-)
-
-_N_DEFAULT = 200
-
-# Fixed integration limits covering the full passband.
-# OA azimuth is sampled at 0.1 deg in [|az|=20,30] (the SG/OA transition region where
-# transmission rises by ~5 orders of magnitude) and 1 deg from there to ±150.
-_EL_FIXED = np.linspace(-15.0, 15.0, 301)           # 0.1 deg
-_AZ_SG_FIXED = np.linspace(-20.0, 20.0, 401)        # 0.1 deg
-_AZ_OA_POS_FIXED = np.concatenate([
-    np.linspace(20.0, 30.0, 101),                   # 0.1 deg in transition (101 pts)
-    np.arange(31.0, 151.0, 1.0),                    # 1 deg in bulk (120 pts: 31..150)
-])
-_AZ_OA_NEG_FIXED = np.concatenate([
-    np.arange(-150.0, -30.0, 1.0),                  # 1 deg in bulk (120 pts: -150..-31)
-    np.linspace(-30.0, -20.0, 101),                 # 0.1 deg in transition (101 pts)
-])
-_N_SP_FIXED = 50
+from numba import njit, prange
 
 
-def passband_np(grid, is_sg, el_arr, sp_arr):
-    """Bilinear interpolation of the passband grid. Returns shape (len(el_arr), len(sp_arr))."""
-    gv = grid.values_sunglasses if is_sg else grid.values_open_aperture
-    i = (el_arr[:, None] - grid.min_elevation) / grid.elevation_spacing
-    j = (sp_arr[None, :] / grid.central_speed - grid.min_speed_ratio) / grid.speed_ratio_spacing
-    mask = (i >= 0) & (i + 1 < gv.shape[0]) & (j >= 0) & (j + 1 < gv.shape[1])
-    i0 = np.clip(i.astype(int), 0, gv.shape[0] - 2)
-    j0 = np.clip(j.astype(int), 0, gv.shape[1] - 2)
+_EL = np.linspace(-15.0, 15.0, 301)
+_AZ_SG = np.linspace(-20.0, 20.0, 401)
+_AZ_OA_NEG = np.concatenate([np.arange(-150.0, -30.0, 1.0), np.linspace(-30.0, -20.0, 101)])
+_AZ_OA_POS = np.concatenate([np.linspace(20.0, 30.0, 101), np.arange(31.0, 151.0, 1.0)])
+_SP_RATIO = np.linspace(0.9, 1.1, 50)
+
+
+def _trap_weights(x):
+    """Per-point trapezoid weights on a 1-D grid (handles non-uniform spacing)."""
+    w = np.empty_like(x)
+    w[0] = 0.5 * (x[1] - x[0])
+    w[-1] = 0.5 * (x[-1] - x[-2])
+    w[1:-1] = 0.5 * (x[2:] - x[:-2])
+    return w
+
+
+_EL_W = _trap_weights(_EL)
+_AZ_SG_W = _trap_weights(_AZ_SG)
+_AZ_OA_NEG_W = _trap_weights(_AZ_OA_NEG)
+_AZ_OA_POS_W = _trap_weights(_AZ_OA_POS)
+_SP_RATIO_W = _trap_weights(_SP_RATIO)
+
+
+@njit(fastmath=True, inline='always')
+def _passband(gv, min_el, el_sp, min_r, r_sp, vc, el, v):
+    i = (el - min_el) / el_sp
+    j = (v / vc - min_r) / r_sp
+    if i < 0 or i + 1 >= gv.shape[0] or j < 0 or j + 1 >= gv.shape[1]:
+        return 0.0
+    i0, j0 = int(i), int(j)
     wi, wj = i - i0, j - j0
-    return np.where(
-        mask,
-        (1 - wi) * ((1 - wj) * gv[i0, j0] + wj * gv[i0, j0 + 1])
-        + wi * ((1 - wj) * gv[i0 + 1, j0] + wj * gv[i0 + 1, j0 + 1]),
-        0.0,
+    return ((1 - wi) * ((1 - wj) * gv[i0, j0] + wj * gv[i0, j0 + 1])
+            + wi * ((1 - wj) * gv[i0 + 1, j0] + wj * gv[i0 + 1, j0 + 1]))
+
+
+@njit(fastmath=True, inline='always')
+def _trans(t, t_sp, az):
+    f = abs((az + 180.0) % 360.0 - 180.0) / t_sp
+    n = t.shape[0]
+    i0 = int(f)
+    if i0 < 0:
+        i0 = 0
+    elif i0 >= n:
+        i0 = n - 1
+    i1 = i0 + 1 if i0 + 1 < n else n - 1
+    return t[i0] * (i1 - f) + t[i1] * (f - i0)
+
+
+@njit(fastmath=True)
+def _region(gv, gv_norm, density, bulk_v, bulk_az, sin_be, cos_be, th, vc, ca,
+            t, t_sp, min_el, el_sp, min_r, r_sp,
+            el, ew, az, aw, sp, spw):
+    if gv_norm <= 0.0:
+        return 0.0
+    inv_2th2 = 1.0 / (2.0 * th * th)
+    total = 0.0
+    for i in range(el.shape[0]):
+        sin_el = math.sin(math.radians(el[i]))
+        cos_el = math.cos(math.radians(el[i]))
+        for j in range(az.shape[0]):
+            cos_alpha = sin_be * sin_el + cos_be * cos_el * math.cos(math.radians(az[j] - bulk_az))
+            tr = _trans(t, t_sp, az[j])
+            for k in range(sp.shape[0]):
+                v = sp[k]
+                pb = _passband(gv, min_el, el_sp, min_r, r_sp, vc, el[i], v)
+                integrand = (cos_el * tr * pb * v * v * v / gv_norm
+                             * math.exp(-(v * v + bulk_v * bulk_v - 2 * v * bulk_v * cos_alpha) * inv_2th2))
+                total += ew[i] * aw[j] * spw[k] * integrand
+    pre = ca * density * (math.sqrt(2.0 * math.pi) * th) ** -3 * 1e5 * (math.pi / 180.0) ** 2
+    return total * pre
+
+
+@njit(parallel=True, fastmath=True)
+def _batch(sg, oa, vc, ca, density, bulk_v, bulk_az, bulk_el, th,
+           t, t_sp, min_el, el_sp, min_r, r_sp,
+           el, ew, az_sg, az_sg_w, az_oa_neg, az_oa_neg_w, az_oa_pos, az_oa_pos_w,
+           sp_ratio, sp_ratio_w):
+    n = vc.shape[0]
+    out = np.empty(n)
+    for i in prange(n):
+        sin_be = math.sin(math.radians(bulk_el[i]))
+        cos_be = math.cos(math.radians(bulk_el[i]))
+        sp = sp_ratio * vc[i]
+        spw = sp_ratio_w * vc[i]
+        sg_norm = _passband(sg[i], min_el, el_sp, min_r, r_sp, vc[i], 0.0, vc[i])
+        oa_norm = _passband(oa[i], min_el, el_sp, min_r, r_sp, vc[i], 0.0, vc[i])
+        args = (density[i], bulk_v[i], bulk_az[i], sin_be, cos_be, th[i], vc[i], ca[i],
+                t, t_sp, min_el, el_sp, min_r, r_sp, el, ew)
+        out[i] = (_region(sg[i], sg_norm, *args, az_sg, az_sg_w, sp, spw)
+                  + _region(oa[i], oa_norm, *args, az_oa_neg, az_oa_neg_w, sp, spw)
+                  + _region(oa[i], oa_norm, *args, az_oa_pos, az_oa_pos_w, sp, spw))
+    return out
+
+
+def reference_integrals_batch(grids, sws):
+    """Compute N reference integrals in parallel via numba JIT."""
+    n = len(sws)
+    if n == 0:
+        return np.empty(0)
+    nel, nsp = grids[0].values_sunglasses.shape
+    sg = np.empty((n, nel, nsp))
+    oa = np.empty((n, nel, nsp))
+    vc = np.empty(n)
+    ca = np.empty(n)
+    density = np.empty(n)
+    bv = np.empty(n)
+    ba = np.empty(n)
+    be = np.empty(n)
+    th = np.empty(n)
+    for i in range(n):
+        sg[i] = grids[i].values_sunglasses
+        oa[i] = grids[i].values_open_aperture
+        vc[i] = grids[i].central_speed
+        ca[i] = grids[i].central_effective_area
+        density[i] = sws[i].density
+        bv[i] = sws[i].bulk_speed
+        ba[i] = sws[i].bulk_azimuth
+        be[i] = sws[i].bulk_elevation
+        th[i] = sws[i].thermal_speed
+    g0 = grids[0]
+    return _batch(
+        sg, oa, vc, ca, density, bv, ba, be, th,
+        np.ascontiguousarray(g0.azimuthal_transmission, dtype=np.float64),
+        float(g0.azimuthal_transmission_spacing),
+        float(g0.min_elevation), float(g0.elevation_spacing),
+        float(g0.min_speed_ratio), float(g0.speed_ratio_spacing),
+        _EL, _EL_W, _AZ_SG, _AZ_SG_W, _AZ_OA_NEG, _AZ_OA_NEG_W,
+        _AZ_OA_POS, _AZ_OA_POS_W, _SP_RATIO, _SP_RATIO_W,
     )
 
 
-def transmission_np(grid, az_arr):
-    az = (az_arr + 180) % 360 - 180
-    i = np.abs(az) / grid.azimuthal_transmission_spacing
-    i0 = np.clip(i.astype(int), 0, len(grid.azimuthal_transmission) - 1)
-    i1 = np.clip(i0 + 1, 0, len(grid.azimuthal_transmission) - 1)
-    return grid.azimuthal_transmission[i0] * (i1 - i) + grid.azimuthal_transmission[i1] * (i - i0)
-
-
 def reference_integral_fixed_limits(grid, sw) -> float:
-    """
-    Ground-truth integral with fixed limits covering the full passband at high resolution.
-
-    Fixed limits (no dynamic clipping):
-      elevation:   -15 to 15 deg   at 0.1 deg  (301 pts)
-      azimuth SG:  -20 to 20 deg   at 0.1 deg  (401 pts)
-      azimuth OA: 0.1 deg in transition |az| ∈ [20, 30], 1 deg in bulk to ±150 (221 pts/side)
-      speed: 50 samples from 0.9 to 1.1 × central_speed
-    """
-    sp = np.linspace(0.9 * grid.central_speed, 1.1 * grid.central_speed, _N_SP_FIXED)
-    sin_be = math.sin(math.radians(sw.bulk_elevation))
-    cos_be = math.cos(math.radians(sw.bulk_elevation))
-
-    count_rate = 0.0
-    for is_sg, az in [(True, _AZ_SG_FIXED), (False, _AZ_OA_NEG_FIXED), (False, _AZ_OA_POS_FIXED)]:
-        passband_norm = float(passband_np(grid, is_sg, np.array([0.0]), np.array([grid.central_speed]))[0, 0])
-        if passband_norm == 0.0:
-            continue
-
-        el = _EL_FIXED
-        cos_el = np.cos(np.radians(el))
-        sin_el = np.sin(np.radians(el))
-        trans = transmission_np(grid, az)
-        pb_sp3 = passband_np(grid, is_sg, el, sp) * sp[None, :] ** 3 / passband_norm
-        cos_alpha = (
-            sin_be * sin_el[:, None]
-            + cos_be * cos_el[:, None] * np.cos(np.radians(az[None, :] - sw.bulk_azimuth))
-        )  # (n_el, n_az)
-        exp_vals = np.exp(
-            -(sp[None, None, :] ** 2 + sw.bulk_speed ** 2
-              - 2 * sp[None, None, :] * sw.bulk_speed * cos_alpha[:, :, None])
-            / (2 * sw.thermal_speed ** 2)
-        )  # (n_el, n_az, n_sp)
-
-        integrand = cos_el[:, None, None] * trans[None, :, None] * pb_sp3[:, None, :] * exp_vals
-        count_rate += (
-            np.trapezoid(np.trapezoid(np.trapezoid(integrand, sp, axis=2), az, axis=1), el, axis=0)
-            * grid.central_effective_area * sw.density
-            * (np.sqrt(2 * np.pi) * sw.thermal_speed) ** -3
-            * 1e5 * (math.pi / 180) ** 2
-        )
-
-    return float(count_rate)
-
-
-def integral(grid, sw, n_el=_N_DEFAULT, n_az_sg=_N_DEFAULT, n_az_oa=_N_DEFAULT, n_sp=_N_DEFAULT):
-    """Triple trapezoid integral matching the optimized calculate_integral logic but with arbitrary resolution."""
-    sin_be = math.sin(math.radians(sw.bulk_elevation))
-    cos_be = math.cos(math.radians(sw.bulk_elevation))
-
-    maxw_lo = sw.bulk_speed - 5 * sw.thermal_speed
-    maxw_hi = sw.bulk_speed + 5 * sw.thermal_speed
-
-    count_rate = 0.0
-    for region in (0, -1, 1):
-        is_sg = region == 0
-        min_el, max_el, min_az, max_az = _get_angular_limits(sw, region, grid)
-        if max_el <= min_el or max_az <= min_az:
-            continue
-
-        passband_norm = float(passband_np(grid, is_sg, np.array([0.0]), np.array([grid.central_speed]))[0, 0])
-        if passband_norm == 0.0:
-            continue
-
-        n_az = n_az_sg if is_sg else n_az_oa
-        el = np.linspace(min_el, max_el, n_el)
-        az = np.linspace(min_az, max_az, n_az)
-
-        bnd_lo = grid.min_SG_boundary if is_sg else grid.min_OA_boundary
-        bnd_hi = grid.max_SG_boundary if is_sg else grid.max_OA_boundary
-        pb_lo = grid.central_speed * eval_boundary_min(bnd_lo, el)
-        pb_hi = grid.central_speed * eval_boundary_max(bnd_hi, el)
-        v_lo = np.maximum(pb_lo, maxw_lo)
-        v_hi = np.minimum(pb_hi, maxw_hi)
-        v_hi = np.where(v_hi < v_lo, v_lo, v_hi)
-        # speeds[i, :] = linspace(v_lo[i], v_hi[i], n_sp)
-        t = np.linspace(0.0, 1.0, n_sp)
-        sp = v_lo[:, None] + (v_hi - v_lo)[:, None] * t[None, :]  # shape (n_el, n_sp)
-
-        cos_el = np.cos(np.radians(el))
-        sin_el = np.sin(np.radians(el))
-        trans = transmission_np(grid, az)
-        # passband_np expects 1D el, 1D sp; per-elevation sp means we evaluate row-by-row
-        pb_sp3 = np.empty((n_el, n_sp))
-        for i in range(n_el):
-            pb_sp3[i] = passband_np(grid, is_sg, el[i:i + 1], sp[i])[0] * sp[i] ** 3 / passband_norm
-        cos_alpha = (
-            sin_be * sin_el[:, None]
-            + cos_be * cos_el[:, None] * np.cos(np.radians(az[None, :] - sw.bulk_azimuth))
-        )
-        exp_vals = np.exp(
-            -(sp[:, None, :] ** 2 + sw.bulk_speed ** 2
-              - 2 * sp[:, None, :] * sw.bulk_speed * cos_alpha[:, :, None])
-            / (2 * sw.thermal_speed ** 2)
-        )
-
-        integrand = cos_el[:, None, None] * trans[None, :, None] * pb_sp3[:, None, :] * exp_vals
-        # Trapezoid in v with per-elevation x; then in az; then in el
-        # speed integral per (el, az): integrate integrand[i, j, :] over sp[i]
-        speed_integral = np.empty((n_el, n_az))
-        for i in range(n_el):
-            speed_integral[i] = np.trapezoid(integrand[i], sp[i], axis=-1)
-        az_integral = np.trapezoid(speed_integral, az, axis=1)
-        count_rate_region = (
-            np.trapezoid(az_integral, el)
-            * grid.central_effective_area * sw.density
-            * (np.sqrt(2 * np.pi) * sw.thermal_speed) ** -3
-            * 1e5 * (math.pi / 180) ** 2
-        )
-        count_rate += count_rate_region
-
-    return count_rate
+    """Single-sample ground truth (delegates to the parallel batch)."""
+    return float(reference_integrals_batch([grid], [sw])[0])

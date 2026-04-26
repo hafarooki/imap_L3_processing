@@ -2,18 +2,6 @@
   {
     "type": "ancillary",
     "files": [
-      "imap_swapi_clock-angle-and-flow-deflection-lut_20240918_v003.dat"
-    ]
-  },
-  {
-    "type": "ancillary",
-    "files": [
-      "imap_swapi_proton-density-temperature-lut_20240905_v002.dat"
-    ]
-  },
-  {
-    "type": "ancillary",
-    "files": [
       "imap_swapi_efficiency-lut_20241020_v001.dat"
     ]
   },

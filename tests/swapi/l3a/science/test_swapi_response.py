@@ -11,11 +11,11 @@ from imap_l3_processing.swapi.l3a.science.swapi_response import (
 from tests.test_helpers import get_test_instrument_team_data_path
 
 AZIMUTHAL_TRANSMISSION_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_azimuthal_transmission.csv")
+    "swapi/imap_swapi_proton-sw-azimuthal-transmission_20260425_v001.csv")
 CENTRAL_EFFECTIVE_AREA_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_central_effective_area.csv")
+    "swapi/imap_swapi_proton-sw-central-effective-area_20260425_v001.csv")
 PASSBAND_FIT_COEFFICIENTS_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_passband_fit_coefficients.csv")
+    "swapi/imap_swapi_proton-sw-passband-fit-coefficients_20260425_v001.csv")
 
 
 class TestSWAPIResponseFromFiles(unittest.TestCase):

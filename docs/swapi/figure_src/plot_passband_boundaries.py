@@ -63,9 +63,9 @@ def _plot_passband(ax, grid, values, bnd_min, bnd_max, label):
 
 def main():
     swapi_response = SWAPIResponse.from_files(
-        _INSTRUMENT_DATA / "imap_swapi_azimuthal_transmission.csv",
-        _INSTRUMENT_DATA / "imap_swapi_central_effective_area.csv",
-        _INSTRUMENT_DATA / "imap_swapi_passband_fit_coefficients.csv",
+        _INSTRUMENT_DATA / "imap_swapi_proton-sw-azimuthal-transmission_20260425_v001.csv",
+        _INSTRUMENT_DATA / "imap_swapi_proton-sw-central-effective-area_20260425_v001.csv",
+        _INSTRUMENT_DATA / "imap_swapi_proton-sw-passband-fit-coefficients_20260425_v001.csv",
     )
 
     all_limits = swapi_response.passband_esa_voltage_limits

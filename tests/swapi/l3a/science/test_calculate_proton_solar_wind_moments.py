@@ -29,11 +29,11 @@ from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from tests.test_helpers import get_test_instrument_team_data_path
 
 _AZIMUTHAL_TRANSMISSION_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_azimuthal_transmission.csv")
+    "swapi/imap_swapi_proton-sw-azimuthal-transmission_20260425_v001.csv")
 _CENTRAL_EFFECTIVE_AREA_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_central_effective_area.csv")
+    "swapi/imap_swapi_proton-sw-central-effective-area_20260425_v001.csv")
 _PASSBAND_FIT_COEFFICIENTS_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_passband_fit_coefficients.csv")
+    "swapi/imap_swapi_proton-sw-passband-fit-coefficients_20260425_v001.csv")
 
 
 def _load_swapi_response():
@@ -344,20 +344,30 @@ class TestModelCountRates(unittest.TestCase):
 
 class TestGetInitialGuess(unittest.TestCase):
     """Verify _get_initial_guess recovers bulk speed, temperature, and density from a
-    synthetic Gaussian spectrum, and that V_T=V_N=0 in the initial guess."""
+    synthetic Gaussian spectrum, and that V_T=V_N=0 in the initial guess.
+
+    The synthetic count rate Gaussian uses the *observed* width — the in-quadrature
+    sum of thermal and passband widths — so the test exercises the passband
+    subtraction step in _get_initial_guess."""
 
     def setUp(self):
+        from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
+            PASSBAND_SIGMA_VELOCITY_COEFF,
+        )
         true_bulk_speed = 450.0
         true_thermal_speed = 40.0
         self.true_density = 5.0
         self.true_temperature = (
             PROTON_MASS_KG * (true_thermal_speed * METERS_PER_KILOMETER) ** 2 / PROTON_CHARGE_COULOMBS
         )
+        # Observed sigma_v includes the passband contribution in quadrature
+        sigma_passband_v = PASSBAND_SIGMA_VELOCITY_COEFF * true_bulk_speed
+        observed_sigma_v = float(np.sqrt(true_thermal_speed ** 2 + sigma_passband_v ** 2))
         peak_voltage = _peak_voltage(true_bulk_speed)
         self.voltages = np.geomspace(peak_voltage * 0.5, peak_voltage * 2.0, 62)
         speeds = esa_voltage_to_proton_speed(self.voltages)
         self.count_rate = self.true_density * np.exp(
-            -(speeds - true_bulk_speed) ** 2 / (2 * true_thermal_speed ** 2)
+            -(speeds - true_bulk_speed) ** 2 / (2 * observed_sigma_v ** 2)
         )
         self.rotation_matrices = np.tile(np.eye(3), (len(self.voltages), 1, 1))
         self.true_bulk_speed = true_bulk_speed
@@ -786,8 +796,7 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
         sc_vel = np.zeros(3)
         count_rate = _model_count_rates(5.0, 10.0, np.array([true_speed, 0.0, 0.0]), grids, rot, sc_vel)
 
-        with patch('imap_l3_processing.swapi.l3a.utils.get_rotation_matrices', return_value=rot), \
-             patch('imap_l3_processing.swapi.l3a.utils.get_spacecraft_velocity_rtn', return_value=sc_vel):
+        with patch('imap_l3_processing.swapi.l3a.utils.get_swapi_geometry', return_value=(rot, sc_vel)):
             result = self.fit(count_rate, voltages, times, sr)
 
         self.assertIsInstance(result, ProtonSolarWindMoments)
@@ -817,8 +826,10 @@ class TestGetInitialGuessCurveFitFailure(unittest.TestCase):
         peak_idx = int(np.nanargmax(count_rate))
         expected_speed = float(esa_voltage_to_proton_speed(voltages[peak_idx]))
         np.testing.assert_allclose(result.bulk_velocity_rtn[0], expected_speed, rtol=0.01)
-        expected_temperature = float(PROTON_MASS_KG * (50.0 * METERS_PER_KILOMETER) ** 2 / PROTON_CHARGE_COULOMBS)
-        np.testing.assert_allclose(result.temperature, expected_temperature, rtol=1e-6)
+        # The temperature is passband-subtracted with bulk_speed from the peak-bin voltage
+        # (which is at 0.5x peak voltage for count_rate=np.ones(...)), so bulk_speed ~ 190 km/s
+        # and sigma_passband_v ~ 5 km/s, yielding T ~ 25.3 eV (not 26.1 eV without correction)
+        np.testing.assert_allclose(result.temperature, 25.33, atol=0.5)
 
 
 class TestSineFitVelocityRtn(unittest.TestCase):
@@ -846,11 +857,9 @@ class TestSineFitVelocityRtn(unittest.TestCase):
         )
         return fake_energies, fake_spin_angles, fake_sine_fit, R_dps_to_rtn
 
-    # Patch targets for lazy imports inside _sine_fit_velocity_rtn:
-    #   calculate_proton_centers_of_mass and fit_energy_per_charge_peak_variations are
-    #   imported from their source module at call time; patch there so the lazy import
-    #   picks up the mock.
-    _SPEED_MOD = 'imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_speed'
+    # _calculate_proton_centers_of_mass and _fit_energy_per_charge_peak_variations
+    # are private helpers in the moments module; patch them there.
+    _MOMENTS_MOD = 'imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments'
     _GEOM_MOD = 'imap_processing.spice.geometry'
 
     def _run(self, a_val, phi_val, b_val, R_dps_to_rtn=None):
@@ -860,9 +869,9 @@ class TestSineFitVelocityRtn(unittest.TestCase):
         fake_energies = uarray([b_val] * 5, [1.0] * 5)
         fake_spin_angles = [0.0, 72.0, 144.0, 216.0, 288.0]
         fake_fit = ((ufloat(a_val, 1.0), ufloat(phi_val, 1.0), ufloat(b_val, 1.0)), 0.5)
-        with patch(f'{self._SPEED_MOD}.calculate_proton_centers_of_mass',
+        with patch(f'{self._MOMENTS_MOD}._calculate_proton_centers_of_mass',
                    return_value=(fake_energies, fake_spin_angles)), \
-             patch(f'{self._SPEED_MOD}.fit_energy_per_charge_peak_variations',
+             patch(f'{self._MOMENTS_MOD}._fit_energy_per_charge_peak_variations',
                    return_value=fake_fit), \
              patch(f'{self._GEOM_MOD}.get_rotation_matrix', return_value=R_dps_to_rtn), \
              patch('spiceypy.unitim', return_value=0.0):
@@ -1008,6 +1017,8 @@ class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):
             max_OA_boundary=boundary,
             min_SG_boundary=boundary,
             max_SG_boundary=boundary,
+            oa_active_el_range=(-12.0, 10.5),
+            sg_active_el_range=(-10.5, 7.0),
         )
         sw_params = SWParams(density=5.0, bulk_speed=450.0, bulk_azimuth=0.0,
                              bulk_elevation=0.0, thermal_speed=40.0)
@@ -1032,6 +1043,7 @@ class TestInterpolateTransmissionBoundary(unittest.TestCase):
             azimuthal_transmission_spacing=1.0,
             min_OA_boundary=boundary, max_OA_boundary=boundary,
             min_SG_boundary=boundary, max_SG_boundary=boundary,
+            oa_active_el_range=(-12.0, 10.5), sg_active_el_range=(-10.5, 7.0),
         )
 
     def test_azimuth_far_beyond_array_returns_zero(self):
@@ -1062,18 +1074,18 @@ class TestGetAngularLimits(unittest.TestCase):
         cls.grid = sr.create_passband_grid(_peak_voltage(450.0))
 
     def test_sg_elevation_clamped_to_sg_passband_bounds(self):
-        # bulk_elevation outside the SG active range should be clamped to [-11, 7]
+        # bulk_elevation outside the SG active range should be clamped to [-10.5, 7]
         sw = _make_sw_params(bulk_elevation=12.0)
         min_el, max_el, _, _ = _get_angular_limits(sw, 0, self.grid)
-        self.assertGreaterEqual(min_el, -11.0)
+        self.assertGreaterEqual(min_el, -10.5)
         self.assertLessEqual(max_el, 7.0)
 
     def test_oa_elevation_clamped_to_oa_passband_bounds(self):
-        # bulk_elevation outside the OA active range should be clamped to [-12, 10]
+        # bulk_elevation outside the OA active range should be clamped to [-12, 10.5]
         sw = _make_sw_params(bulk_elevation=15.0)
         min_el, max_el, _, _ = _get_angular_limits(sw, 1, self.grid)
         self.assertGreaterEqual(min_el, -12.0)
-        self.assertLessEqual(max_el, 10.0)
+        self.assertLessEqual(max_el, 10.5)
 
     def test_sg_azimuth_limited_to_sg_range(self):
         sw = _make_sw_params(bulk_azimuth=0.0)

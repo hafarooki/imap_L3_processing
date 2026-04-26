@@ -1,6 +1,7 @@
 import numpy as np
+import uncertainties
 from numpy.typing import ArrayLike
-from uncertainties import wrap
+from uncertainties import umath, unumpy, wrap
 from uncertainties.unumpy import nominal_values
 
 from imap_l3_processing.constants import PROTON_CHARGE_COULOMBS, PROTON_MASS_KG, METERS_PER_KILOMETER
@@ -73,3 +74,21 @@ def extract_coarse_sweep(data: np.ndarray):
         return data[:, 1:63]
     else:
         return data[1:63]
+
+
+def calculate_sw_speed(particle_mass, particle_charge, energy):
+    """Energy-per-charge → speed for an ion of given mass/charge. Handles scalars,
+    arrays, and uncertainties.UFloat values."""
+    if np.size(energy) == 0:
+        return np.array([])
+    dimensions = np.asanyarray(energy).ndim
+    if dimensions > 0:
+        if isinstance(np.ravel(energy)[0], uncertainties.UFloat):
+            return unumpy.sqrt(2 * energy * particle_charge / particle_mass) / METERS_PER_KILOMETER
+        return np.sqrt(2 * energy * particle_charge / particle_mass) / METERS_PER_KILOMETER
+    else:
+        return umath.sqrt(2 * energy * particle_charge / particle_mass) / METERS_PER_KILOMETER
+
+
+def calculate_sw_speed_h_plus(energy):
+    return calculate_sw_speed(PROTON_MASS_KG, PROTON_CHARGE_COULOMBS, energy)

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from imap_l3_processing.constants import HE_PUI_PARTICLE_MASS_KG, PUI_PARTICLE_CHARGE_COULOMBS
-from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_speed import calculate_sw_speed
+from imap_l3_processing.swapi.l3a.science.speed_calculation import calculate_sw_speed
 
 
 @dataclass

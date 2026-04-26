@@ -1,11 +1,11 @@
 {
     "test_l3bcde_first_time_processing": "2026-04-23T11:29:03.988077",
-    "test_spectral_fit_against_validation_data": "2026-04-21T10:29:36.521934",
+    "test_spectral_fit_against_validation_data": "2026-04-25T23:05:26.935194",
     "test_calculate_pickup_ions_with_minimize": "2026-04-25T13:46:13.412803",
-    "test_ultra_all_sp_maps": "2026-04-21T10:31:34.017128",
+    "test_ultra_all_sp_maps": "2026-04-25T23:12:23.264011",
     "test_ultra_combined_maps": null,
-    "test_ultra_combined_nsp_maps": "2026-04-17T16:26:43.891642",
-    "test_ultra_combined_sp_maps": "2026-04-17T16:27:01.916825",
+    "test_ultra_combined_nsp_maps": "2026-04-25T23:12:33.393607",
+    "test_ultra_combined_sp_maps": "2026-04-25T23:12:47.140877",
     "test_l3bcde_reprocessing": "2026-04-22T15:51:37.655731",
     "test_glows_l3abcde_from_l2": "2026-04-23T11:41:54.685631"
 }

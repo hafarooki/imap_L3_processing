@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Scatter plot: ground truth vs optimized integral for 1000 random SW conditions.
+Scatter plot: ground truth vs optimized integral for 10000 random SW conditions.
 
 Ground truth: fixed-limit reference integrals from tests/.../reference_integrals.csv
 Optimized:    dynamic-limit integral at the N values defined below
@@ -47,8 +47,14 @@ def main():
     )
 
     df = pd.read_csv(_REFERENCE_INTEGRALS_PATH)
+    df = df[df.integral > 1]  # only consider 1 Hz and above
+
     truths = df['integral'].to_numpy()
     optimized = np.empty(len(df))
+
+    # TODO incorporate background into model instead maybe?
+    optimized = optimized + 1e-1
+    truths = truths + 1e-1
 
     print(f"Computing {len(df)} optimized integrals...")
     for i, row in enumerate(df.itertuples(index=False)):
@@ -81,7 +87,7 @@ def main():
     ax.scatter(truths, optimized, c=colors, s=8, alpha=0.7, linewidths=0)
 
     positive = (truths > 0) & (optimized > 0)
-    lo = 1
+    lo = 1e-1  # background level in https://link.springer.com/article/10.1007/s11214-025-01229-8/figures/29
     hi = max(truths[positive].max(), optimized[positive].max())
     lo, hi = lo / 2, hi * 2
     ax.plot([lo, hi], [lo, hi], 'k--', linewidth=1, label='y = x')

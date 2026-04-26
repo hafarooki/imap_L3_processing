@@ -14,8 +14,82 @@ from imap_l3_processing.constants import (
     METERS_PER_KILOMETER,
     ONE_SECOND_IN_NANOSECONDS,
 )
-from imap_l3_processing.swapi.l3a.science.speed_calculation import esa_voltage_to_proton_speed
+from uncertainties import correlated_values, wrap
+from uncertainties.unumpy import nominal_values, std_devs, uarray
+
+from imap_l3_processing.swapi.l3a.science.speed_calculation import (
+    esa_voltage_to_proton_speed,
+    extract_coarse_sweep,
+    find_peak_center_of_mass_index,
+    get_peak_indices,
+    interpolate_energy,
+)
 from imap_l3_processing.swapi.l3a.science.swapi_response import PassbandGrid, SWAPIResponse
+
+
+# ───────────────────────────── sine-fit initial guess helpers ─────────────────
+# Used by `_sine_fit_velocity_rtn` to produce an initial bulk-velocity vector
+# from per-sweep peak centers of mass before the full optimization runs.
+
+def _sine_fit_function(spin_phase_angle, a, phi, b):
+    return a * np.sin(np.deg2rad(phi - spin_phase_angle)) + b
+
+
+def _fit_energy_per_charge_peak_variations(centers_of_mass, spin_phase_angles):
+    nominal_centers_of_mass = nominal_values(centers_of_mass)
+    min_mass_energy = np.min(nominal_centers_of_mass)
+    max_mass_energy = np.max(nominal_centers_of_mass)
+    peak_angle = nominal_values(spin_phase_angles[np.argmax(centers_of_mass)])
+
+    p0 = [(max_mass_energy - min_mass_energy) / 2, peak_angle + 90, np.mean(nominal_centers_of_mass)]
+    nominal_spin_phase_angles = nominal_values(spin_phase_angles)
+
+    (a, phi, b), pcov = scipy.optimize.curve_fit(
+        _sine_fit_function, nominal_spin_phase_angles, nominal_centers_of_mass,
+        sigma=std_devs(centers_of_mass), bounds=([0, -np.inf, 0], [np.inf, np.inf, np.inf]),
+        absolute_sigma=True, p0=p0,
+    )
+
+    residual = abs(_sine_fit_function(np.array(nominal_spin_phase_angles), a, phi, b) - nominal_centers_of_mass)
+    reduced_chisq = np.sum(np.square(residual / std_devs(centers_of_mass))) / (len(spin_phase_angles) - 3)
+    phi = np.mod(phi, 360)
+    return correlated_values((a, phi, b), pcov), reduced_chisq
+
+
+def _get_proton_peak_indices(count_rates):
+    return get_peak_indices(count_rates, 4)
+
+
+def _get_spin_angle_from_swapi_axis_in_despun_frame(instrument_axis: ndarray) -> float:
+    x, y, _ = instrument_axis
+    return np.mod(np.rad2deg(np.atan2(-1 * x, y)), 360)
+
+
+@wrap
+def _swapi_spin_angle(epoch) -> float:
+    rotation_matrix = spiceypy.pxform(
+        "IMAP_SWAPI", "IMAP_DPS",
+        spiceypy.unitim(epoch / ONE_SECOND_IN_NANOSECONDS, "TT", "ET"),
+    )
+    swapi_axis_in_dps = rotation_matrix @ np.array([0, 0, -1])
+    return _get_spin_angle_from_swapi_axis_in_despun_frame(swapi_axis_in_dps)
+
+
+def _calculate_proton_centers_of_mass(coincidence_count_rates, energies, epoch):
+    energies_at_com = []
+    energies_at_com_unc = []
+    spin_angles_at_com = []
+    measurement_interval = 1 / 6 * ONE_SECOND_IN_NANOSECONDS
+    for i in range(len(epoch)):
+        rates = coincidence_count_rates[i]
+        peak_slice = _get_proton_peak_indices(rates)
+        com_index = find_peak_center_of_mass_index(peak_slice, rates, 13, 4)
+        energy_at_com = interpolate_energy(com_index, energies[i])
+        time_at_com = epoch[i] + measurement_interval * (com_index + 1) + measurement_interval / 2
+        energies_at_com.append(energy_at_com.nominal_value)
+        energies_at_com_unc.append(energy_at_com.std_dev)
+        spin_angles_at_com.append(_swapi_spin_angle(time_at_com))
+    return uarray(energies_at_com, energies_at_com_unc), spin_angles_at_com
 
 
 class SWParams(NamedTuple):
@@ -46,6 +120,17 @@ EPSILON_SG = 1e-6
 # Rearranged for forward model (true rate -> measured rate): g = n / (1 + n*tau)
 SWAPI_DEADTIME_S = 183.7e-9
 
+# Effective passband sigma in velocity space, normalized to the bulk speed.
+# Calibrated by fitting a Gaussian to model count rates at T -> 0 (delta-function
+# beam) across v_b in [300, 700] km/s; sigma_passband_v / v_b is constant to
+# within 3% over that range. Used in `_get_initial_guess` to remove the passband
+# contribution from the fitted spectral width before converting to T.
+PASSBAND_SIGMA_VELOCITY_COEFF = 0.027
+
+# Floor for the initial-guess temperature, applied when the passband-corrected
+# spectral variance is below the value implied by this floor.
+INITIAL_TEMPERATURE_FLOOR_EV = 1.0
+
 
 @dataclass
 class ProtonSolarWindMoments:
@@ -65,11 +150,10 @@ def fit_solar_wind_proton_moments(
     sweep_coarse_energies: ndarray = None,
     sweep_epoch: ndarray = None,
 ) -> ProtonSolarWindMoments:
-    from imap_l3_processing.swapi.l3a.utils import get_rotation_matrices, get_spacecraft_velocity_rtn
+    from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
     # Algorithm described in docs/swapi/solar-wind-moments.md
     # Step 1: Get RTN-to-SWAPI rotation matrices and spacecraft velocity from SPICE
-    rotation_matrices = get_rotation_matrices(measurement_time)
-    spacecraft_velocity_rtn = get_spacecraft_velocity_rtn(measurement_time)
+    rotation_matrices, spacecraft_velocity_rtn = get_swapi_geometry(measurement_time)
 
     # Precompute passband grids (one per measurement) for use in model evaluation
     passband_grids = numba.typed.List([swapi_response.create_passband_grid(v) for v in esa_voltage])
@@ -109,8 +193,15 @@ def _get_initial_guess(
         bulk_speed = speed[peak_idx]
         sigma_v = 50.0
 
+    # The fitted sigma_v sums the thermal width and the passband response width
+    # in quadrature. Subtract the passband contribution before converting to T.
+    sigma_passband_v = PASSBAND_SIGMA_VELOCITY_COEFF * bulk_speed
+    sigma_floor_v = math.sqrt(
+        INITIAL_TEMPERATURE_FLOOR_EV * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG
+    ) / METERS_PER_KILOMETER
+    sigma_thermal_v = math.sqrt(max(sigma_v ** 2 - sigma_passband_v ** 2, sigma_floor_v ** 2))
     temperature = float(
-        PROTON_MASS_KG * (sigma_v * METERS_PER_KILOMETER) ** 2 / PROTON_CHARGE_COULOMBS
+        PROTON_MASS_KG * (sigma_thermal_v * METERS_PER_KILOMETER) ** 2 / PROTON_CHARGE_COULOMBS
     )
 
     # Prefer sine-fit velocity direction when per-sweep coarse data is available;
@@ -156,19 +247,15 @@ def _sine_fit_velocity_rtn(
     Deflection angle theta is estimated geometrically as arcsin(A / 2B), the first-order
     Doppler approximation (A/B ≈ 2*sin(theta) for a narrowly peaked distribution).
     """
-    from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_speed import (
-        calculate_proton_centers_of_mass,
-        fit_energy_per_charge_peak_variations,
-    )
     from imap_processing.spice.geometry import SpiceFrame, get_rotation_matrix
 
     # Get ESA peak energy and corresponding spin-phase for each sweep
-    energies_at_com, spin_angles_at_com = calculate_proton_centers_of_mass(
+    energies_at_com, spin_angles_at_com = _calculate_proton_centers_of_mass(
         coarse_count_rates, coarse_energies, sweep_epoch
     )
 
     # Sine fit: E = A*sin(-psi + phi) + B → (a, phi, b) with uncertainties
-    (a_uval, phi_uval, b_uval), _ = fit_energy_per_charge_peak_variations(
+    (a_uval, phi_uval, b_uval), _ = _fit_energy_per_charge_peak_variations(
         energies_at_com, spin_angles_at_com
     )
     a_val = float(a_uval.nominal_value)    # energy amplitude, eV
@@ -405,17 +492,12 @@ def _get_angular_limits(sw_params: SWParams, region: int, grid: PassbandGrid):
     ))
 
     if region == 0:
-        # SG passband stored at integer elevations in [-10, 6]; bilinear interp extends
-        # the nonzero region by one half-cell to [-11, 7]. Truncating earlier (e.g. at 6.5)
-        # misses cases where bulk_elevation is just outside the SG range — the integrand has
-        # a "second peak" near the top transition cell where the rising Maxwellian (toward
-        # bulk_el) outweighs the falling passband.
-        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, -11.0, 7.0)
+        sg_lo, sg_hi = grid.sg_active_el_range
+        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, sg_lo, sg_hi)
         min_azimuth, max_azimuth = _dynamic_limits(sw_params.bulk_azimuth, angular_width, -20.0, 20.0)
     else:
-        # OA passband stored at integer elevations in [-11, 9]; bilinear interp extends to
-        # [-12, 10] (the el=-12/+10 grid rows are already ~0).
-        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, -12.0, 10.0)
+        oa_lo, oa_hi = grid.oa_active_el_range
+        min_elevation, max_elevation = _dynamic_limits(sw_params.bulk_elevation, angular_width, oa_lo, oa_hi)
         if region == -1:
             min_azimuth, max_azimuth = _dynamic_limits(sw_params.bulk_azimuth, angular_width, -150.0, -20.0)
         else:

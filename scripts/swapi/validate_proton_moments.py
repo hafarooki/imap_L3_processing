@@ -207,9 +207,9 @@ def main():
     print('Loading SWAPI response model...')
     _instrument_data = _THIS_REPO / 'instrument_team_data' / 'swapi'
     swapi_response = SWAPIResponse.from_files(
-        azimuthal_transmission_path=_instrument_data / 'imap_swapi_azimuthal_transmission.csv',
-        central_effective_area_path=_instrument_data / 'imap_swapi_central_effective_area.csv',
-        passband_fit_coefficients_path=_instrument_data / 'imap_swapi_passband_fit_coefficients.csv',
+        azimuthal_transmission_path=_instrument_data / 'imap_swapi_proton-sw-azimuthal-transmission_20260425_v001.csv',
+        central_effective_area_path=_instrument_data / 'imap_swapi_proton-sw-central-effective-area_20260425_v001.csv',
+        passband_fit_coefficients_path=_instrument_data / 'imap_swapi_proton-sw-passband-fit-coefficients_20260425_v001.csv',
     )
 
     print('Precomputing passband grids...')
@@ -499,7 +499,7 @@ def main():
         ax.grid(True, alpha=0.3)
 
     fig.align_ylabels(axes)
-    plt.savefig(out_path, dpi=150)
+    plt.show()
     print(f'Saved plot to {out_path}')
 
 
