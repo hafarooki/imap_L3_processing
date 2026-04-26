@@ -10,13 +10,14 @@
 
 ## TODO
 
-- [ ] Compare with WIND Maxwellian fits (not sure if the OMNI is using moments instead)
-- [ ] Figure out output format for bulk velocity moment
-- [ ] Try Poisson MLE instead of least squares
-- [ ] Validate integration test
-- [ ] Validate unit tests top-bottom
+- [ ] Confirm output format for bulk velocity — currently written as scalar speed + clock angle + deflection angle (with uncertainties); decide if RTN vector components should also be in the CDF
 - [ ] Alphas
+- [ ] clean up/refactor code
+- [ ] Human review: read through unit tests top-to-bottom and verify coverage is meaningful, not just passing (all 167 pass automatically)
+- [ ] Human review: run integration test output through a CDF reader and sanity-check variable names, units, and fill values (test passes automatically)
+- [ ] Remove old SW model from pickup ion code (?)
 - [ ] Dynamic calculation of pickup ion geometric factor?
+- [ ] Try Poisson MLE instead of least squares
 
 
 ## Model
