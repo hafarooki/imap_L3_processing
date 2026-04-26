@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Scatter plots comparing the initial guess and final optimizer output against
-ground truth for 1000 random solar wind parameter sets.
+ground truth for 10000 random solar wind parameter sets.
 
 Uses realistic SWAPI 71-bin science voltage sweep (from the test L2 CDF) with 5
 sweeps per fit — matching the production processor exactly. Synthetic count rates
