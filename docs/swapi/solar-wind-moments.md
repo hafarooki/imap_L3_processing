@@ -133,8 +133,6 @@ The fitted width $\sigma_v$ is used directly as the thermal width (no passband s
 $$\sigma_{\text{thermal}, v} = \max(\sigma_v,\, \sigma_{\text{floor}, v}).$$
 The initial temperature is $T_0 = m_p \sigma_{\text{thermal}, v}^2$.
 
-> **Note on passband subtraction.** An earlier version subtracted the passband width in quadrature: $\sigma_{\text{thermal}}^2 = \max(\sigma_v^2 - \sigma_\text{passband}^2, \sigma_\text{floor}^2)$, with $\sigma_\text{passband}/v_b = 0.027$. Although physically motivated, this overcorrected for cold solar wind ($T \lesssim 5\ \text{eV}$), pushing $T_0$ down to $\sim 1.4\ \text{eV}$ and creating a local minimum at $v_T = v_N = 0$ that the Levenberg–Marquardt optimizer could not escape. Removing the subtraction raises $T_0$ to $3$–$7\ \text{eV}$ for those cases — overestimated, but warm enough for the optimizer to converge correctly on the transverse velocity components.
-
 **Velocity direction** is set to purely anti-sunward, $\mathbf{v}_b^\text{RTN} = (v_b, 0, 0)$. The optimizer in Step 3 recovers the transverse components $v_T$ and $v_N$ from the small spin-phase modulation of the bulk azimuth/elevation in the instrument frame (the spin axis is the SWAPI boresight, so an anti-sunward bulk projects exactly onto $-Y_\text{SWAPI}$ at every spin phase, while non-zero $v_T,\,v_N$ produce a sinusoidal wobble of order $\arcsin(\sqrt{v_T^2+v_N^2}/v_R)$ around that direction).
 
 The initial density is scaled to match the mean observed count rate:
