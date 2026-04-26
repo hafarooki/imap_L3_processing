@@ -5,91 +5,18 @@ from typing import NamedTuple
 import numba
 import numpy as np
 import scipy.optimize
-import spiceypy
 from numpy import ndarray
 
 from imap_l3_processing.constants import (
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
     METERS_PER_KILOMETER,
-    ONE_SECOND_IN_NANOSECONDS,
 )
-from uncertainties import correlated_values, wrap
-from uncertainties.unumpy import nominal_values, std_devs, uarray
 
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     esa_voltage_to_proton_speed,
-    extract_coarse_sweep,
-    find_peak_center_of_mass_index,
-    get_peak_indices,
-    interpolate_energy,
 )
 from imap_l3_processing.swapi.l3a.science.swapi_response import PassbandGrid, SWAPIResponse
-
-
-# ───────────────────────────── sine-fit initial guess helpers ─────────────────
-# Used by `_sine_fit_velocity_rtn` to produce an initial bulk-velocity vector
-# from per-sweep peak centers of mass before the full optimization runs.
-
-def _sine_fit_function(spin_phase_angle, a, phi, b):
-    return a * np.sin(np.deg2rad(phi - spin_phase_angle)) + b
-
-
-def _fit_energy_per_charge_peak_variations(centers_of_mass, spin_phase_angles):
-    nominal_centers_of_mass = nominal_values(centers_of_mass)
-    min_mass_energy = np.min(nominal_centers_of_mass)
-    max_mass_energy = np.max(nominal_centers_of_mass)
-    peak_angle = nominal_values(spin_phase_angles[np.argmax(centers_of_mass)])
-
-    p0 = [(max_mass_energy - min_mass_energy) / 2, peak_angle + 90, np.mean(nominal_centers_of_mass)]
-    nominal_spin_phase_angles = nominal_values(spin_phase_angles)
-
-    (a, phi, b), pcov = scipy.optimize.curve_fit(
-        _sine_fit_function, nominal_spin_phase_angles, nominal_centers_of_mass,
-        sigma=std_devs(centers_of_mass), bounds=([0, -np.inf, 0], [np.inf, np.inf, np.inf]),
-        absolute_sigma=True, p0=p0,
-    )
-
-    residual = abs(_sine_fit_function(np.array(nominal_spin_phase_angles), a, phi, b) - nominal_centers_of_mass)
-    reduced_chisq = np.sum(np.square(residual / std_devs(centers_of_mass))) / (len(spin_phase_angles) - 3)
-    phi = np.mod(phi, 360)
-    return correlated_values((a, phi, b), pcov), reduced_chisq
-
-
-def _get_proton_peak_indices(count_rates):
-    return get_peak_indices(count_rates, 4)
-
-
-def _get_spin_angle_from_swapi_axis_in_despun_frame(instrument_axis: ndarray) -> float:
-    x, y, _ = instrument_axis
-    return np.mod(np.rad2deg(np.atan2(-1 * x, y)), 360)
-
-
-@wrap
-def _swapi_spin_angle(epoch) -> float:
-    rotation_matrix = spiceypy.pxform(
-        "IMAP_SWAPI", "IMAP_DPS",
-        spiceypy.unitim(epoch / ONE_SECOND_IN_NANOSECONDS, "TT", "ET"),
-    )
-    swapi_axis_in_dps = rotation_matrix @ np.array([0, 0, -1])
-    return _get_spin_angle_from_swapi_axis_in_despun_frame(swapi_axis_in_dps)
-
-
-def _calculate_proton_centers_of_mass(coincidence_count_rates, energies, epoch):
-    energies_at_com = []
-    energies_at_com_unc = []
-    spin_angles_at_com = []
-    measurement_interval = 1 / 6 * ONE_SECOND_IN_NANOSECONDS
-    for i in range(len(epoch)):
-        rates = coincidence_count_rates[i]
-        peak_slice = _get_proton_peak_indices(rates)
-        com_index = find_peak_center_of_mass_index(peak_slice, rates, 13, 4)
-        energy_at_com = interpolate_energy(com_index, energies[i])
-        time_at_com = epoch[i] + measurement_interval * (com_index + 1) + measurement_interval / 2
-        energies_at_com.append(energy_at_com.nominal_value)
-        energies_at_com_unc.append(energy_at_com.std_dev)
-        spin_angles_at_com.append(_swapi_spin_angle(time_at_com))
-    return uarray(energies_at_com, energies_at_com_unc), spin_angles_at_com
 
 
 class SWParams(NamedTuple):
@@ -145,10 +72,7 @@ class ProtonSolarWindMoments:
 
 def fit_solar_wind_proton_moments(
     count_rate: ndarray, esa_voltage: ndarray, measurement_time: ndarray,
-    swapi_response: SWAPIResponse,
-    sweep_coarse_count_rates: ndarray = None,
-    sweep_coarse_energies: ndarray = None,
-    sweep_epoch: ndarray = None,
+    swapi_response: SWAPIResponse
 ) -> ProtonSolarWindMoments:
     from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
     # Algorithm described in docs/swapi/solar-wind-moments.md
@@ -158,10 +82,9 @@ def fit_solar_wind_proton_moments(
     # Precompute passband grids (one per measurement) for use in model evaluation
     passband_grids = numba.typed.List([swapi_response.create_passband_grid(v) for v in esa_voltage])
 
-    # Step 2: Initial guess — sine-fit (preferred) or Gaussian fallback
+    # Step 2: Initial guess — Gaussian fit to count rate vs speed, anti-sunward velocity
     initial_guess = _get_initial_guess(
-        count_rate, esa_voltage, passband_grids, rotation_matrices, spacecraft_velocity_rtn,
-        sweep_coarse_count_rates, sweep_coarse_energies, sweep_epoch,
+        count_rate, esa_voltage, passband_grids, rotation_matrices, spacecraft_velocity_rtn
     )
 
     # Step 3: Optimize solar wind parameters to best match model count rate to observed
@@ -174,9 +97,6 @@ def _get_initial_guess(
     passband_grids: numba.typed.List,
     rotation_matrices: ndarray,
     spacecraft_velocity_rtn: ndarray,
-    sweep_coarse_count_rates: ndarray = None,
-    sweep_coarse_energies: ndarray = None,
-    sweep_epoch: ndarray = None,
 ) -> ProtonSolarWindMoments:
     speed = esa_voltage_to_proton_speed(esa_voltage)
 
@@ -204,18 +124,9 @@ def _get_initial_guess(
         PROTON_MASS_KG * (sigma_thermal_v * METERS_PER_KILOMETER) ** 2 / PROTON_CHARGE_COULOMBS
     )
 
-    # Prefer sine-fit velocity direction when per-sweep coarse data is available;
-    # fall back to purely anti-sunward if the sine fit fails for any reason.
-    bulk_velocity_rtn = np.array([bulk_speed, 0.0, 0.0])
-    if (sweep_coarse_count_rates is not None
-            and sweep_coarse_energies is not None
-            and sweep_epoch is not None):
-        try:
-            bulk_velocity_rtn = _sine_fit_velocity_rtn(
-                sweep_coarse_count_rates, sweep_coarse_energies, sweep_epoch
-            )
-        except Exception:
-            pass  # keep anti-sunward fallback
+    # Initial bulk velocity is purely anti-sunward; the optimizer recovers the
+    # transverse components from the spin-phase modulation in the data.
+    bulk_velocity_rtn = np.array([float(bulk_speed), 0.0, 0.0])
 
     # Scale density so that the unit model count rate matches the mean observed count rate
     unit_model = _model_count_rates(
@@ -229,65 +140,6 @@ def _get_initial_guess(
         bulk_velocity_rtn=bulk_velocity_rtn,
         bad_fit_flag=0,
     )
-
-
-def _sine_fit_velocity_rtn(
-    coarse_count_rates: ndarray,  # shape (n_sweeps, n_coarse_bins)
-    coarse_energies: ndarray,     # shape (n_sweeps, n_coarse_bins), eV
-    sweep_epoch: ndarray,         # shape (n_sweeps,), TT2000 ns
-) -> ndarray:                     # shape (3,), bulk velocity in RTN km/s
-    """Estimate initial RTN bulk velocity from the Rankin et al. (2025) sine-fit method.
-
-    Fits E = A*sin(-psi + phi) + B to the ESA peak energy vs spin-phase across sweeps
-    (Eq. 13 of the SWAPI instrument paper), then rotates the resulting direction vector
-    from the IMAP despun frame (DPS) to RTN via SPICE.
-
-    The transverse wind direction in DPS at clock angle phi is (cos(phi), sin(phi), 0)
-    and the dominant anti-sunward component is along -Z_DPS (DPS Z points sunward).
-    Deflection angle theta is estimated geometrically as arcsin(A / 2B), the first-order
-    Doppler approximation (A/B ≈ 2*sin(theta) for a narrowly peaked distribution).
-    """
-    from imap_processing.spice.geometry import SpiceFrame, get_rotation_matrix
-
-    # Get ESA peak energy and corresponding spin-phase for each sweep
-    energies_at_com, spin_angles_at_com = _calculate_proton_centers_of_mass(
-        coarse_count_rates, coarse_energies, sweep_epoch
-    )
-
-    # Sine fit: E = A*sin(-psi + phi) + B → (a, phi, b) with uncertainties
-    (a_uval, phi_uval, b_uval), _ = _fit_energy_per_charge_peak_variations(
-        energies_at_com, spin_angles_at_com
-    )
-    a_val = float(a_uval.nominal_value)    # energy amplitude, eV
-    phi_val = float(phi_uval.nominal_value)  # clock angle in DPS frame, degrees
-    b_val = float(b_uval.nominal_value)    # mean energy, eV
-
-    # Bulk speed from mean energy B: v = sqrt(2*E*e/m_p)
-    v_b = float(
-        np.sqrt(2.0 * b_val * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER
-    )
-
-    # Deflection angle from sinusoidal amplitude ratio (Doppler approximation):
-    # A/B ≈ 2*sin(theta)  →  theta = arcsin(A / 2B)
-    deflection_rad = float(np.arcsin(np.clip(a_val / max(2.0 * b_val, 1e-10), -1.0, 1.0)))
-
-    # Velocity direction in DPS frame.
-    # The transverse component lies along (cos(phi), sin(phi), 0) in DPS X-Y;
-    # the anti-sunward component is along -Z_DPS because DPS Z points sunward.
-    phi_rad = np.radians(phi_val)
-    v_dir_dps = np.array([
-        np.sin(deflection_rad) * np.cos(phi_rad),
-        np.sin(deflection_rad) * np.sin(phi_rad),
-        -np.cos(deflection_rad),
-    ])
-
-    # Rotate DPS → RTN via SPICE at the median sweep epoch
-    median_et = spiceypy.unitim(
-        float(np.median(sweep_epoch)) / ONE_SECOND_IN_NANOSECONDS, "TT", "ET"
-    )
-    R_dps_to_rtn = get_rotation_matrix(median_et, SpiceFrame.IMAP_DPS, SpiceFrame.IMAP_RTN)
-
-    return v_b * (R_dps_to_rtn @ v_dir_dps)
 
 
 @numba.njit(nogil=True)
@@ -465,14 +317,6 @@ def _eval_boundary(grid: PassbandGrid, is_sunglasses, elevation: float, take_min
     if take_min:
         return a if a < b else b
     return a if a > b else b
-
-
-@numba.njit(nogil=True)
-def _polyval(coeffs, x):
-    answer = 0.0
-    for c in coeffs:
-        answer = answer * x + c
-    return answer
 
 
 @numba.njit(nogil=True)

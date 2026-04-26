@@ -9,8 +9,8 @@ from imap_l3_processing.swapi.descriptors import SWAPI_L2_DESCRIPTOR, ALPHA_TEMP
     INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR, DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR, \
     EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR, \
     GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR, HYDROGEN_INFLOW_VECTOR_DESCRIPTOR, HELIUM_INFLOW_VECTOR_DESCRIPTOR, \
-    PROTON_SW_AZIMUTHAL_TRANSMISSION_DESCRIPTOR, PROTON_SW_CENTRAL_EFFECTIVE_AREA_DESCRIPTOR, \
-    PROTON_SW_PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR
+    AZIMUTHAL_TRANSMISSION_DESCRIPTOR, CENTRAL_EFFECTIVE_AREA_DESCRIPTOR, \
+    PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR
 from imap_l3_processing.swapi.l3a.swapi_l3a_dependencies import SwapiL3ADependencies
 
 
@@ -49,9 +49,9 @@ class TestSwapiL3ADependencies(unittest.TestCase):
         swapi_density_of_neutral_helium_lookup = f"{mission}_{instrument}_{DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR}_{start_date}_{version}.cdf"
         swapi_hydrogen_inflow_filename = f"{mission}_{instrument}_{HYDROGEN_INFLOW_VECTOR_DESCRIPTOR}_{start_date}_{version}.cdf"
         swapi_helium_inflow_filename = f"{mission}_{instrument}_{HELIUM_INFLOW_VECTOR_DESCRIPTOR}_{start_date}_{version}.cdf"
-        swapi_azimuthal_transmission_filename = f"{mission}_{instrument}_{PROTON_SW_AZIMUTHAL_TRANSMISSION_DESCRIPTOR}_{start_date}_{version}.csv"
-        swapi_central_effective_area_filename = f"{mission}_{instrument}_{PROTON_SW_CENTRAL_EFFECTIVE_AREA_DESCRIPTOR}_{start_date}_{version}.csv"
-        swapi_passband_fit_coefficients_filename = f"{mission}_{instrument}_{PROTON_SW_PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR}_{start_date}_{version}.csv"
+        swapi_azimuthal_transmission_filename = f"{mission}_{instrument}_{AZIMUTHAL_TRANSMISSION_DESCRIPTOR}_{start_date}_{version}.csv"
+        swapi_central_effective_area_filename = f"{mission}_{instrument}_{CENTRAL_EFFECTIVE_AREA_DESCRIPTOR}_{start_date}_{version}.csv"
+        swapi_passband_fit_coefficients_filename = f"{mission}_{instrument}_{PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR}_{start_date}_{version}.csv"
 
         input_collection.add([
             ScienceInput(swapi_science_file_download_path),
@@ -124,9 +124,9 @@ class TestSwapiL3ADependencies(unittest.TestCase):
         helium = Path("imap_swapi_density-of-neutral-helium-lut_20100105_v010.cdf")
         h_vec = Path("imap_swapi_hydrogen-inflow-vector_20100105_v010.dat")
         he_vec = Path("imap_swapi_helium-inflow-vector_20100105_v010.dat")
-        az = Path("imap_swapi_proton-sw-azimuthal-transmission_20100105_v010.csv")
-        ea = Path("imap_swapi_proton-sw-central-effective-area_20100105_v010.csv")
-        pb = Path("imap_swapi_proton-sw-passband-fit-coefficients_20100105_v010.csv")
+        az = Path("imap_swapi_azimuthal-transmission_20100105_v010.csv")
+        ea = Path("imap_swapi_central-effective-area_20100105_v010.csv")
+        pb = Path("imap_swapi_passband-fit-coefficients_20100105_v010.csv")
 
         mock_read_l2_swapi.return_value = sentinel.swapi_l2_data
         mock_alpha_temp_from_file.return_value = sentinel.alpha_temp_data

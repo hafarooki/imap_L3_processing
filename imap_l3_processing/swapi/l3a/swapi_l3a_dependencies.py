@@ -9,8 +9,8 @@ from imap_l3_processing.swapi.descriptors import SWAPI_L2_DESCRIPTOR, \
     ALPHA_TEMPERATURE_DENSITY_LOOKUP_TABLE_DESCRIPTOR, \
     GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR, INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR, \
     DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR, EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR, HYDROGEN_INFLOW_VECTOR_DESCRIPTOR, \
-    HELIUM_INFLOW_VECTOR_DESCRIPTOR, PROTON_SW_AZIMUTHAL_TRANSMISSION_DESCRIPTOR, \
-    PROTON_SW_CENTRAL_EFFECTIVE_AREA_DESCRIPTOR, PROTON_SW_PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR
+    HELIUM_INFLOW_VECTOR_DESCRIPTOR, AZIMUTHAL_TRANSMISSION_DESCRIPTOR, \
+    CENTRAL_EFFECTIVE_AREA_DESCRIPTOR, PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_temperature_and_density import \
     AlphaTemperatureDensityCalibrationTable
@@ -48,9 +48,9 @@ class SwapiL3ADependencies:
         neutral_helium_table = dependencies.get_file_paths(source='swapi', descriptor=DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR)
         hydrogen_vector_paths = dependencies.get_file_paths(source='swapi', descriptor=HYDROGEN_INFLOW_VECTOR_DESCRIPTOR)
         helium_vector_paths = dependencies.get_file_paths(source='swapi', descriptor=HELIUM_INFLOW_VECTOR_DESCRIPTOR)
-        azimuthal_transmission_paths = dependencies.get_file_paths(source='swapi', descriptor=PROTON_SW_AZIMUTHAL_TRANSMISSION_DESCRIPTOR)
-        central_effective_area_paths = dependencies.get_file_paths(source='swapi', descriptor=PROTON_SW_CENTRAL_EFFECTIVE_AREA_DESCRIPTOR)
-        passband_fit_coefficients_paths = dependencies.get_file_paths(source='swapi', descriptor=PROTON_SW_PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR)
+        azimuthal_transmission_paths = dependencies.get_file_paths(source='swapi', descriptor=AZIMUTHAL_TRANSMISSION_DESCRIPTOR)
+        central_effective_area_paths = dependencies.get_file_paths(source='swapi', descriptor=CENTRAL_EFFECTIVE_AREA_DESCRIPTOR)
+        passband_fit_coefficients_paths = dependencies.get_file_paths(source='swapi', descriptor=PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR)
         # @formatter:on
 
         return cls.from_file_paths(

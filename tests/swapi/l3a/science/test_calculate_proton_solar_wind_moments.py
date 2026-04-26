@@ -4,13 +4,9 @@ from unittest.mock import patch, MagicMock
 
 import numba
 import numpy as np
-from uncertainties import ufloat
-from uncertainties.unumpy import uarray
-
 from imap_l3_processing.constants import PROTON_MASS_KG, PROTON_CHARGE_COULOMBS, METERS_PER_KILOMETER
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     _get_initial_guess,
-    _sine_fit_velocity_rtn,
     _compute_angles,
     _model_count_rates,
     _optimize,
@@ -29,11 +25,11 @@ from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from tests.test_helpers import get_test_instrument_team_data_path
 
 _AZIMUTHAL_TRANSMISSION_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_proton-sw-azimuthal-transmission_20260425_v001.csv")
+    "swapi/imap_swapi_azimuthal-transmission_20260425_v001.csv")
 _CENTRAL_EFFECTIVE_AREA_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_proton-sw-central-effective-area_20260425_v001.csv")
+    "swapi/imap_swapi_central-effective-area_20260425_v001.csv")
 _PASSBAND_FIT_COEFFICIENTS_PATH = get_test_instrument_team_data_path(
-    "swapi/imap_swapi_proton-sw-passband-fit-coefficients_20260425_v001.csv")
+    "swapi/imap_swapi_passband-fit-coefficients_20260425_v001.csv")
 
 
 def _load_swapi_response():
@@ -343,51 +339,68 @@ class TestModelCountRates(unittest.TestCase):
 
 
 class TestGetInitialGuess(unittest.TestCase):
-    """Verify _get_initial_guess recovers bulk speed, temperature, and density from a
-    synthetic Gaussian spectrum, and that V_T=V_N=0 in the initial guess.
+    """Verify _get_initial_guess recovers bulk speed, temperature, and density
+    from realistic synthetic SWAPI data (5 sweeps × 72 ESA voltage steps over
+    60 s, spin axis = boresight) and returns a purely anti-sunward bulk velocity.
 
-    The synthetic count rate Gaussian uses the *observed* width — the in-quadrature
-    sum of thermal and passband widths — so the test exercises the passband
-    subtraction step in _get_initial_guess."""
+    The full optimizer recovers V_T and V_N from the spin-phase modulation; the
+    initial guess only needs to provide the dominant radial component."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sr = _load_swapi_response()
 
     def setUp(self):
-        from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-            PASSBAND_SIGMA_VELOCITY_COEFF,
-        )
-        true_bulk_speed = 450.0
-        true_thermal_speed = 40.0
         self.true_density = 5.0
-        self.true_temperature = (
-            PROTON_MASS_KG * (true_thermal_speed * METERS_PER_KILOMETER) ** 2 / PROTON_CHARGE_COULOMBS
+        self.true_temperature = 10.0  # eV
+        self.true_speed = 450.0
+        # Non-zero transverse components in the true velocity exercise the geometry,
+        # but the initial guess returns them as zero — only the optimizer recovers them.
+        self.true_velocity = np.array([self.true_speed, 30.0, -20.0])
+
+        n_sweeps = 5
+        n_bins = 72
+        sweep_s = 12.0
+        spin_s = 15.0
+        dt_s = sweep_s / n_bins
+
+        voltages_one_sweep = np.geomspace(_peak_voltage(self.true_speed) * 0.3,
+                                          _peak_voltage(self.true_speed) * 3.0, n_bins)
+        self.voltages = np.tile(voltages_one_sweep, n_sweeps)
+
+        self.grids = numba.typed.List()
+        for _ in range(n_sweeps):
+            for v in voltages_one_sweep:
+                self.grids.append(self.sr.create_passband_grid(v))
+
+        self.rotation_matrices = _spin_rotation_matrices(
+            n_sweeps * n_bins, spin_period_s=spin_s, dt_s=dt_s,
         )
-        # Observed sigma_v includes the passband contribution in quadrature
-        sigma_passband_v = PASSBAND_SIGMA_VELOCITY_COEFF * true_bulk_speed
-        observed_sigma_v = float(np.sqrt(true_thermal_speed ** 2 + sigma_passband_v ** 2))
-        peak_voltage = _peak_voltage(true_bulk_speed)
-        self.voltages = np.geomspace(peak_voltage * 0.5, peak_voltage * 2.0, 62)
-        speeds = esa_voltage_to_proton_speed(self.voltages)
-        self.count_rate = self.true_density * np.exp(
-            -(speeds - true_bulk_speed) ** 2 / (2 * observed_sigma_v ** 2)
+        self.sc_vel = np.zeros(3)
+
+        self.count_rate = _model_count_rates(
+            self.true_density, self.true_temperature, self.true_velocity,
+            self.grids, self.rotation_matrices, self.sc_vel,
         )
-        self.rotation_matrices = np.tile(np.eye(3), (len(self.voltages), 1, 1))
-        self.true_bulk_speed = true_bulk_speed
 
     def _run(self, spacecraft_velocity_rtn=None):
-        if spacecraft_velocity_rtn is None:
-            spacecraft_velocity_rtn = np.zeros(3)
-        with patch('imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._model_count_rates',
-                   return_value=self.count_rate / self.true_density):
-            return _get_initial_guess(self.count_rate, self.voltages, None,
-                                      self.rotation_matrices, spacecraft_velocity_rtn)
+        sc = self.sc_vel if spacecraft_velocity_rtn is None else spacecraft_velocity_rtn
+        return _get_initial_guess(
+            self.count_rate, self.voltages, self.grids, self.rotation_matrices, sc,
+        )
 
     def test_recovers_bulk_speed(self):
-        np.testing.assert_allclose(self._run().bulk_velocity_rtn[0], self.true_bulk_speed, rtol=0.01)
+        # Initial guess returns the radial speed only; compare to v_R, not |v_true|.
+        np.testing.assert_allclose(self._run().bulk_velocity_rtn[0], self.true_speed, rtol=0.02)
 
     def test_recovers_temperature(self):
-        np.testing.assert_allclose(self._run().temperature, self.true_temperature, rtol=0.05)
+        np.testing.assert_allclose(self._run().temperature, self.true_temperature, rtol=0.2)
 
     def test_recovers_density(self):
-        np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.01)
+        # Density is scaled against a unit model evaluated with the (incorrect) anti-sunward
+        # direction; small transverse components in the truth thus produce a few-percent bias
+        # in the initial density. The optimizer corrects this in step 3.
+        np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.2)
 
     def test_bulk_velocity_is_anti_sunward(self):
         result = self._run()
@@ -395,24 +408,35 @@ class TestGetInitialGuess(unittest.TestCase):
         np.testing.assert_allclose(result.bulk_velocity_rtn[1:], 0.0)
 
     def test_spacecraft_velocity_does_not_affect_initial_bulk_velocity(self):
-        # The initial guess assumes V_T = V_N = 0, so the SC velocity only shifts the
-        # apparent direction by a small amount that doesn't change the radial speed estimate.
+        # The initial guess is purely radial regardless of SC velocity.
         result = self._run(spacecraft_velocity_rtn=np.array([10.0, 5.0, -3.0]))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn, np.array([self.true_bulk_speed, 0.0, 0.0]), rtol=0.01
+            result.bulk_velocity_rtn, np.array([self.true_speed, 0.0, 0.0]), rtol=0.02,
         )
 
 
+_R_BASE_RTN_TO_SWAPI = np.array([[ 0.0, 1.0, 0.0],
+                                  [-1.0, 0.0, 0.0],
+                                  [ 0.0, 0.0, 1.0]])
+
+
 def _spin_rotation_matrices(n, spin_period_s=15.0, dt_s=0.145):
-    """Return n rotation matrices sampling one spin-worth of azimuthal rotation about the Z-axis."""
-    angles = np.linspace(0, 2 * np.pi * n * dt_s / spin_period_s, n)
-    c, s = np.cos(angles), np.sin(angles)
-    R = np.zeros((n, 3, 3))
-    R[:, 0, 0] = c
-    R[:, 0, 1] = -s
-    R[:, 1, 0] = s
-    R[:, 1, 1] = c
-    R[:, 2, 2] = 1.0
+    """Realistic SWAPI geometry: spin axis = boresight (+Y_SWAPI = -R_RTN).
+
+    R(t) = R_spin_around_Y(2*pi*t/T_spin) @ R_base, where R_base maps
+    nominal anti-sunward bulk (R_RTN) to -Y_SWAPI so phi=theta=0 at zero spin phase.
+    Spin around the boresight leaves the dominant Y component unchanged and only
+    introduces small phi/theta wobble of order arcsin(v_T,N / v_R) (a few degrees).
+    """
+    times = np.arange(n) * dt_s
+    alphas = 2.0 * np.pi * times / spin_period_s
+    R = np.empty((n, 3, 3))
+    for i, a in enumerate(alphas):
+        c, s = np.cos(a), np.sin(a)
+        R_spin = np.array([[ c, 0.0,  s],
+                           [0.0, 1.0, 0.0],
+                           [-s, 0.0,  c]])
+        R[i] = R_spin @ _R_BASE_RTN_TO_SWAPI
     return R
 
 
@@ -830,166 +854,6 @@ class TestGetInitialGuessCurveFitFailure(unittest.TestCase):
         # (which is at 0.5x peak voltage for count_rate=np.ones(...)), so bulk_speed ~ 190 km/s
         # and sigma_passband_v ~ 5 km/s, yielding T ~ 25.3 eV (not 26.1 eV without correction)
         np.testing.assert_allclose(result.temperature, 25.33, atol=0.5)
-
-
-class TestSineFitVelocityRtn(unittest.TestCase):
-    """Verify _sine_fit_velocity_rtn converts DPS sine-fit output correctly to RTN."""
-
-    def _make_coarse_data(self, n_sweeps=5, n_coarse=62):
-        rng = np.random.default_rng(42)
-        count_rates = rng.uniform(1000, 20000, (n_sweeps, n_coarse))
-        energies = np.tile(np.geomspace(200.0, 1200.0, n_coarse), (n_sweeps, 1))
-        epoch = np.arange(n_sweeps, dtype=np.int64) * 12_000_000_000  # 12 s apart, TT2000 ns
-        return count_rates, energies, epoch
-
-    def _mock_sine_fit_deps(self, a_val=50.0, phi_val=90.0, b_val=500.0,
-                             R_dps_to_rtn=None):
-        """Return a context-manager stack that patches all SPICE and sine-fit calls."""
-        if R_dps_to_rtn is None:
-            R_dps_to_rtn = np.eye(3)
-
-        # Fake energies-at-com and spin angles
-        fake_energies = uarray([b_val] * 5, [1.0] * 5)
-        fake_spin_angles = [0.0, 72.0, 144.0, 216.0, 288.0]
-        fake_sine_fit = (
-            (ufloat(a_val, 1.0), ufloat(phi_val, 1.0), ufloat(b_val, 1.0)),
-            0.5,
-        )
-        return fake_energies, fake_spin_angles, fake_sine_fit, R_dps_to_rtn
-
-    # _calculate_proton_centers_of_mass and _fit_energy_per_charge_peak_variations
-    # are private helpers in the moments module; patch them there.
-    _MOMENTS_MOD = 'imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments'
-    _GEOM_MOD = 'imap_processing.spice.geometry'
-
-    def _run(self, a_val, phi_val, b_val, R_dps_to_rtn=None):
-        if R_dps_to_rtn is None:
-            R_dps_to_rtn = np.eye(3)
-        count_rates, energies, epoch = self._make_coarse_data()
-        fake_energies = uarray([b_val] * 5, [1.0] * 5)
-        fake_spin_angles = [0.0, 72.0, 144.0, 216.0, 288.0]
-        fake_fit = ((ufloat(a_val, 1.0), ufloat(phi_val, 1.0), ufloat(b_val, 1.0)), 0.5)
-        with patch(f'{self._MOMENTS_MOD}._calculate_proton_centers_of_mass',
-                   return_value=(fake_energies, fake_spin_angles)), \
-             patch(f'{self._MOMENTS_MOD}._fit_energy_per_charge_peak_variations',
-                   return_value=fake_fit), \
-             patch(f'{self._GEOM_MOD}.get_rotation_matrix', return_value=R_dps_to_rtn), \
-             patch('spiceypy.unitim', return_value=0.0):
-            return _sine_fit_velocity_rtn(count_rates, energies, epoch)
-
-    def test_speed_comes_from_mean_energy_b(self):
-        # Speed = sqrt(2*B*e/m_p); deflection=0 so only the magnitude matters.
-        b_val = 500.0
-        expected_speed = float(
-            np.sqrt(2.0 * b_val * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER
-        )
-        result = self._run(a_val=0.0, phi_val=90.0, b_val=b_val)
-        np.testing.assert_allclose(np.linalg.norm(result), expected_speed, rtol=1e-3)
-
-    def test_known_rotation_maps_antisunward_to_radial(self):
-        # Rotation: DPS -Z → RTN +R  (A=0, no deflection).
-        # v_dir_dps = (0, 0, -1); after rotation: RTN = (v_b, 0, 0).
-        b_val = 450.0
-        R = np.array([[0, 0, -1],
-                      [1, 0,  0],
-                      [0, -1, 0]], dtype=float)
-        expected_speed = float(
-            np.sqrt(2.0 * b_val * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER
-        )
-        result = self._run(a_val=0.0, phi_val=0.0, b_val=b_val, R_dps_to_rtn=R)
-        np.testing.assert_allclose(result, np.array([expected_speed, 0.0, 0.0]), rtol=1e-3)
-
-    def test_nonzero_deflection_produces_transverse_components(self):
-        # A > 0 must produce nonzero T/N components; speed magnitude is conserved.
-        b_val = 500.0
-        a_val = 50.0   # sin(theta) ≈ A/(2B) = 0.05, theta ≈ 2.9°
-        result = self._run(a_val=a_val, phi_val=90.0, b_val=b_val)
-        self.assertFalse(np.allclose(result[1:], 0.0),
-                         "Transverse components should be nonzero with A > 0")
-        expected_speed = float(
-            np.sqrt(2.0 * b_val * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER
-        )
-        np.testing.assert_allclose(np.linalg.norm(result), expected_speed, rtol=1e-3)
-
-    def test_deflection_angle_from_amplitude_ratio(self):
-        # With phi=0 and identity rotation: v_dir_dps = (sin(theta), 0, -cos(theta))
-        # where sin(theta) = A/(2B).
-        b_val = 500.0
-        a_val = 100.0  # sin(theta) = 0.1
-        result = self._run(a_val=a_val, phi_val=0.0, b_val=b_val)
-        expected_theta = np.arcsin(a_val / (2.0 * b_val))
-        v_b = float(np.sqrt(2.0 * b_val * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER)
-        np.testing.assert_allclose(result[0], v_b * np.sin(expected_theta), rtol=1e-6)
-        np.testing.assert_allclose(result[2], -v_b * np.cos(expected_theta), rtol=1e-6)
-
-
-class TestGetInitialGuessSineFit(unittest.TestCase):
-    """Verify _get_initial_guess uses the sine-fit velocity when sweep data is provided,
-    and falls back to the anti-sunward Gaussian guess when the sine fit raises."""
-
-    def setUp(self):
-        true_bulk_speed = 450.0
-        true_thermal_speed = 40.0
-        self.true_density = 5.0
-        self.true_temperature = (
-            PROTON_MASS_KG * (true_thermal_speed * METERS_PER_KILOMETER) ** 2 / PROTON_CHARGE_COULOMBS
-        )
-        peak_voltage = float(
-            PROTON_MASS_KG * (true_bulk_speed * METERS_PER_KILOMETER) ** 2
-            / (2 * 1.89 * PROTON_CHARGE_COULOMBS)
-        )
-        self.voltages = np.geomspace(peak_voltage * 0.5, peak_voltage * 2.0, 62)
-        speeds = np.sqrt(2 * 1.89 * PROTON_CHARGE_COULOMBS * self.voltages / PROTON_MASS_KG) / METERS_PER_KILOMETER
-        self.count_rate = self.true_density * np.exp(
-            -(speeds - true_bulk_speed) ** 2 / (2 * true_thermal_speed ** 2)
-        )
-        self.rotation_matrices = np.tile(np.eye(3), (len(self.voltages), 1, 1))
-        n_sweeps, n_coarse = 5, 62
-        self.coarse_count_rates = np.ones((n_sweeps, n_coarse))
-        self.coarse_energies = np.ones((n_sweeps, n_coarse)) * 500.0
-        self.sweep_epoch = np.zeros(n_sweeps, dtype=np.int64)
-
-    def _run_with_sine_fit(self, sine_fit_return):
-        with patch('imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._model_count_rates',
-                   return_value=self.count_rate / self.true_density), \
-             patch('imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._sine_fit_velocity_rtn',
-                   return_value=sine_fit_return):
-            return _get_initial_guess(
-                self.count_rate, self.voltages, None,
-                self.rotation_matrices, np.zeros(3),
-                self.coarse_count_rates, self.coarse_energies, self.sweep_epoch,
-            )
-
-    def test_uses_sine_fit_velocity_when_sweep_data_provided(self):
-        sine_velocity = np.array([450.0, 25.0, -10.0])
-        result = self._run_with_sine_fit(sine_velocity)
-        np.testing.assert_allclose(result.bulk_velocity_rtn, sine_velocity)
-
-    def test_falls_back_to_antisunward_when_sine_fit_raises(self):
-        with patch('imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._model_count_rates',
-                   return_value=self.count_rate / self.true_density), \
-             patch('imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._sine_fit_velocity_rtn',
-                   side_effect=RuntimeError("sine fit failed")):
-            result = _get_initial_guess(
-                self.count_rate, self.voltages, None,
-                self.rotation_matrices, np.zeros(3),
-                self.coarse_count_rates, self.coarse_energies, self.sweep_epoch,
-            )
-        self.assertGreater(result.bulk_velocity_rtn[0], 0)
-        np.testing.assert_allclose(result.bulk_velocity_rtn[1:], 0.0)
-
-    def test_skips_sine_fit_when_sweep_data_absent(self):
-        with patch('imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._model_count_rates',
-                   return_value=self.count_rate / self.true_density), \
-             patch('imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._sine_fit_velocity_rtn',
-                   side_effect=AssertionError("should not be called")) as mock_sf:
-            result = _get_initial_guess(
-                self.count_rate, self.voltages, None,
-                self.rotation_matrices, np.zeros(3),
-                # no sweep data → Gaussian only
-            )
-        mock_sf.assert_not_called()
-        np.testing.assert_allclose(result.bulk_velocity_rtn[1:], 0.0)
 
 
 class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):

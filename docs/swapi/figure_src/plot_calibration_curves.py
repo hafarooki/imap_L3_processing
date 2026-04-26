@@ -27,11 +27,11 @@ def _load_csv(path):
 
 
 def main():
-    ea_rows = _load_csv(_INSTRUMENT_DATA / "imap_swapi_central_effective_area.csv")
+    ea_rows = _load_csv(_INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv")
     voltages = np.array([float(r["esa_voltage"]) for r in ea_rows])
     eff_area = np.array([float(r["effective_area"]) for r in ea_rows])
 
-    tx_rows = _load_csv(_INSTRUMENT_DATA / "imap_swapi_azimuthal_transmission.csv")
+    tx_rows = _load_csv(_INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv")
     azimuths = np.array([float(r["abs_azimuth"]) for r in tx_rows])
     transmission = np.array([float(r["transmission"]) if r["transmission"] else 0.0 for r in tx_rows])
 

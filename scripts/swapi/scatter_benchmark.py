@@ -41,9 +41,9 @@ def _peak_voltage(bulk_speed_km_s):
 def main():
     print("Loading calibration data...")
     swapi_response = SWAPIResponse.from_files(
-        _INSTRUMENT_DATA / "imap_swapi_azimuthal_transmission.csv",
-        _INSTRUMENT_DATA / "imap_swapi_central_effective_area.csv",
-        _INSTRUMENT_DATA / "imap_swapi_passband_fit_coefficients.csv",
+        _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
+        _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
+        _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
     )
 
     df = pd.read_csv(_REFERENCE_INTEGRALS_PATH)

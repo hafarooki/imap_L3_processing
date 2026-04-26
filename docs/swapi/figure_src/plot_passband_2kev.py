@@ -27,9 +27,9 @@ _BEAM_ENERGY_EV = 2000.0
 
 def main():
     swapi_response = SWAPIResponse.from_files(
-        _INSTRUMENT_DATA / "imap_swapi_proton-sw-azimuthal-transmission_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_proton-sw-central-effective-area_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_proton-sw-passband-fit-coefficients_20260425_v001.csv",
+        _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
+        _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
+        _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
     )
 
     esa_voltage = _BEAM_ENERGY_EV / SWAPI_K_FACTOR

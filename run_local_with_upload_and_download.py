@@ -132,6 +132,9 @@ if __name__ == "__main__":
                             '{"type":"ancillary","files":["imap_swapi_energy-gf-pui-lut_20100101_v001.csv"]},'
                             '{"type":"ancillary","files":["imap_swapi_instrument-response-lut_20241023_v000.zip"]},'
                             '{"type":"ancillary","files":["imap_swapi_density-of-neutral-helium-lut_20241023_v000.dat"]},'
+                            '{"type":"ancillary","files":["imap_swapi_azimuthal-transmission_20260425_v001.csv"]},'
+                            '{"type":"ancillary","files":["imap_swapi_central-effective-area_20260425_v001.csv"]},'
+                            '{"type":"ancillary","files":["imap_swapi_passband-fit-coefficients_20260425_v001.csv"]},'
                             '{"type": "spice", "files": ["imap_sclk_0000.tsc"]},' +
                             '{"type": "spice", "files": ["naif0012.tls"]},' +
                             '{"type": "spice", "files": ["imap_science_108.tf"]},' +

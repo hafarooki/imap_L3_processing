@@ -60,9 +60,9 @@ CASES = [
 def main():
     print("Loading calibration data...")
     swapi_response = SWAPIResponse.from_files(
-        _INSTRUMENT_DATA / "imap_swapi_proton-sw-azimuthal-transmission_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_proton-sw-central-effective-area_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_proton-sw-passband-fit-coefficients_20260425_v001.csv",
+        _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
+        _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
+        _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
     )
 
     n_voltages = 60

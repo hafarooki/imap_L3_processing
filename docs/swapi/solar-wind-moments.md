@@ -8,6 +8,15 @@
 - `imap_l3_processing/swapi/swapi_processor.py` — Production pipeline entry point. `SwapiProcessor.process_l3a_proton` slices science bins, computes per-bin measurement times, calls `fit_solar_wind_proton_moments`, and propagates uncertainties to scalar speed, clock angle, and deflection angle before writing the CDF.
 - `scripts/swapi/validate_proton_moments.py` — Offline validation script. Runs the fitter over a full day of real L2 data and produces a six-panel figure comparing fitted moments against OMNI reference data.
 
+## TODO
+
+- [ ] Check uncertainty estimation soundness
+- [ ] Validate integration test
+- [ ] Validate unit tests top-bottom
+- [ ] Alphas
+- [ ] Dynamic calculation of pickup ion geometric factor?
+
+
 ## Model
 
 The coincidence count rate at ESA voltage $V$ is
@@ -104,7 +113,7 @@ Bin 0 is skipped, so the first science measurement is at $t_1 = t_\text{epoch} -
 
 Given $N$ measurements $(C_i, V_i, t_i)$, the solar wind moments $(n, T, \mathbf{v}_b^\text{RTN})$ are fit in three steps:
 1. Obtain RTN $\rightarrow$ SWAPI rotation matrices $R_i$ and spacecraft velocity $\mathbf{v}_\text{sc}^\text{RTN}$ from SPICE.
-2. Compute an initial guess: temperature and speed from a Gaussian fit to $C_i$ vs. $v_i$; velocity direction from the Rankin et al. (2025) sine-fit method (DPS → RTN via SPICE).
+2. Compute an initial guess: temperature and bulk speed from a Gaussian fit to $C_i$ vs. $v_i$, with bulk velocity assumed purely anti-sunward.
 3. Refine by nonlinear least squares.
 > **TODO** alphas
 
@@ -117,30 +126,20 @@ $$\mathbf{v}_\text{sc}^\text{RTN} = M_{\text{ECL} \rightarrow \text{RTN}} \, \ma
 
 ### Step 2: Initial guess
 
-> TODO evaluate the accuracy of the bulk velocity vector initial guess
-
 **Temperature and speed magnitude** are obtained from a Gaussian fit to $C_i$ vs. $v_i = \sqrt{2 k^* q V_i / m_p}$:
 $$C_i \approx A \exp\!\left(-\frac{(v_i - v_b)^2}{2 \sigma_v^2}\right), \qquad A, v_b, \sigma_v > 0.$$
 The fitted width contains both the thermal and passband contributions in quadrature, so the passband-equivalent variance is subtracted first:
 $$\sigma_{\text{thermal}, v} = \sqrt{\max(\sigma_v^2 - \sigma_{\text{passband}, v}^2,\, \sigma_{\text{floor}, v}^2)}.$$
 The coefficient $\sigma_{\text{passband}, v} / v_b = 0.027$ is calibrated empirically from the passband convolution (the width of a delta-function beam through the instrument response). The floor $\sigma_{\text{floor}, v}$ corresponds to a 1 eV temperature floor. The initial temperature is $T_0 = m_p \sigma_{\text{thermal}, v}^2$.
 
-**Velocity direction** is obtained from the Rankin et al. (2025) sine-fit method (Eq. 13 of the instrument paper) when per-sweep coarse data is available. The ESA peak energy shifts sinusoidally with the spacecraft spin phase $\psi$ in the IMAP despun frame (DPS):
-$$E(\psi) = A\sin(-\psi + \phi) + B.$$
-Fitting this to the 5 peak-energy/spin-phase pairs gives:
-- **Bulk speed** from $B$: $v_b = \sqrt{2Bq/m_p}$.
-- **Clock angle** $\phi$: azimuthal direction of the transverse deflection in the DPS X–Y plane ($+Z_\text{DPS}$ is sunward).
-- **Deflection angle** $\theta$: estimated geometrically as $\theta = \arcsin(A/2B)$, from the first-order Doppler relation $A/B \approx 2\sin\theta$.
-
-The velocity direction in DPS is
-$$\hat{\mathbf{v}}^\text{DPS} = \bigl(\sin\theta\cos\phi,\;\sin\theta\sin\phi,\;-\cos\theta\bigr),$$
-and is rotated into RTN via the SPICE `IMAP_DPS` → `IMAP_RTN` matrix at the median sweep epoch:
-$$\mathbf{v}_b^\text{RTN} = v_b\,R_{\text{DPS}\to\text{RTN}}\,\hat{\mathbf{v}}^\text{DPS}.$$
-
-If the sine fit fails (insufficient sweeps, curve-fit non-convergence, SPICE error), the code falls back to a purely anti-sunward initial velocity $\mathbf{v}_b^\text{RTN} = (v_b, 0, 0)$.
+**Velocity direction** is set to purely anti-sunward, $\mathbf{v}_b^\text{RTN} = (v_b, 0, 0)$. The optimizer in Step 3 recovers the transverse components $v_T$ and $v_N$ from the small spin-phase modulation of the bulk azimuth/elevation in the instrument frame (the spin axis is the SWAPI boresight, so an anti-sunward bulk projects exactly onto $-Y_\text{SWAPI}$ at every spin phase, while non-zero $v_T,\,v_N$ produce a sinusoidal wobble of order $\arcsin(\sqrt{v_T^2+v_N^2}/v_R)$ around that direction).
 
 The initial density is scaled to match the mean observed count rate:
 $$n_0 = \frac{\langle C_i \rangle}{\langle C_i^\text{model}(n=1) \rangle}.$$
+
+Figure below shows initial-guess and final-fit accuracy across 100 random solar wind configurations (bulk speed 300–800 km/s, temperature 2–50 eV log-uniform, density 2–20 cm⁻³, $v_T, v_N \in [-50, 50]$ km/s). Synthetic count rates are produced from the forward model with realistic SWAPI geometry (5 sweeps × 72 ESA voltage steps over 60 s, 15 s spin period, spin axis = boresight) and Poisson noise. The velocity initial guess for $v_T$ and $v_N$ is zero by construction; the final optimizer recovers them from the spin-phase modulation. Generated by `docs/swapi/figure_src/plot_initial_guess_accuracy.py`.
+
+![Initial-guess vs. final-optimizer accuracy for 100 synthetic solar wind cases](figures/initial_guess_accuracy.png)
 
 ### Step 3: Optimization
 
@@ -205,5 +204,5 @@ A chi-squared-scaled covariance, $\Sigma_x = (J^\top J)^{-1} \cdot \chi^2_\nu$ w
 
 ## References
 
-- Rankin, J. S., McComas, D. J., et al. (2025). Solar Wind and Pickup Ion (SWAPI) Instrument on NASA's Interstellar Mapping and Acceleration Probe (IMAP). *Space Science Reviews*, 221(8), 108. https://doi.org/10.1007/s11214-025-01229-8 — SWAPI instrument paper; sine-fit initial-guess method (Step 2, Eq. 13), sign conventions and coordinate system (Step 3).
+- Rankin, J. S., McComas, D. J., et al. (2025). Solar Wind and Pickup Ion (SWAPI) Instrument on NASA's Interstellar Mapping and Acceleration Probe (IMAP). *Space Science Reviews*, 221(8), 108. https://doi.org/10.1007/s11214-025-01229-8 — SWAPI instrument paper; sign conventions and coordinate system (Step 3).
 - Tsoulfanidis, N. (1995). *Measurement and Detection of Radiation* (2nd ed.). Taylor & Francis. p. 74. — Deadtime formula: $n = g / (1 - g\tau)$.

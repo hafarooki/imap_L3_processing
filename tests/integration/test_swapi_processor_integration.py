@@ -26,7 +26,7 @@ from spacepy.pycdf import CDF
 
 import imap_l3_processing
 from tests.integration.integration_test_helpers import mock_imap_data_access
-from tests.test_helpers import get_run_local_data_path, get_test_data_path
+from tests.test_helpers import get_run_local_data_path, get_test_data_path, get_test_instrument_team_data_path
 
 _L2_SOURCE = "swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf"
 _L2_SDC_NAME = "imap_swapi_l2_sci_20260120_v001.cdf"
@@ -73,6 +73,11 @@ class SwapiProcessorIntegration(unittest.TestCase):
             spice_dir / "imap_dps_2025_105_2026_105_009.ah.bc",
         ]
         swapi_inputs = [f for f in Path("tests/integration/test_data/swapi").iterdir() if f.is_file()]
+        swapi_inputs += [
+            get_test_instrument_team_data_path("swapi/imap_swapi_azimuthal-transmission_20260425_v001.csv"),
+            get_test_instrument_team_data_path("swapi/imap_swapi_central-effective-area_20260425_v001.csv"),
+            get_test_instrument_team_data_path("swapi/imap_swapi_passband-fit-coefficients_20260425_v001.csv"),
+        ]
 
         os.environ["IMAP_DATA_DIR"] = str(output_data_dir)
         with tempfile.TemporaryDirectory() as tmp:
