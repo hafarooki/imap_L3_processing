@@ -309,8 +309,7 @@ class SwapiProcessor(Processor):
                 quality_flag |= fitting_result.bad_fit_flag
 
             except Exception as e:
-                epoch = epoch_center_of_chunk
-                logger.info(f"Exception occurred at epoch {epoch}, continuing with fill value", exc_info=True)
+                logger.info(f"Exception occurred at epoch {epoch_center_of_chunk}, continuing with fill value", exc_info=True)
 
             proton_solar_wind_speeds.append(proton_solar_wind_speed)
             proton_solar_wind_clock_angles.append(clock_angle)

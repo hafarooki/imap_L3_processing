@@ -10,15 +10,17 @@
 
 ## TODO
 
+- [ ] Validate usage of `esa_voltage` parameter throughout — `fit_solar_wind_proton_moments`, `create_passband_grid`, and `esa_voltage_to_proton_speed` all take what the processor passes as `data_chunk.energy` (ESA center energy in eV).
 - [ ] Confirm output format for bulk velocity — currently written as scalar speed + clock angle + deflection angle (with uncertainties); decide if RTN vector components should also be in the CDF
 - [ ] Alphas
-- [ ] clean up/refactor code
-- [ ] Human review: read through unit tests top-to-bottom and verify coverage is meaningful, not just passing (all 167 pass automatically)
-- [ ] Human review: run integration test output through a CDF reader and sanity-check variable names, units, and fill values (test passes automatically)
 - [ ] Remove old SW model from pickup ion code (?)
-- [ ] Dynamic calculation of pickup ion geometric factor?
+- [ ] Dynamic calculation of pickup ion geometric factor (?)
+- [ ] **clean up/refactor code**
+- [ ] Human review: run integration test output through a CDF reader and sanity-check variable names, units, and fill values (test passes automatically)
+- [ ] Human review: read through unit tests top-to-bottom and verify coverage is meaningful, not just passing (all 167 pass automatically)
 - [ ] Try Poisson MLE instead of least squares
-
+- [ ] Compare with WIND with production-like testing (unlike current validation script)
+- [ ] Clarify behavior of partial last chunk from `chunk_l2_data` — if the day's sweep count isn't a multiple of 5, the final group has fewer sweeps and its epoch (`sci_start_time[0] + 30s`) is off-center; decide whether to drop it, pad it, or accept the timestamp offset
 
 ## Model
 

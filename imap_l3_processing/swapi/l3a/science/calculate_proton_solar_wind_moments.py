@@ -1,5 +1,5 @@
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 import numba
@@ -73,9 +73,9 @@ class ProtonSolarWindMoments:
     bad_fit_flag: int
     density_sigma: float = np.nan
     temperature_sigma: float = np.nan
-    velocity_covariance: ndarray = (
-        None  # shape (3, 3), km^2/s^2; covariance of [vR, vT, vN]
-    )
+    velocity_covariance: ndarray = field(
+        default_factory=lambda: np.full((3, 3), np.nan)
+    )  # shape (3, 3), km^2/s^2; covariance of [vR, vT, vN]
 
 
 def fit_solar_wind_proton_moments(
