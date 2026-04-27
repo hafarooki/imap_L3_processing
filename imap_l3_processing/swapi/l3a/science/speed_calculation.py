@@ -14,7 +14,7 @@ from imap_l3_processing.constants import (
 # Used internally by L3 for passband normalization and central-speed conversions.
 SWAPI_K_FACTOR = 1.89
 
-# Outdated k-factor used by the L2 product to label its `esa_energy` field as
+# Pre-launch k-factor used by the L2 product to label its `esa_energy` field as
 # `esa_energy = SWAPI_L2_K_FACTOR × |voltage|`. Different from SWAPI_K_FACTOR — divide L2's
 # `esa_energy` by this to recover true ESA voltage before any L3 processing.
 SWAPI_L2_K_FACTOR = 1.93

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
-SWAPI_K_FACTOR = 1.89  # eV/V
+from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
 
 _TARGET_ELEVATIONS = np.arange(-12, 11, 0.5)
 _TARGET_SPEED_RATIOS = np.linspace(0.9, 1.1, 101)
