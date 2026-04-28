@@ -636,13 +636,13 @@ alpha_sw_moments_temperature:
   FIELDNAM: Alpha SW Moments Temperature
   FORMAT: F19.3
   LABLAXIS: Alpha SW moments temperature
-  UNITS: eV
+  UNITS: K
   VALIDMIN: 0
-  VALIDMAX: 1000
+  VALIDMAX: 11600000
   FILLVAL: -1.000000e+31
   SCALETYP: log
-  SCALEMIN: 0.1
-  SCALEMAX: 100
+  SCALEMIN: 1000
+  SCALEMAX: 1000000
   DELTA_PLUS_VAR: alpha_sw_moments_temperature_uncert
   DELTA_MINUS_VAR: alpha_sw_moments_temperature_uncert
 alpha_sw_moments_temperature_uncert:
@@ -655,9 +655,9 @@ alpha_sw_moments_temperature_uncert:
   FIELDNAM: Alpha SW Moments Temperature Uncertainty
   FORMAT: F19.3
   LABLAXIS: Alpha SW moments temperature uncertainty
-  UNITS: eV
+  UNITS: K
   VALIDMIN: 0
-  VALIDMAX: 1000
+  VALIDMAX: 11600000
   FILLVAL: -1.000000e+31
 alpha_sw_moments_velocity_rtn:
   NAME: alpha_sw_moments_velocity_rtn
@@ -762,9 +762,9 @@ alpha_sw_moments_reference_proton_temperature:
   FIELDNAM: Alpha SW Moments Reference Proton Temperature
   FORMAT: F19.3
   LABLAXIS: Ref proton temperature
-  UNITS: eV
+  UNITS: K
   VALIDMIN: 0
-  VALIDMAX: 1000
+  VALIDMAX: 11600000
   FILLVAL: -1.000000e+31
 alpha_sw_moments_reference_proton_velocity_rtn:
   NAME: alpha_sw_moments_reference_proton_velocity_rtn

@@ -24,13 +24,14 @@ from numpy import ndarray
 from imap_l3_processing.constants import (
     ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     ALPHA_PARTICLE_MASS_KG,
+    BOLTZMANN_CONSTANT_JOULES_PER_KELVIN,
     METERS_PER_KILOMETER,
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    INITIAL_TEMPERATURE_FLOOR_EV,
+    INITIAL_TEMPERATURE_FLOOR_K,
     ProtonSolarWindMoments,
     SWAPI_LIVETIME_S,
     _model_count_rates,
@@ -47,7 +48,7 @@ from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 @dataclass
 class AlphaSolarWindMoments:
     density: float  # cm^-3
-    temperature: float  # eV
+    temperature: float  # K
     bulk_velocity_rtn: ndarray  # shape (3,), km/s, [R, T, N]; = v_p + Δv * B̂
     delta_v: float  # km/s, signed; +Δv ⇔ alpha drifts along +B̂ vs proton frame
     bad_fit_flag: int
@@ -140,7 +141,7 @@ def fit_solar_wind_alpha_moments(
     if int(proton_moments.bad_fit_flag) != int(SwapiL3Flags.NONE):
         return _nan_alpha_moments(SwapiL3Flags.STALE_PROTON)
 
-    proton_bulk_rtn = np.asarray(proton_moments.bulk_velocity_rtn, dtype=float)
+    proton_bulk_rtn = np.asarray(proton_moments.bulk_velocity_rtn_sun, dtype=float)
     proton_speed = np.linalg.norm(proton_bulk_rtn)
     mag_gap_fallback = False
 
@@ -200,7 +201,7 @@ def fit_solar_wind_alpha_moments(
     proton_true_rate = _model_count_rates(
         float(proton_moments.density),
         float(proton_moments.temperature),
-        np.asarray(proton_moments.bulk_velocity_rtn, dtype=float),
+        np.asarray(proton_moments.bulk_velocity_rtn_sun, dtype=float),
         passband_grids,
         proton_central_speeds,
         proton_central_eff_areas,
@@ -391,8 +392,8 @@ def _alpha_peak_fit(
 
     sigma_floor_v = float(
         np.sqrt(
-            INITIAL_TEMPERATURE_FLOOR_EV
-            * PROTON_CHARGE_COULOMBS
+            INITIAL_TEMPERATURE_FLOOR_K
+            * BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
             / ALPHA_PARTICLE_MASS_KG
         )
         / METERS_PER_KILOMETER
@@ -401,7 +402,7 @@ def _alpha_peak_fit(
     T_alpha = float(
         ALPHA_PARTICLE_MASS_KG
         * (sigma_thermal_v * METERS_PER_KILOMETER) ** 2
-        / PROTON_CHARGE_COULOMBS
+        / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
     )
 
     return _AlphaPeakFit(
@@ -490,9 +491,7 @@ def _alpha_initial_guess(
         - proton_obs_avg
     )
 
-    numerator = float(
-        max(np.sum(count_avg- proton_obs_avg), 0.0)
-    )
+    numerator = float(max(np.sum(count_avg - proton_obs_avg), 0.0))
     denominator = float(np.sum(delta_alpha_obs_avg))
     if denominator <= 0 or not np.isfinite(denominator):
         return None

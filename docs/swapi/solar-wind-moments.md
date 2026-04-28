@@ -3,7 +3,7 @@
 ## Code Files
 
 - `imap_l3_processing/swapi/l3a/science/swapi_response.py` — Instrument response model. Loads calibration tables (azimuthal transmission, central effective area, passband polynomial fits) and builds a `PassbandGrid` per ESA voltage step via `SWAPIResponse.create_passband_grid`.
-- `imap_l3_processing/swapi/l3a/science/calculate_proton_solar_wind_moments.py` — Core fitting algorithm. `fit_solar_wind_proton_moments` implements the three-step procedure (SPICE → initial guess → Levenberg–Marquardt); `calculate_integral` is the Numba-JIT count-rate integral over elevation, azimuth, and speed.
+- `imap_l3_processing/swapi/l3a/science/calculate_proton_solar_wind_moments.py` — Core fitting algorithm. `fit_solar_wind_proton_moments` implements the three-step procedure (SPICE → initial guess → Levenberg–Marquardt); `calculate_integral` is the Numba-JIT count-rate integral over elevation, azimuth, and speed. 
 - `imap_l3_processing/swapi/l3a/science/speed_calculation.py` — ESA bin layout constants (`SWAPI_SCIENCE_BINS`, `SWAPI_COARSE_SWEEP_BINS`, `SWAPI_FINE_SWEEP_BINS`) and the `esa_voltage_to_proton_speed` conversion.
 - `imap_l3_processing/swapi/swapi_processor.py` — Production pipeline entry point. `SwapiProcessor.process_l3a_proton` slices science bins, computes per-bin measurement times, calls `fit_solar_wind_proton_moments`, and propagates uncertainties to scalar speed, clock angle, and deflection angle before writing the CDF.
 - `scripts/swapi/validate_proton_moments.py` — Offline validation script. Runs the fitter over a full day of real L2 data and produces a six-panel figure comparing fitted moments against OMNI reference data.
@@ -11,6 +11,7 @@
 ## TODO
 
 - [ ] fix protons. there was some sort of regression that made it no longer work for the basin problem. probably related to the open aperutre handling
+- [ ] when we dont have mag field, use nominal mag field (45 degrees from radial) for alpha bulk velocity estimation and add a flag
 - [ ] Constrain the speed of the alphas in the fit, not just in the initial guess
 - [ ] thread pool vs multi processing... thread pool seems to be using too little resources
 - [ ] Validate alphas
@@ -59,7 +60,7 @@ $P^s$ is voltage-dependent. SIMION results at discrete energies are stored as po
 
 The solar wind proton VDF is modeled as a drifting Maxwellian:
 $$f_p(\mathbf{v}) = \frac{n}{(\sqrt{2\pi}\, v_\text{th})^3} \exp\!\left(-\frac{v^2 + v_b^2 - 2 v\, v_b \cos\alpha}{2 v_\text{th}^2}\right),$$
-where $\cos\alpha = \sin\theta_b \sin\theta + \cos\theta_b \cos\theta \cos(\phi - \phi_b)$ and $v_\text{th} = \sqrt{T/m_p}$ ($T$ in energy units).
+where $\cos\alpha = \sin\theta_b \sin\theta + \cos\theta_b \cos\theta \cos(\phi - \phi_b)$ and $v_\text{th} = \sqrt{k_B T/m_p}$ ($T$ in Kelvin).
 
 Substituting into the count rate integral in spherical velocity coordinates $(v, \theta, \phi)$:
 $$C(V) = \frac{n\, \mathcal{A}_0(V)}{(\sqrt{2\pi}\, v_\text{th})^3} \sum_\text{region} \int \cos\theta\, d\theta \int T(\phi)\, d\phi \int v^3\, P\!\left(\tfrac{v}{v_0}, \theta\right) \exp\!\left(-\frac{v^2 + v_b^2 - 2vv_b\cos\alpha}{2v_\text{th}^2}\right) dv.$$
@@ -90,7 +91,7 @@ The trim works in three steps:
 2. **Skip** the OA region entirely if $\max(\rho T) < 10^{-9}$ — gaussian tail is too far from any meaningful-transmission $\phi$.
 3. **Anchor** the integration window at the OA inner boundary ($\pm 20°$, on the SG side) and trim only the *far* end at the threshold $\rho T > 10^{-3} \times \max$. Anchoring is essential: $T(\pm 20°) = 0$ by construction, so the rising-edge peak (at $\sim \pm 21°$ for $\phi_b$ near zero) sits between the boundary and the first scan grid point that exceeds threshold; trimming the boundary side would cut off real signal.
 
-For typical solar wind at $T \sim 10$ eV and $|\phi_b| < 6°$, the trim collapses the OA window to a few degrees adjacent to the SG/OA transition. For high-deflection cases ($|\phi_b| > 15°$), the scan finds the peak at $\phi \sim 25°$–$30°$ and the trim returns essentially the same window as the gaussian-only $\Delta\alpha$ would. Median chunk fit time drops from ~963 ms (with the gaussian-only $\Delta\alpha$ feeding 41 OA azimuth nodes) to ~175 ms — a ~5.5× speedup with no loss of accuracy on the reference-integral histogram (max ratio error stays at 10% for low-rate edge cases, identical to the un-trimmed integrator).
+For typical solar wind at $T \sim 100{,}000$ K and $|\phi_b| < 6°$, the trim collapses the OA window to a few degrees adjacent to the SG/OA transition. For high-deflection cases ($|\phi_b| > 15°$), the scan finds the peak at $\phi \sim 25°$–$30°$ and the trim returns essentially the same window as the gaussian-only $\Delta\alpha$ would. Median chunk fit time drops from ~963 ms (with the gaussian-only $\Delta\alpha$ feeding 41 OA azimuth nodes) to ~175 ms — a ~5.5× speedup with no loss of accuracy on the reference-integral histogram (max ratio error stays at 10% for low-rate edge cases, identical to the un-trimmed integrator).
 
 ### Speed limits
 
@@ -170,16 +171,16 @@ $$\mathbf{v}_\text{sc}^\text{RTN} = M_{\text{ECL} \rightarrow \text{RTN}} \, \ma
 
 **Temperature and speed magnitude** are obtained from a Gaussian fit to $C_i$ vs. $v_i = \sqrt{2 k^* q V_i / m_p}$:
 $$C_i \approx A \exp\!\left(-\frac{(v_i - v_b)^2}{2 \sigma_v^2}\right), \qquad A, v_b, \sigma_v > 0.$$
-The fitted width $\sigma_v$ is used directly as the thermal width (no passband subtraction), with a floor $\sigma_{\text{floor}, v}$ corresponding to a 1 eV temperature floor:
+The fitted width $\sigma_v$ is used directly as the thermal width (no passband subtraction), with a floor $\sigma_{\text{floor}, v}$ corresponding to a $\approx 11{,}600$ K temperature floor:
 $$\sigma_{\text{thermal}, v} = \max(\sigma_v,\, \sigma_{\text{floor}, v}).$$
-The initial temperature is $T_0 = m_p \sigma_{\text{thermal}, v}^2$.
+The initial temperature is $T_0 = m_p \sigma_{\text{thermal}, v}^2 / k_B$.
 
 **Velocity direction** is set to purely anti-sunward, $\mathbf{v}_b^\text{RTN} = (v_b, 0, 0)$. The optimizer in Step 3 recovers the transverse components $v_T$ and $v_N$ from the small spin-phase modulation of the bulk azimuth/elevation in the instrument frame (the spin axis is the SWAPI boresight, so an anti-sunward bulk projects exactly onto $-Y_\text{SWAPI}$ at every spin phase, while non-zero $v_T,\,v_N$ produce a sinusoidal wobble of order $\arcsin(\sqrt{v_T^2+v_N^2}/v_R)$ around that direction).
 
 The initial density is scaled to match the mean observed count rate:
 $$n_0 = \frac{\langle C_i \rangle}{\langle C_i^\text{model}(n=1) \rangle}.$$
 
-Figure below shows initial-guess and final-fit accuracy across 10000 random solar wind configurations (bulk speed 300–800 km/s, temperature 2–50 eV log-uniform, density 2–20 cm⁻³, $v_T, v_N \in [-50, 50]$ km/s). Synthetic count rates are produced from the forward model using the real SWAPI 71-bin science voltage sweep (from the L2 CDF), 5 sweeps per fit, realistic spin geometry (spin axis = boresight, 15 s period), and Poisson noise — matching the production processor exactly. The velocity initial guess for $v_T$ and $v_N$ is zero by construction; the final optimizer recovers them from the spin-phase modulation. 0 bad-fit flags across all 10000 cases. Generated by `docs/swapi/figure_src/plot_initial_guess_accuracy.py`.
+Figure below shows initial-guess and final-fit accuracy across 10000 random solar wind configurations (bulk speed 300–800 km/s, temperature 23,000–580,000 K log-uniform, density 2–20 cm⁻³, $v_T, v_N \in [-50, 50]$ km/s). Synthetic count rates are produced from the forward model using the real SWAPI 71-bin science voltage sweep (from the L2 CDF), 5 sweeps per fit, realistic spin geometry (spin axis = boresight, 15 s period), and Poisson noise — matching the production processor exactly. The velocity initial guess for $v_T$ and $v_N$ is zero by construction; the final optimizer recovers them from the spin-phase modulation. 0 bad-fit flags across all 10000 cases. Generated by `docs/swapi/figure_src/plot_initial_guess_accuracy.py`.
 
 ![Initial-guess vs. final-optimizer accuracy for 10000 synthetic solar wind cases](figures/initial_guess_accuracy.png)
 
@@ -205,7 +206,7 @@ This works for any spin axis orientation, not just radial. Evaluate the residual
 
 *Generated by `docs/swapi/figure_src/plot_wrong_basin.py`. The mirror minimum has $\chi^2$ roughly $200\times$ the truth — easily distinguished by a single residual evaluation at the flipped solution.*
 
-> **Note on `diff_step`.** The default finite-difference step in `least_squares` scales with the parameter magnitude, producing steps of $\sim 10^{-8}\ \text{km/s}$ for $v_T,\, v_N$ near zero. For cold plasma ($T \lesssim 5\ \text{eV}$), the resulting count-rate perturbation falls below the GL-quadrature noise floor, making the numerical Jacobian for $v_T$ and $v_N$ pure noise and inflating the LM damping factor to $\sim 10^{13}$, which freezes all parameters. `diff_step=1e-4` is the empirical optimum over $\{10^{-5}, 10^{-4}, 10^{-3}, 10^{-2}, 10^{-1}\}$: it sits above the noise floor (giving a clean Jacobian and correct convergence) while keeping the linearization error small enough not to degrade accuracy ($10^{-2}$ degrades $v_N$ RMSE; $10^{-1}$ produces bad fits and a 5× slowdown).
+> **Note on `diff_step`.** The default finite-difference step in `least_squares` scales with the parameter magnitude, producing steps of $\sim 10^{-8}\ \text{km/s}$ for $v_T,\, v_N$ near zero. For cold plasma ($T \lesssim 60{,}000\ \text{K}$), the resulting count-rate perturbation falls below the GL-quadrature noise floor, making the numerical Jacobian for $v_T$ and $v_N$ pure noise and inflating the LM damping factor to $\sim 10^{13}$, which freezes all parameters. `diff_step=1e-4` is the empirical optimum over $\{10^{-5}, 10^{-4}, 10^{-3}, 10^{-2}, 10^{-1}\}$: it sits above the noise floor (giving a clean Jacobian and correct convergence) while keeping the linearization error small enough not to degrade accuracy ($10^{-2}$ degrades $v_N$ RMSE; $10^{-1}$ produces bad fits and a 5× slowdown).
 
 Inside the model, the spacecraft velocity is subtracted and the result rotated into instrument coordinates:
 $$\mathbf{v}_{b,i}^\text{xyz} = R_i (\mathbf{v}_b^\text{RTN} - \mathbf{v}_\text{sc}^\text{RTN}).$$
@@ -260,8 +261,8 @@ Joint refit of both species is deferred (Stage 2 does not resolve alpha contamin
 
 The same `PassbandGrid` infrastructure works for both species — only $v_0^s = \sqrt{2 k^* (q/m)^s |V|}$ changes. `SWAPIResponse.create_passband_grid(V, m, q)` is keyed by $(V, m, q)$ in `_grid_cache`, so proton and alpha grids cache independently. At the same $V$,
 $$\frac{v_0^\alpha}{v_0^p} = \sqrt{\frac{q_\alpha m_p}{q_p m_\alpha}} = \sqrt{\frac{2 m_p}{4 m_p}} = \frac{1}{\sqrt 2}.$$
-Thermal speed uses the elementary charge regardless of species — "$T_\alpha$ in eV" means $k_B T_\alpha = T_\alpha \cdot e$ Joules:
-$$v_{th}^\alpha = \sqrt{\frac{T_\alpha \cdot e}{m_\alpha}}.$$
+Thermal speed uses Boltzmann's constant with temperature in Kelvin:
+$$v_{th}^\alpha = \sqrt{\frac{k_B T_\alpha}{m_\alpha}}.$$
 
 ### Two k-factors (continued)
 
@@ -287,7 +288,7 @@ Stage 2's initial guess locates the alpha bump via log-space subtraction of the 
 3. Form the log-space residual (both terms floored at 0.1 Hz to avoid log blow-up):
    $$\ell_i = \log\!\max(C_i, 0.1) - \log\!\max(R_i^p, 0.1)$$
    Guard: if $\max_i \ell_i < \log 2$ (observed rate never 2× the proton model in the alpha range), return no-guess.
-4. Gaussian fit on $\ell_i$ vs. $v_i^\alpha = \sqrt{2 k^* q_\alpha |V_i| / m_\alpha}$ within the voltage range, with $\mu$ bounded to $[v_\alpha^\text{min}, v_\alpha^\text{max}]$. Yields bulk speed $v_b^\alpha$ and thermal width $\sigma_v$. Floor $\sigma_v$ by the 1 eV temperature floor.
+4. Gaussian fit on $\ell_i$ vs. $v_i^\alpha = \sqrt{2 k^* q_\alpha |V_i| / m_\alpha}$ within the voltage range, with $\mu$ bounded to $[v_\alpha^\text{min}, v_\alpha^\text{max}]$. Yields bulk speed $v_b^\alpha$ and thermal width $\sigma_v$. Floor $\sigma_v$ by the $\approx 11{,}600$ K temperature floor.
 5. Initial $\Delta v$: project the inferred radial speed difference onto $\hat{\mathbf{B}}$:
    $$\Delta v_0 = (v_b^\alpha - v_p^*)\;(\hat{\mathbf{v}}_p \cdot \hat{\mathbf{B}})$$
    This correctly handles reversed-field ($\hat{\mathbf{B}}$ sunward) and perpendicular-field geometries. When $\hat{\mathbf{v}}_p \cdot \hat{\mathbf{B}} \approx 0$, $\Delta v_0 \approx 0$ and the signed-Δv basin flip handles the ambiguity.
@@ -297,7 +298,7 @@ Stage 2's initial guess locates the alpha bump via log-space subtraction of the 
    $$n_{\alpha,0} = \max\!\left(\frac{\sum_\text{FWHM}(C_i - R_i^p)}{\sum_\text{FWHM} \delta_i},\; 10^{-3}\right)$$
    Summing (not averaging) gives the Poisson-correct estimator; clipping the numerator to $\geq 0$ after summing lets positive and negative residuals cancel before the floor.
 
-The figure below shows these steps on a synthetic spectrum ($n_p = 5\,\text{cm}^{-3}$, $T_p = 10\,\text{eV}$, $v_p = 450\,\text{km/s}$; $n_\alpha = 0.20\,\text{cm}^{-3}$, $T_\alpha = 40\,\text{eV}$, $\Delta v = +30\,\text{km/s}$; 5 sweeps × 62 coarse bins, Poisson noise). Panel (a) shows the 5-sweep-averaged observed rate vs the frozen proton model, with the voltage search window shaded. The alpha bump is visible as a shoulder on the high-voltage flank. Panel (b) shows the log-space residual inside the window and the Gaussian fit that locates the bump. The initial-guess speed (495 km/s) is within 15 km/s of the ground truth (480 km/s), giving LM a basin-correct starting point; the initial $T_\alpha$ estimate from the Gaussian width is deliberately loose and is tightened by LM.
+The figure below shows these steps on a synthetic spectrum ($n_p = 5\,\text{cm}^{-3}$, $T_p = 116{,}045\,\text{K}$, $v_p = 450\,\text{km/s}$; $n_\alpha = 0.20\,\text{cm}^{-3}$, $T_\alpha = 464{,}181\,\text{K}$, $\Delta v = +30\,\text{km/s}$; 5 sweeps × 62 coarse bins, Poisson noise). Panel (a) shows the 5-sweep-averaged observed rate vs the frozen proton model, with the voltage search window shaded. The alpha bump is visible as a shoulder on the high-voltage flank. Panel (b) shows the log-space residual inside the window and the Gaussian fit that locates the bump. The initial-guess speed (495 km/s) is within 15 km/s of the ground truth (480 km/s), giving LM a basin-correct starting point; the initial $T_\alpha$ estimate from the Gaussian width is deliberately loose and is tightened by LM.
 
 ![Alpha peak-finding on the validation spectrum](figures/alpha_peak_finding.png)
 

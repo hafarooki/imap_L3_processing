@@ -14,6 +14,7 @@ from imap_l3_processing.constants import (
     ALPHA_CHARGE_OVER_MASS_C_PER_KG,
     ALPHA_PARTICLE_MASS_KG,
     ALPHA_MASS_PER_CHARGE_M_P_PER_E,
+    EV_TO_KELVIN,
     PROTON_CHARGE_OVER_MASS_C_PER_KG,
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
@@ -122,7 +123,7 @@ class TestModelCountRatesSpecies(unittest.TestCase):
         v_rtn = np.array([450.0, 0.0, 0.0])
         r_one = _model_count_rates(
             5.0,
-            10.0,
+            10.0 * EV_TO_KELVIN,
             v_rtn,
             self.proton_grids,
             self.cs,
@@ -135,7 +136,7 @@ class TestModelCountRatesSpecies(unittest.TestCase):
         )
         r_two = _model_count_rates(
             5.0,
-            10.0,
+            10.0 * EV_TO_KELVIN,
             v_rtn,
             self.proton_grids,
             self.cs,
@@ -149,14 +150,14 @@ class TestModelCountRatesSpecies(unittest.TestCase):
         np.testing.assert_allclose(r_two, r_one * 2.0, rtol=1e-12)
 
     def test_thermal_speed_scales_as_inverse_sqrt_mass(self):
-        # At fixed T_eV, v_th = sqrt(T*e/m) — same numerator (e!), different denominator.
+        # At fixed T_K, v_th = sqrt(k_B*T/m) — same numerator (k_B), different denominator.
         # The model rate at the proton peak shouldn't depend on a "species" choice if we
         # also use the matching grid; but we can verify the m-dependence by holding the
         # *grid* fixed and varying the mass argument.
         v_rtn = np.array([450.0, 0.0, 0.0])
         r_p = _model_count_rates(
             5.0,
-            10.0,
+            10.0 * EV_TO_KELVIN,
             v_rtn,
             self.proton_grids,
             self.cs,
@@ -169,7 +170,7 @@ class TestModelCountRatesSpecies(unittest.TestCase):
         )
         r_alpha_mass_proton_grid = _model_count_rates(
             5.0,
-            10.0,
+            10.0 * EV_TO_KELVIN,
             v_rtn,
             self.proton_grids,
             self.cs,
@@ -261,10 +262,15 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
     def setUpClass(cls):
         cls.sr = _swapi_response()
         # Realistic-looking voltage axis covering proton (~530 V) and alpha (~265 V).
-        cls.voltages = np.geomspace(60.0, 5000.0, _N_BINS)[::-1]  # decreasing (SWAPI sweep order)
-        cls.n_p, cls.T_p = 5.0, 10.0
+        cls.voltages = np.geomspace(60.0, 5000.0, _N_BINS)[
+            ::-1
+        ]  # decreasing (SWAPI sweep order)
+        cls.n_p, cls.T_p = 5.0, 10.0 * EV_TO_KELVIN
         cls.v_p_rtn = np.array([450.0, 0.0, 0.0])
-        cls.n_a, cls.T_a = 0.25, 10.0  # ~5% abundance, same temperature as protons
+        cls.n_a, cls.T_a = (
+            0.25,
+            10.0 * EV_TO_KELVIN,
+        )  # ~5% abundance, same temperature as protons
         cls.delta_v = 30.0
         cls.b_hat_rtn = np.array([1.0, 0.0, 0.0])
         cls.v_a_rtn = cls.v_p_rtn + cls.delta_v * cls.b_hat_rtn
@@ -284,7 +290,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
         return ProtonSolarwindMoments_or_real(
             density=self.n_p,
             temperature=self.T_p,
-            bulk_velocity_rtn=self.v_p_rtn.copy(),
+            bulk_velocity_rtn_sun=self.v_p_rtn.copy(),
             bad_fit_flag=int(flag),
             velocity_covariance=np.eye(3) * 0.01,
         )
@@ -298,7 +304,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
             proton_moments=ProtonSolarwindMoments_or_real(
                 density=self.n_p,
                 temperature=self.T_p,
-                bulk_velocity_rtn=self.v_p_rtn.copy(),
+                bulk_velocity_rtn_sun=self.v_p_rtn.copy(),
                 bad_fit_flag=int(SwapiL3Flags.NONE),
                 velocity_covariance=np.eye(3) * 0.01,
             ),
@@ -310,7 +316,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
         )
         self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.NONE))
         self.assertAlmostEqual(result.density, self.n_a, delta=0.05)
-        self.assertAlmostEqual(result.temperature, self.T_a, delta=2.0)
+        self.assertAlmostEqual(result.temperature, self.T_a, delta=2.0 * EV_TO_KELVIN)
         self.assertAlmostEqual(result.delta_v, self.delta_v, delta=10.0)
 
 
@@ -333,7 +339,7 @@ class TestFlagsAndGuards(unittest.TestCase):
         proton = ProtonSolarWindMoments(
             density=5.0,
             temperature=10.0,
-            bulk_velocity_rtn=np.array([450.0, 0.0, 0.0]),
+            bulk_velocity_rtn_sun=np.array([450.0, 0.0, 0.0]),
             bad_fit_flag=int(SwapiL3Flags.HI_CHI_SQ),
         )
         result = fit_solar_wind_alpha_moments(
@@ -355,7 +361,7 @@ class TestFlagsAndGuards(unittest.TestCase):
         proton = ProtonSolarWindMoments(
             density=5.0,
             temperature=10.0,
-            bulk_velocity_rtn=np.array([0.0, 0.0, 0.0]),  # Zero proton velocity
+            bulk_velocity_rtn_sun=np.array([0.0, 0.0, 0.0]),  # Zero proton velocity
             bad_fit_flag=int(SwapiL3Flags.NONE),
         )
         result = fit_solar_wind_alpha_moments(

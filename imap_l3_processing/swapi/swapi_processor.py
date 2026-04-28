@@ -32,6 +32,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_moments imp
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     ProtonSolarWindMoments,
+    _compute_angles,
     fit_solar_wind_proton_moments,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
@@ -65,12 +66,19 @@ logger = logging.getLogger(__name__)
 
 
 def _derive_proton_velocity_angles(
-    fitting_result: ProtonSolarWindMoments,
+    fitting_result: ProtonSolarWindMoments, chunk_epoch_center_tt2000_ns, spacecraft_velocity_rtn_sun
 ) -> tuple:
     """Return (speed, clock_angle, deflection_angle) as ufloats from proton moments."""
     # TODO use correct formula
-    vr, vt, vn = fitting_result.bulk_velocity_rtn
-    speed = float(np.linalg.norm(fitting_result.bulk_velocity_rtn))
+
+    R = get_rotation_matrix(to_et_time(chunk_epoch_center_tt2000_ns), SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_DPS)
+    bulk_velocity_DPS = R @ (fitting_result.bulk_velocity_rtn_sun - spacecraft_velocity_rtn_sun)
+    deflection = np.arccos(bulk_velocity_DPS[2] / np.linalg.norm(bulk_velocity_DPS))
+    clock = np.arctan2(-bulk_velocity_DPS[1], bulk_velocity_DPS[0])
+
+    bulk_azimuth, bulk_elevation = _compute_angles(fitting_result.bulk_velocity_rtn_sun, )
+
+    speed = float(np.linalg.norm(fitting_result.bulk_velocity_rtn_sun))
     cov_v = fitting_result.velocity_covariance
     v_hat = np.array([vr, vt, vn]) / speed
     speed_sigma = float(np.sqrt(v_hat @ cov_v @ v_hat))
@@ -410,7 +418,7 @@ class SwapiProcessor(Processor):
                 b_hat_rtn,
                 float(proton_moments.density),
                 float(proton_moments.temperature),
-                np.asarray(proton_moments.bulk_velocity_rtn, dtype=float),
+                np.asarray(proton_moments.bulk_velocity_rtn_sun, dtype=float),
             )
         except Exception:
             logger.info(

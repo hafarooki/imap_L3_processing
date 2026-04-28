@@ -14,10 +14,10 @@ because scipy.optimize.least_squares does most of its bookkeeping in pure Python
 and holds the GIL.
 
 Solar wind parameter ranges (seed=7):
-  bulk_speed:   300–800 km/s   (uniform)
-  temperature:    2–50 eV      (log-uniform)
-  density:        2–20 cm⁻³   (uniform)
-  vT, vN:       −50–50 km/s   (uniform)
+  bulk_speed:   300–800 km/s          (uniform)
+  temperature:  23,000–580,000 K      (log-uniform)
+  density:        2–20 cm⁻³          (uniform)
+  vT, vN:       −50–50 km/s          (uniform)
 
 Output: docs/swapi/figures/initial_guess_accuracy.png
 Usage:  python docs/swapi/figure_src/plot_initial_guess_accuracy.py
@@ -45,6 +45,7 @@ from imap_l3_processing.constants import (
     PROTON_CHARGE_OVER_MASS_C_PER_KG,
     METERS_PER_KILOMETER,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
+    EV_TO_KELVIN,
 )
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
@@ -137,7 +138,7 @@ def _init_worker(sw_files, voltages, params):
     # Force JIT compile in this worker so the chunk loop runs at full speed from i=0.
     _model_count_rates(
         8.0,
-        10.0,
+        10.0 * EV_TO_KELVIN,
         np.array([500.0, 0.0, 0.0]),
         _W_TILED,
         _W_CS,
@@ -203,14 +204,14 @@ def _process_chunk(idx_range):
                 vN,
                 ig.density,
                 ig.temperature,
-                ig.bulk_velocity_rtn[0],
-                ig.bulk_velocity_rtn[1],
-                ig.bulk_velocity_rtn[2],
+                ig.bulk_velocity_rtn_sun[0],
+                ig.bulk_velocity_rtn_sun[1],
+                ig.bulk_velocity_rtn_sun[2],
                 result.density,
                 result.temperature,
-                result.bulk_velocity_rtn[0],
-                result.bulk_velocity_rtn[1],
-                result.bulk_velocity_rtn[2],
+                result.bulk_velocity_rtn_sun[0],
+                result.bulk_velocity_rtn_sun[1],
+                result.bulk_velocity_rtn_sun[2],
                 bool(result.bad_fit_flag),
             )
         )
@@ -220,7 +221,9 @@ def _process_chunk(idx_range):
 def _run_cases(sw_files, voltages: np.ndarray) -> dict:
     rng = np.random.default_rng(_RNG_SEED)
     bulk_speeds = rng.uniform(300, 800, _N_SAMPLES)
-    temperatures = np.exp(rng.uniform(np.log(2), np.log(50), _N_SAMPLES))
+    temperatures = np.exp(
+        rng.uniform(np.log(2 * EV_TO_KELVIN), np.log(50 * EV_TO_KELVIN), _N_SAMPLES)
+    )
     densities = rng.uniform(2, 20, _N_SAMPLES)
     vTs = rng.uniform(-50, 50, _N_SAMPLES)
     vNs = rng.uniform(-50, 50, _N_SAMPLES)
@@ -309,7 +312,7 @@ def main():
     _sc0 = np.zeros(3)
     _cr0 = _model_count_rates(
         8.0,
-        10.0,
+        10.0 * EV_TO_KELVIN,
         np.array([500.0, 0.0, 0.0]),
         _tiled0,
         _cs0,
@@ -345,7 +348,7 @@ def main():
 
     cols = [
         ("Density (cm⁻³)", "true_n", "init_n", "fit_n", "log"),
-        ("Temperature (eV)", "true_T", "init_T", "fit_T", "log"),
+        ("Temperature (K)", "true_T", "init_T", "fit_T", "log"),
         ("$v_R$ (km/s)", "true_vR", "init_vR", "fit_vR", "linear"),
         ("$v_T$ (km/s)", "true_vT", "init_vT", "fit_vT", "linear"),
         ("$v_N$ (km/s)", "true_vN", "init_vN", "fit_vN", "linear"),

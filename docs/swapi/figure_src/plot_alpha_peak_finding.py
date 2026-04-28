@@ -13,8 +13,8 @@ The alpha search window [2V_p*, 4V_p*] is shaded; true and fitted alpha
 peak voltages are marked.
 
 Spectrum parameters:
-  proton  n=5 cm⁻³, T=10 eV, v_p=[450, 0, 0] km/s
-  alpha   n=0.25 cm⁻³ (~5% abundance), T=10 eV, Δv=+30 km/s along B̂=[1, 0, 0]
+  proton  n=5 cm⁻³, T=580,226 K (50 eV), v_p=[450, 0, 0] km/s
+  alpha   n=0.05 cm⁻³ (~1% abundance), T=696,271 K (60 eV), Δv=+10 km/s along B̂=[1, 0, 0]
   5 sweeps × 62 coarse bins, Poisson noise seed=7.
 
 Output: docs/swapi/figures/alpha_peak_finding.png
@@ -39,6 +39,7 @@ from imap_l3_processing.constants import (
     ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
+    EV_TO_KELVIN,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_moments import (
     _alpha_peak_fit,
@@ -67,9 +68,9 @@ _SPIN_S = 15.0
 _R_BASE = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
 
 # Spectrum parameters.
-_N_P, _T_P = 5.0, 50.0
+_N_P, _T_P = 5.0, 50.0 * EV_TO_KELVIN
 _V_P_RTN = np.array([450.0, 0.0, 0.0])
-_N_A, _T_A = 0.05, 60.0  # ~4% abundance, same temperature as protons
+_N_A, _T_A = 0.05, 60.0 * EV_TO_KELVIN  # ~4% abundance
 _DELTA_V = 10.0
 _B_HAT = np.array([1.0, 0.0, 0.0])
 _V_A_RTN = _V_P_RTN + _DELTA_V * _B_HAT
@@ -166,9 +167,7 @@ def main():
         f"(truth = {true_alpha_speed:.1f} km/s, "
         f"error = {abs(peak_fit.bulk_speed - true_alpha_speed):.1f} km/s)"
     )
-    print(
-        f"               T_alpha = {peak_fit.T_alpha:.1f} eV  (truth = {_T_A:.1f} eV)"
-    )
+    print(f"               T_alpha = {peak_fit.T_alpha:.0f} K  (truth = {_T_A:.0f} K)")
 
     # Compute the three model curves for visualization.
     abs_voltage = np.abs(voltage_per_sweep)
@@ -226,7 +225,7 @@ def main():
         lw=2.0,
         ls="--",
         label=rf"Alpha Gaussian: $\hat{{v}}_\alpha={peak_fit.bulk_speed:.0f}$ km/s, "
-        rf"$\hat{{T}}_\alpha={peak_fit.T_alpha:.0f}$ eV",
+        rf"$\hat{{T}}_\alpha={peak_fit.T_alpha:.0f}$ K",
         zorder=2,
     )
 

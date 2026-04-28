@@ -90,7 +90,7 @@ class TestSwapiProcessor(TestCase):
         mock_fit_solar_wind_proton_moments.return_value = ProtonSolarWindMoments(
             density=5.0,
             temperature=12000.0,
-            bulk_velocity_rtn=returned_bulk_velocity_rtn,
+            bulk_velocity_rtn_sun=returned_bulk_velocity_rtn,
             bad_fit_flag=SwapiL3Flags.NONE,
             density_sigma=0.5,
             temperature_sigma=100.0,
@@ -394,7 +394,7 @@ class TestSwapiProcessor(TestCase):
         mock_fit_solar_wind_proton_moments.return_value = ProtonSolarWindMoments(
             density=5.0,
             temperature=12000.0,
-            bulk_velocity_rtn=np.array([400.0, 10.0, 5.0]),
+            bulk_velocity_rtn_sun=np.array([400.0, 10.0, 5.0]),
             bad_fit_flag=SwapiL3Flags.HI_CHI_SQ,
             density_sigma=0.5,
             temperature_sigma=100.0,
@@ -535,7 +535,7 @@ class TestSwapiProcessor(TestCase):
         mock_fit_solar_wind_proton_moments.return_value = ProtonSolarWindMoments(
             density=returned_density,
             temperature=returned_temperature,
-            bulk_velocity_rtn=returned_bulk_velocity_rtn,
+            bulk_velocity_rtn_sun=returned_bulk_velocity_rtn,
             bad_fit_flag=SwapiL3Flags.NONE,
             density_sigma=0.5,
             temperature_sigma=100.0,
@@ -738,7 +738,7 @@ class TestSwapiProcessor(TestCase):
         mock_fit_solar_wind_proton_moments.return_value = ProtonSolarWindMoments(
             density=5.0,
             temperature=10000.0,
-            bulk_velocity_rtn=np.array([400.0, 0.0, 0.0]),
+            bulk_velocity_rtn_sun=np.array([400.0, 0.0, 0.0]),
             bad_fit_flag=SwapiL3Flags.HI_CHI_SQ,
             density_sigma=0.5,
             temperature_sigma=100.0,

@@ -8,6 +8,7 @@ import scipy.optimize
 from numpy import ndarray
 
 from imap_l3_processing.constants import (
+    BOLTZMANN_CONSTANT_JOULES_PER_KELVIN,
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
     METERS_PER_KILOMETER,
@@ -69,15 +70,17 @@ SWAPI_DEADTIME_S = 183.7e-9
 SWAPI_LIVETIME_S = 0.145
 
 # Floor for the initial-guess temperature, applied when the fitted spectral width
-# is below the value implied by this floor.
-INITIAL_TEMPERATURE_FLOOR_EV = 1.0
+# is below the value implied by this floor (1 eV expressed in Kelvin).
+INITIAL_TEMPERATURE_FLOOR_K = (
+    PROTON_CHARGE_COULOMBS / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
+)
 
 
 @dataclass
 class ProtonSolarWindMoments:
     density: float  # cm^-3
-    temperature: float  # eV
-    bulk_velocity_rtn: ndarray  # shape (3,), km/s, [R, T, N]; inertial frame
+    temperature: float  # K
+    bulk_velocity_rtn_sun: ndarray  # shape (3,), km/s, [R, T, N]; inertial frame
     bad_fit_flag: int
     density_sigma: float = np.nan
     temperature_sigma: float = np.nan
@@ -204,7 +207,9 @@ def _get_initial_guess(
 
     sigma_floor_v = (
         math.sqrt(
-            INITIAL_TEMPERATURE_FLOOR_EV * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG
+            INITIAL_TEMPERATURE_FLOOR_K
+            * BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
+            / PROTON_MASS_KG
         )
         / METERS_PER_KILOMETER
     )
@@ -212,7 +217,7 @@ def _get_initial_guess(
     temperature = float(
         PROTON_MASS_KG
         * (sigma_thermal_v * METERS_PER_KILOMETER) ** 2
-        / PROTON_CHARGE_COULOMBS
+        / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
     )
 
     # Initial transverse velocity is zero; `_optimize` handles the wrong-basin trap.
@@ -237,7 +242,7 @@ def _get_initial_guess(
     return ProtonSolarWindMoments(
         density=density,
         temperature=temperature,
-        bulk_velocity_rtn=bulk_velocity_rtn,
+        bulk_velocity_rtn_sun=bulk_velocity_rtn,
         bad_fit_flag=0,
     )
 
@@ -259,7 +264,7 @@ def _compute_angles(
 @numba.njit(nogil=True)
 def _model_count_rates(
     density: float,
-    temperature: float,  # eV
+    temperature: float,  # K
     bulk_velocity_rtn: ndarray,  # shape (3,), inertial RTN, km/s
     passband_grids: numba.typed.List,  # PassbandGrid per measurement, length N (V-only)
     central_speeds: ndarray,  # shape (N,), km/s, species/V-dependent v_0
@@ -277,10 +282,9 @@ def _model_count_rates(
     azimuthal transmission table is constant across measurements and passed once.
     Deadtime is applied at the residual stage so it acts on the combined
     (proton + alpha) rate."""
-    # Thermal speed uses elementary charge (PROTON_CHARGE_COULOMBS = e), NEVER species charge,
-    # because "temperature in eV" means k_B T = T_eV * e Joules regardless of species.
     thermal_speed = (
-        np.sqrt(temperature * PROTON_CHARGE_COULOMBS / mass_kg) / METERS_PER_KILOMETER
+        np.sqrt(BOLTZMANN_CONSTANT_JOULES_PER_KELVIN * temperature / mass_kg)
+        / METERS_PER_KILOMETER
     )
     bulk_speed = np.linalg.norm(bulk_velocity_rtn)
     n = len(passband_grids)
@@ -570,7 +574,7 @@ def _get_angular_limits(
 
 OA_FULL_AZ_LO = 20.0
 OA_FULL_AZ_HI = 150.0
-OA_SCAN_SPACING_MAX_DEG = 1.0  # ceiling — coarse for typical (T~10 eV)
+OA_SCAN_SPACING_MAX_DEG = 1.0  # ceiling — coarse for typical (T~100,000 K)
 OA_SCAN_SPACING_MIN_DEG = 0.1  # floor — fine for cold-plasma extremes
 OA_SKIP_ABS_THRESHOLD = 1e-9  # max of density × T below this → skip OA region
 
@@ -801,7 +805,7 @@ def _optimize(
 ) -> ProtonSolarWindMoments:
     from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
-    vr0, vt0, vn0 = initial_guess.bulk_velocity_rtn
+    vr0, vt0, vn0 = initial_guess.bulk_velocity_rtn_sun
 
     sigma = np.sqrt(np.maximum(count_rate * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
 
@@ -872,7 +876,7 @@ def _optimize(
     return ProtonSolarWindMoments(
         density=density,
         temperature=temperature,
-        bulk_velocity_rtn=bulk_velocity_rtn,
+        bulk_velocity_rtn_sun=bulk_velocity_rtn,
         bad_fit_flag=bad_fit_flag,
         density_sigma=density_sigma,
         temperature_sigma=temperature_sigma,
