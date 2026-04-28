@@ -465,29 +465,9 @@ def _alpha_initial_guess(
 
     bulk_speed = peak_fit.bulk_speed
     T_alpha = peak_fit.T_alpha
-    alpha_mask = peak_fit.alpha_mask
-    alpha_speeds = esa_voltage_to_alpha_speed(voltage_per_sweep)
-    sigma_thermal_v = max(
-        peak_fit.sigma_v,
-        float(
-            np.sqrt(
-                INITIAL_TEMPERATURE_FLOOR_EV
-                * PROTON_CHARGE_COULOMBS
-                / ALPHA_PARTICLE_MASS_KG
-            )
-            / METERS_PER_KILOMETER
-        ),
-    )
-
     # Project the inferred radial speed difference onto B̂ to get the initial Δv.
     R_hat = proton_bulk_velocity_rtn / v_p_speed
     dv0 = (bulk_speed - v_p_speed) * float(np.dot(R_hat, b_hat_rtn))
-
-    # Density at FWHM bins: sum-based estimate using the marginal deadtime response.
-    fwhm_half_speed = float(np.sqrt(2.0 * np.log(2.0))) * sigma_thermal_v
-    fwhm_mask = alpha_mask & (np.abs(alpha_speeds - bulk_speed) <= fwhm_half_speed)
-    if not np.any(fwhm_mask):
-        fwhm_mask = alpha_mask
 
     unit_alpha = _model_count_rates(
         1.0,
@@ -511,9 +491,9 @@ def _alpha_initial_guess(
     )
 
     numerator = float(
-        max(np.sum(count_avg[fwhm_mask] - proton_obs_avg[fwhm_mask]), 0.0)
+        max(np.sum(count_avg- proton_obs_avg), 0.0)
     )
-    denominator = float(np.sum(delta_alpha_obs_avg[fwhm_mask]))
+    denominator = float(np.sum(delta_alpha_obs_avg))
     if denominator <= 0 or not np.isfinite(denominator):
         return None
     n_alpha = max(numerator / denominator, 1e-3)

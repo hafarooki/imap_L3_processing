@@ -121,12 +121,8 @@ def fit_solar_wind_proton_moments(
     # producing divide-by-zero deep inside the JIT integrator.
     keep = (esa_voltage > 0) & np.isfinite(esa_voltage)
 
-    # FWHM mask: keep only bins at or above half the peak count rate.  Bins in
-    # the deep tails carry almost no proton signal but add noise to the fit.
-    cr_max = float(np.nanmax(count_rate[keep])) if np.any(keep) else 0.0
-    fwhm_mask = count_rate >= 0.5 * cr_max
-    if int((keep & fwhm_mask).sum()) >= 5:
-        keep = keep & fwhm_mask
+    # TODO: adjacent ESA voltages only
+    keep = keep & (count_rate >= count_rate.max() * 0.1)
 
     if not np.all(keep):
         esa_voltage = esa_voltage[keep]
@@ -861,12 +857,17 @@ def _optimize(
 
     # Covariance in (log n, log T, vR, vT, vN) space via Moore-Penrose pseudoinverse
     # Assumes normalized residuals r_i = (model_i - data_i) / sigma_i are i.i.d. N(0,1)
-    cov_x = np.linalg.pinv(result.jac.T @ result.jac)
-
-    # Propagate log-space uncertainties to physical quantities
-    density_sigma = float(density * np.sqrt(max(cov_x[0, 0], 0.0)))
-    temperature_sigma = float(temperature * np.sqrt(max(cov_x[1, 1], 0.0)))
-    velocity_covariance = cov_x[2:5, 2:5]
+    # pinv→svd can fail when the Jacobian is degenerate (all-zero rows, ill-conditioned
+    # fit); fall back to NaN uncertainties rather than crashing.
+    try:
+        cov_x = np.linalg.pinv(result.jac.T @ result.jac)
+        density_sigma = float(density * np.sqrt(max(cov_x[0, 0], 0.0)))
+        temperature_sigma = float(temperature * np.sqrt(max(cov_x[1, 1], 0.0)))
+        velocity_covariance = cov_x[2:5, 2:5]
+    except np.linalg.LinAlgError:
+        density_sigma = np.nan
+        temperature_sigma = np.nan
+        velocity_covariance = np.full((3, 3), np.nan)
 
     return ProtonSolarWindMoments(
         density=density,

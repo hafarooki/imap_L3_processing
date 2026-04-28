@@ -10,6 +10,9 @@
 
 ## TODO
 
+- [ ] fix protons. there was some sort of regression that made it no longer work for the basin problem. probably related to the open aperutre handling
+- [ ] Constrain the speed of the alphas in the fit, not just in the initial guess
+- [ ] thread pool vs multi processing... thread pool seems to be using too little resources
 - [ ] Validate alphas
 - [ ] Empirically validate alpha-species correction $\mathcal{A}_0^\alpha/\mathcal{A}_0^p = \varepsilon_\alpha/\varepsilon_p$ against OMNI alpha density (the paper does not prove this; alpha ABM measurements weren't taken)
 - [ ] Coordinate with cal-file format owner to add a `lab_time` field to the efficiency LUT.
