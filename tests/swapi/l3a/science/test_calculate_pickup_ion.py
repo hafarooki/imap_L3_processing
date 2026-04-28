@@ -13,7 +13,7 @@ import imap_l3_processing
 from imap_l3_processing.constants import PROTON_MASS_KG, \
     PROTON_CHARGE_COULOMBS, ONE_AU_IN_KM, ONE_SECOND_IN_NANOSECONDS, \
     HE_PUI_PARTICLE_MASS_KG, BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
-from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_speed import calculate_combined_sweeps
+from imap_l3_processing.swapi.l3a.science.speed_calculation import calculate_combined_sweeps
 from imap_l3_processing.swapi.l3a.science.calculate_pickup_ion import calculate_pui_energy_cutoff, \
     extract_pui_energy_bins, \
     convert_velocity_relative_to_imap, calculate_velocity_vector, FittingParameters, \
