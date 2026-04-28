@@ -10,7 +10,7 @@ See `docs/swapi/solar-wind-moments.md` § "Alpha Particle Moments".
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import numba
 import numpy as np
@@ -63,6 +63,43 @@ def _nan_alpha_moments(flag: int) -> AlphaSolarWindMoments:
         delta_v=np.nan,
         bad_fit_flag=int(flag),
     )
+
+
+@numba.njit(nogil=True)
+def _alpha_residuals_njit(
+    x,
+    proton_bulk,
+    b_hat_rtn,
+    proton_true_rate,
+    count_rate,
+    sigma,
+    passband_grids,
+    alpha_central_speeds,
+    alpha_central_eff_areas,
+    az_trans,
+    az_trans_spacing,
+    rotation_matrices,
+    spacecraft_velocity_rtn,
+):
+    n_a = np.exp(x[0])
+    T_a = np.exp(x[1])
+    dv = x[2]
+    v_a_rtn = proton_bulk + dv * b_hat_rtn
+    alpha_true = _model_count_rates(
+        n_a,
+        T_a,
+        v_a_rtn,
+        passband_grids,
+        alpha_central_speeds,
+        alpha_central_eff_areas,
+        az_trans,
+        az_trans_spacing,
+        rotation_matrices,
+        spacecraft_velocity_rtn,
+        ALPHA_PARTICLE_MASS_KG,
+    )
+    combined_obs = apply_deadtime_correction_array(proton_true_rate + alpha_true)
+    return (combined_obs - count_rate) / sigma
 
 
 def fit_solar_wind_alpha_moments(
@@ -180,14 +217,13 @@ def fit_solar_wind_alpha_moments(
     proton_bulk = np.asarray(proton_moments.bulk_velocity_rtn, dtype=float)
 
     def residuals(x):
-        n_a = float(np.exp(x[0]))
-        T_a = float(np.exp(x[1]))
-        dv = float(x[2])
-        v_a_rtn = proton_bulk + dv * b_hat_rtn
-        alpha_true = _model_count_rates(
-            n_a,
-            T_a,
-            v_a_rtn,
+        return _alpha_residuals_njit(
+            x,
+            proton_bulk,
+            b_hat_rtn,
+            proton_true_rate,
+            count_rate,
+            sigma,
             passband_grids,
             alpha_central_speeds,
             alpha_central_eff_areas,
@@ -195,10 +231,7 @@ def fit_solar_wind_alpha_moments(
             az_trans_spacing,
             rotation_matrices,
             spacecraft_velocity_rtn,
-            ALPHA_PARTICLE_MASS_KG,
         )
-        combined_obs = apply_deadtime_correction_array(proton_true_rate + alpha_true)
-        return (combined_obs - count_rate) / sigma
 
     x0 = np.array([np.log(max(n0, 1e-3)), np.log(max(T0, 1e-3)), dv0])
     result = scipy.optimize.least_squares(residuals, x0, method="lm", diff_step=1e-4)
@@ -244,6 +277,119 @@ def fit_solar_wind_alpha_moments(
     )
 
 
+class _AlphaPeakFit(NamedTuple):
+    """Intermediate results of the log-residual Gaussian fit, used by both the
+    initial-guess logic and the diagnostic figure script."""
+
+    bulk_speed: float
+    sigma_v: float
+    gauss_A: float
+    T_alpha: float
+    alpha_mask: ndarray
+    log_residual: ndarray
+    alpha_min_voltage: float
+    alpha_max_voltage: float
+    fit_speeds: ndarray
+    fit_log_res: ndarray
+    fit_sigma_ell: ndarray
+
+
+def _alpha_peak_fit(
+    count_avg: ndarray,
+    proton_obs_avg: ndarray,
+    voltage_per_sweep: ndarray,
+    n_sweeps: int,
+    v_p_speed: float,
+) -> Optional["_AlphaPeakFit"]:
+    """Locate the alpha bump in the log-space residual and fit a Gaussian.
+
+    ``count_avg`` and ``proton_obs_avg`` are per-bin averages over sweeps (shape
+    ``(n_bins,)``).  ``v_p_speed`` drives the voltage search window [2×, 4×]
+    the proton peak voltage. The Gaussian fit uses all velocity data (not just
+    the alpha window) with the peak location constrained to [alpha_min_speed,
+    alpha_max_speed]. This gives sigma better conditioning than a narrow window.
+
+    Returns an :class:`_AlphaPeakFit` with the fit parameters and all
+    intermediate arrays needed for diagnostics, or ``None`` when no alpha
+    signal is detected.
+    """
+    proton_peak_voltage = (
+        PROTON_MASS_KG
+        * (v_p_speed * METERS_PER_KILOMETER) ** 2
+        / (2.0 * PROTON_CHARGE_COULOMBS * SWAPI_K_FACTOR)
+    )
+    alpha_min_voltage = 2.0 * proton_peak_voltage
+    alpha_max_voltage = 4.0 * proton_peak_voltage
+    abs_voltage = np.abs(voltage_per_sweep)
+    alpha_mask = (abs_voltage >= alpha_min_voltage) & (abs_voltage <= alpha_max_voltage)
+    if not np.any(alpha_mask):
+        return None
+
+    proton_obs_clipped = np.maximum(proton_obs_avg, 0.1)
+    log_residual = np.log(np.maximum(count_avg, 0.1)) - np.log(proton_obs_clipped)
+
+    if float(np.max(log_residual[alpha_mask])) < np.log(2.0):
+        return None
+
+    alpha_speeds = esa_voltage_to_alpha_speed(voltage_per_sweep)
+    alpha_min_speed = float(esa_voltage_to_alpha_speed(alpha_min_voltage))
+    alpha_max_speed = float(esa_voltage_to_alpha_speed(alpha_max_voltage))
+
+    # Fit to all bins (not just alpha window) with peak constrained to alpha range.
+    # Using more data improves sigma conditioning when the peak is near the window edge.
+    fit_speeds = alpha_speeds
+    fit_log_res = log_residual
+    fit_count_avg = count_avg
+    peak_idx = int(np.nanargmax(log_residual))
+    fit_sigma_ell = 1.0 / np.sqrt(
+        np.maximum(fit_count_avg, 0.1) * n_sweeps * SWAPI_LIVETIME_S
+    )
+
+    gauss_A = float(fit_log_res[peak_idx])
+    try:
+        (gauss_A, bulk_speed, sigma_v), _ = scipy.optimize.curve_fit(
+            lambda v, A, mu, sigma: A * np.exp(-((v - mu) ** 2) / (2 * sigma**2)),
+            fit_speeds,
+            fit_log_res,
+            p0=[gauss_A, alpha_speeds[peak_idx], 50.0],
+            bounds=([0, alpha_min_speed, 0], [np.inf, alpha_max_speed, np.inf]),
+            sigma=fit_sigma_ell,
+            absolute_sigma=True,
+        )
+    except RuntimeError:
+        bulk_speed = float(alpha_speeds[peak_idx])
+        sigma_v = 50.0
+
+    sigma_floor_v = float(
+        np.sqrt(
+            INITIAL_TEMPERATURE_FLOOR_EV
+            * PROTON_CHARGE_COULOMBS
+            / ALPHA_PARTICLE_MASS_KG
+        )
+        / METERS_PER_KILOMETER
+    )
+    sigma_thermal_v = max(float(sigma_v), sigma_floor_v)
+    T_alpha = float(
+        ALPHA_PARTICLE_MASS_KG
+        * (sigma_thermal_v * METERS_PER_KILOMETER) ** 2
+        / PROTON_CHARGE_COULOMBS
+    )
+
+    return _AlphaPeakFit(
+        bulk_speed=float(bulk_speed),
+        sigma_v=float(sigma_v),
+        gauss_A=float(gauss_A),
+        T_alpha=T_alpha,
+        alpha_mask=alpha_mask,
+        log_residual=log_residual,
+        alpha_min_voltage=float(alpha_min_voltage),
+        alpha_max_voltage=float(alpha_max_voltage),
+        fit_speeds=fit_speeds,
+        fit_log_res=fit_log_res,
+        fit_sigma_ell=fit_sigma_ell,
+    )
+
+
 def _alpha_initial_guess(
     count_rate: ndarray,
     esa_voltage: ndarray,
@@ -280,71 +426,35 @@ def _alpha_initial_guess(
     count_avg = counts_per_sweep.mean(axis=0)
     proton_obs_avg = apply_deadtime_correction_array(proton_true_avg)
 
-    # Alpha voltage search range derived from the proton fit speed.
     v_p_speed = float(np.linalg.norm(proton_bulk_velocity_rtn))
     if v_p_speed < 1.0:
         return None
-    proton_peak_voltage = (
-        PROTON_MASS_KG
-        * (v_p_speed * METERS_PER_KILOMETER) ** 2
-        / (2.0 * PROTON_CHARGE_COULOMBS * SWAPI_K_FACTOR)
+
+    peak_fit = _alpha_peak_fit(
+        count_avg, proton_obs_avg, voltage_per_sweep, n_sweeps, v_p_speed
     )
-    alpha_min_voltage = 2.0 * proton_peak_voltage
-    alpha_max_voltage = 4.0 * proton_peak_voltage
-    abs_voltage = np.abs(voltage_per_sweep)
-    alpha_mask = (abs_voltage >= alpha_min_voltage) & (abs_voltage <= alpha_max_voltage)
-    if not np.any(alpha_mask):
+    if peak_fit is None:
         return None
 
-    # Log-space residual: log(count / proton_model), both floored at 0.1 Hz.
-    proton_obs_clipped = np.maximum(proton_obs_avg, 0.1)
-    log_residual = np.log(np.maximum(count_avg, 0.1)) - np.log(proton_obs_clipped)
-
-    # Require the peak log-residual in the alpha range to be ≥ log(2):
-    # the observed rate must be at least 2× the proton model at the candidate peak.
-    peak_log_res = float(np.max(log_residual[alpha_mask]))
-    if peak_log_res < np.log(2.0):
-        return None
-
-    # Gaussian fit to log-residual vs alpha speed within the search range.
+    bulk_speed = peak_fit.bulk_speed
+    T_alpha = peak_fit.T_alpha
+    alpha_mask = peak_fit.alpha_mask
     alpha_speeds = esa_voltage_to_alpha_speed(voltage_per_sweep)
-    fit_speeds = alpha_speeds[alpha_mask]
-    fit_log_res = log_residual[alpha_mask]
-    peak_in_range = int(np.nanargmax(fit_log_res))
-
-    alpha_min_speed = float(esa_voltage_to_alpha_speed(alpha_min_voltage))
-    alpha_max_speed = float(esa_voltage_to_alpha_speed(alpha_max_voltage))
-    try:
-        (_, bulk_speed, sigma_v), _ = scipy.optimize.curve_fit(
-            lambda v, A, mu, sigma: A * np.exp(-((v - mu) ** 2) / (2 * sigma**2)),
-            fit_speeds,
-            fit_log_res,
-            p0=[fit_log_res.max(), fit_speeds[peak_in_range], 50.0],
-            bounds=([0, alpha_min_speed, 0], [np.inf, alpha_max_speed, np.inf]),
-        )
-    except RuntimeError:
-        bulk_speed = float(fit_speeds[peak_in_range])
-        sigma_v = 50.0
-
-    sigma_floor_v = float(
-        np.sqrt(
-            INITIAL_TEMPERATURE_FLOOR_EV
-            * PROTON_CHARGE_COULOMBS
-            / ALPHA_PARTICLE_MASS_KG
-        )
-        / METERS_PER_KILOMETER
-    )
-    sigma_thermal_v = max(float(sigma_v), sigma_floor_v)
-    T_alpha = float(
-        ALPHA_PARTICLE_MASS_KG
-        * (sigma_thermal_v * METERS_PER_KILOMETER) ** 2
-        / PROTON_CHARGE_COULOMBS
+    sigma_thermal_v = max(
+        peak_fit.sigma_v,
+        float(
+            np.sqrt(
+                INITIAL_TEMPERATURE_FLOOR_EV
+                * PROTON_CHARGE_COULOMBS
+                / ALPHA_PARTICLE_MASS_KG
+            )
+            / METERS_PER_KILOMETER
+        ),
     )
 
     # Project the inferred radial speed difference onto B̂ to get the initial Δv.
-    # Assume the alpha differential velocity is anti-sunward (along the proton direction).
     R_hat = proton_bulk_velocity_rtn / v_p_speed
-    dv0 = (float(bulk_speed) - v_p_speed) * float(np.dot(R_hat, b_hat_rtn))
+    dv0 = (bulk_speed - v_p_speed) * float(np.dot(R_hat, b_hat_rtn))
 
     # Density at FWHM bins: sum-based estimate using the marginal deadtime response.
     fwhm_half_speed = float(np.sqrt(2.0 * np.log(2.0))) * sigma_thermal_v
