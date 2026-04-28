@@ -350,11 +350,12 @@ class TestFlagsAndGuards(unittest.TestCase):
         self.assertTrue(np.isnan(result.density))
         self.assertTrue(np.all(np.isnan(result.bulk_velocity_rtn)))
 
-    def test_mag_gap_returns_mag_gap_flag(self):
+    def test_mag_gap_with_zero_proton_returns_mag_gap(self):
+        """When both MAG and proton data are missing/zero, return MAG_GAP."""
         proton = ProtonSolarWindMoments(
             density=5.0,
             temperature=10.0,
-            bulk_velocity_rtn=np.array([450.0, 0.0, 0.0]),
+            bulk_velocity_rtn=np.array([0.0, 0.0, 0.0]),  # Zero proton velocity
             bad_fit_flag=int(SwapiL3Flags.NONE),
         )
         result = fit_solar_wind_alpha_moments(

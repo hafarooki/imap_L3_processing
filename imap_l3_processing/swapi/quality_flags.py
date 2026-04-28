@@ -8,3 +8,4 @@ class SwapiL3Flags(FlagNameMixin):
     PUI_FIT_MISSING_UNCERTAINTY = 2 ** 4
     STALE_PROTON = 2 ** 5
     MAG_GAP = 2 ** 6
+    ALPHA_MAG_DATA_FALLBACK = 2 ** 7

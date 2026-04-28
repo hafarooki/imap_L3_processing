@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace, astuple
 
 import numpy as np
+import spiceypy
 from imap_data_access.processing_input import ProcessingInputCollection
 from uncertainties import ufloat
 from uncertainties.unumpy import uarray, nominal_values
@@ -108,7 +109,17 @@ def _compute_b_hat_rtn(
     )[0]
     if not np.all(np.isfinite(b_dsrf)) or np.linalg.norm(b_dsrf) < 1e-12:
         return np.full(3, np.nan)
-    R = get_swapi_dsrf_to_rtn(np.array([chunk_epoch_center_tt2000_ns]))[0]
+    # DPS CK has ~2-minute daily gaps; querying sxform during a gap triggers a
+    # CSPICE trcpkg crash (SIGABRT) after many prior CK reads on large files.
+    # RETURN mode converts the abort to a catchable Python exception.
+    spiceypy.erract('SET', 256, 'RETURN')
+    try:
+        R = get_swapi_dsrf_to_rtn(np.array([chunk_epoch_center_tt2000_ns]))[0]
+    except Exception:
+        return np.full(3, np.nan)
+    finally:
+        spiceypy.reset()
+        spiceypy.erract('SET', 256, 'ABORT')
     b_rtn = R @ b_dsrf
     return b_rtn / np.linalg.norm(b_rtn)
 

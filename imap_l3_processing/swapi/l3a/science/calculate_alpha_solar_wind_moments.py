@@ -6,6 +6,10 @@ performed by the caller and passed in as `proton_moments`. Stage 2 here is a 3-D
 Levenberg–Marquardt over (n_α, T_α, Δv) where v_α = v_p* + Δv * B̂. The combined
 observed model is `deadtime(proton_true + alpha_true)` so deadtime acts on the sum.
 
+When magnetic data is unavailable, the fit assumes the alpha bulk velocity direction
+matches the proton direction and only the speed differs. This is flagged with the
+ALPHA_MAG_DATA_FALLBACK quality flag.
+
 See `docs/swapi/solar-wind-moments.md` § "Alpha Particle Moments".
 """
 
@@ -123,8 +127,11 @@ def fit_solar_wind_alpha_moments(
     ``alpha_effective_area_scale = ε_α(t) / ε_p(t_lab)`` (note the proton-lab denominator
     even for alphas — see `solar-wind-moments.md` § "Alpha Particle Moments").
 
-    ``b_hat_rtn`` is the unit MAG vector at the chunk center, rotated to RTN. Use NaN to
-    flag a MAG gap; the function will return ``bad_fit_flag = MAG_GAP`` with NaN moments.
+    ``b_hat_rtn`` is the unit MAG vector at the chunk center, rotated to RTN. If MAG data
+    is unavailable (NaN or near-zero), the fit assumes the alpha bulk velocity direction
+    matches the proton direction (v_α = v_α_speed · V̂_p / ||V_p||), and returns
+    ``bad_fit_flag |= ALPHA_MAG_DATA_FALLBACK``. If the proton speed is also near-zero,
+    returns ``bad_fit_flag = MAG_GAP`` with NaN moments.
 
     ``rotation_matrices`` and ``spacecraft_velocity_rtn`` may be precomputed and reused
     from the Stage 1 proton fit; if ``None``, computed internally from ``measurement_time``.
@@ -133,11 +140,24 @@ def fit_solar_wind_alpha_moments(
     if int(proton_moments.bad_fit_flag) != int(SwapiL3Flags.NONE):
         return _nan_alpha_moments(SwapiL3Flags.STALE_PROTON)
 
-    # Guard: MAG gap or zero-magnitude B field.
-    if not np.all(np.isfinite(b_hat_rtn)) or np.linalg.norm(b_hat_rtn) < 1e-12:
-        return _nan_alpha_moments(SwapiL3Flags.MAG_GAP)
+    proton_bulk_rtn = np.asarray(proton_moments.bulk_velocity_rtn, dtype=float)
+    proton_speed = np.linalg.norm(proton_bulk_rtn)
+    mag_gap_fallback = False
 
-    b_hat_rtn = np.asarray(b_hat_rtn, dtype=float)
+    # If MAG data unavailable, assume alpha direction matches proton direction.
+    # b_hat_rtn should be a unit vector; check for non-finite values, wrong magnitude,
+    # or if _compute_b_hat_rtn already returned NaN due to data gaps or fill values.
+    b_hat_check = np.asarray(b_hat_rtn, dtype=float)
+    b_norm = np.linalg.norm(b_hat_check)
+    # Unit vector should have norm ≈1; allow small tolerance for numerical error.
+    is_valid_unit_vector = np.all(np.isfinite(b_hat_check)) and 0.99 < b_norm < 1.01
+    if not is_valid_unit_vector:
+        if proton_speed < 1e-12:
+            return _nan_alpha_moments(SwapiL3Flags.MAG_GAP)
+        b_hat_rtn = proton_bulk_rtn / proton_speed
+        mag_gap_fallback = True
+    else:
+        b_hat_rtn = b_hat_check
 
     # SPICE shared with Stage 1 if provided; otherwise compute here.
     if rotation_matrices is None or spacecraft_velocity_rtn is None:
@@ -203,9 +223,7 @@ def fit_solar_wind_alpha_moments(
         az_trans_spacing=az_trans_spacing,
         rotation_matrices=rotation_matrices,
         spacecraft_velocity_rtn=spacecraft_velocity_rtn,
-        proton_bulk_velocity_rtn=np.asarray(
-            proton_moments.bulk_velocity_rtn, dtype=float
-        ),
+        proton_bulk_velocity_rtn=proton_bulk_rtn,
         b_hat_rtn=b_hat_rtn,
     )
     if initial_guess is None:
@@ -214,7 +232,7 @@ def fit_solar_wind_alpha_moments(
     n0, T0, dv0 = initial_guess
     # Sigma is per-bin Poisson; with flatten-not-average there is no √5 normalization to apply.
     sigma = np.sqrt(np.maximum(count_rate * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
-    proton_bulk = np.asarray(proton_moments.bulk_velocity_rtn, dtype=float)
+    proton_bulk = proton_bulk_rtn
 
     def residuals(x):
         return _alpha_residuals_njit(
@@ -251,6 +269,8 @@ def fit_solar_wind_alpha_moments(
     dv_fit = float(result.x[2])
     bulk_velocity_rtn = proton_bulk + dv_fit * b_hat_rtn
     bad_fit_flag = SwapiL3Flags.NONE if result.success else SwapiL3Flags.HI_CHI_SQ
+    if mag_gap_fallback:
+        bad_fit_flag |= SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK
 
     # Covariance in (log n, log T, Δv) space; propagate to physical units.
     cov_x = np.linalg.pinv(result.jac.T @ result.jac)
