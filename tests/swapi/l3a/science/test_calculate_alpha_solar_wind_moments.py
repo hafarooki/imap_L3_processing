@@ -116,7 +116,6 @@ class TestModelCountRatesSpecies(unittest.TestCase):
         cls.at = np.asarray(sr.azimuthal_transmission, dtype=float)
         cls.ats = float(sr.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
         cls.rot = np.eye(3).reshape(1, 3, 3)
-        cls.sc_vel = np.zeros(3)
 
     def test_central_effective_area_scale_is_linear(self):
         # Doubling central_effective_areas doubles the model rate (it's a multiplier).
@@ -131,7 +130,6 @@ class TestModelCountRatesSpecies(unittest.TestCase):
             self.at,
             self.ats,
             self.rot,
-            self.sc_vel,
             PROTON_MASS_KG,
         )
         r_two = _model_count_rates(
@@ -144,7 +142,6 @@ class TestModelCountRatesSpecies(unittest.TestCase):
             self.at,
             self.ats,
             self.rot,
-            self.sc_vel,
             PROTON_MASS_KG,
         )
         np.testing.assert_allclose(r_two, r_one * 2.0, rtol=1e-12)
@@ -165,7 +162,6 @@ class TestModelCountRatesSpecies(unittest.TestCase):
             self.at,
             self.ats,
             self.rot,
-            self.sc_vel,
             PROTON_MASS_KG,
         )
         r_alpha_mass_proton_grid = _model_count_rates(
@@ -178,7 +174,6 @@ class TestModelCountRatesSpecies(unittest.TestCase):
             self.at,
             self.ats,
             self.rot,
-            self.sc_vel,
             ALPHA_PARTICLE_MASS_KG,
         )
         # Different thermal width → different integral. They should not be equal.
@@ -224,7 +219,6 @@ def _synthesize_combined_observed(
     n_meas = _N_SWEEPS * len(voltages)
     rot = _spin_rotation_matrices(n_meas)
     esa_flat = np.tile(voltages, _N_SWEEPS)
-    sc_vel = np.zeros(3)
     grids = numba.typed.List([sr.create_passband_grid(v) for v in esa_flat])
     p_cs = np.array(
         [sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in esa_flat]
@@ -236,7 +230,7 @@ def _synthesize_combined_observed(
     at = np.asarray(sr.azimuthal_transmission, dtype=float)
     ats = float(sr.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
     p_true = _model_count_rates(
-        n_p, T_p, v_p_rtn, grids, p_cs, cea, at, ats, rot, sc_vel, PROTON_MASS_KG
+        n_p, T_p, v_p_rtn, grids, p_cs, cea, at, ats, rot, PROTON_MASS_KG
     )
     a_true = _model_count_rates(
         n_a,
@@ -248,13 +242,12 @@ def _synthesize_combined_observed(
         at,
         ats,
         rot,
-        sc_vel,
         ALPHA_PARTICLE_MASS_KG,
     )
     obs_clean = apply_deadtime_correction_array(p_true + a_true)
     rng = np.random.default_rng(seed)
     obs = rng.poisson(np.maximum(obs_clean * 0.145, 0)).astype(float) / 0.145
-    return obs, esa_flat, rot, sc_vel
+    return obs, esa_flat, rot
 
 
 class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
@@ -275,7 +268,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
         cls.b_hat_rtn = np.array([1.0, 0.0, 0.0])
         cls.v_a_rtn = cls.v_p_rtn + cls.delta_v * cls.b_hat_rtn
 
-        cls.obs, cls.esa_flat, cls.rot, cls.sc_vel = _synthesize_combined_observed(
+        cls.obs, cls.esa_flat, cls.rot = _synthesize_combined_observed(
             cls.sr,
             cls.voltages,
             cls.n_p,
@@ -290,7 +283,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
         return ProtonSolarwindMoments_or_real(
             density=self.n_p,
             temperature=self.T_p,
-            bulk_velocity_rtn_sun=self.v_p_rtn.copy(),
+            bulk_velocity_rtn=self.v_p_rtn.copy(),
             bad_fit_flag=int(flag),
             velocity_covariance=np.eye(3) * 0.01,
         )
@@ -304,7 +297,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
             proton_moments=ProtonSolarwindMoments_or_real(
                 density=self.n_p,
                 temperature=self.T_p,
-                bulk_velocity_rtn_sun=self.v_p_rtn.copy(),
+                bulk_velocity_rtn=self.v_p_rtn.copy(),
                 bad_fit_flag=int(SwapiL3Flags.NONE),
                 velocity_covariance=np.eye(3) * 0.01,
             ),
@@ -312,7 +305,6 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
             alpha_effective_area_scale=1.0,
             proton_effective_area_scale=1.0,
             rotation_matrices=self.rot,
-            spacecraft_velocity_rtn=self.sc_vel,
         )
         self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.NONE))
         self.assertAlmostEqual(result.density, self.n_a, delta=0.05)
@@ -339,7 +331,7 @@ class TestFlagsAndGuards(unittest.TestCase):
         proton = ProtonSolarWindMoments(
             density=5.0,
             temperature=10.0,
-            bulk_velocity_rtn_sun=np.array([450.0, 0.0, 0.0]),
+            bulk_velocity_rtn=np.array([450.0, 0.0, 0.0]),
             bad_fit_flag=int(SwapiL3Flags.HI_CHI_SQ),
         )
         result = fit_solar_wind_alpha_moments(
@@ -361,7 +353,7 @@ class TestFlagsAndGuards(unittest.TestCase):
         proton = ProtonSolarWindMoments(
             density=5.0,
             temperature=10.0,
-            bulk_velocity_rtn_sun=np.array([0.0, 0.0, 0.0]),  # Zero proton velocity
+            bulk_velocity_rtn=np.array([0.0, 0.0, 0.0]),  # Zero proton velocity
             bad_fit_flag=int(SwapiL3Flags.NONE),
         )
         result = fit_solar_wind_alpha_moments(

@@ -47,12 +47,11 @@ def read_l2_swapi_data(cdf: CDF) -> SwapiL2Data:
     )
 
 
-def get_swapi_geometry(measurement_time: ndarray) -> tuple[ndarray, ndarray]:
+def get_swapi_geometry(measurement_time: ndarray) -> ndarray:
     """Resolve SPICE geometry for a chunk of SWAPI measurements.
 
     Returns:
         rotation_matrices: shape (N, 3, 3) — RTN→SWAPI rotation at each measurement time.
-        spacecraft_velocity_rtn: shape (3,), km/s — spacecraft velocity at the median time.
     """
     with _spice_lock:
         # spiceypy.unitim is scalar-only, so vectorize over the input.
@@ -66,16 +65,7 @@ def get_swapi_geometry(measurement_time: ndarray) -> tuple[ndarray, ndarray]:
             et_times, SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_SWAPI
         )
 
-        middle_et = float(np.median(et_times))
-        state_eclipj2000 = imap_state(middle_et, SpiceFrame.ECLIPJ2000)
-        rtn_from_eclipj2000 = get_rotation_matrix(
-            middle_et, SpiceFrame.ECLIPJ2000, SpiceFrame.IMAP_RTN
-        )
-        spacecraft_velocity_rtn = np.einsum(
-            "ij,j->i", rtn_from_eclipj2000, state_eclipj2000[3:]
-        )
-
-    return rotation_matrices, spacecraft_velocity_rtn
+    return rotation_matrices
 
 
 def get_swapi_dsrf_to_rtn(measurement_time_tt2000_ns: ndarray) -> ndarray:
@@ -93,6 +83,15 @@ def get_swapi_dsrf_to_rtn(measurement_time_tt2000_ns: ndarray) -> ndarray:
             ]
         )
         return get_rotation_matrix(et_times, SpiceFrame.IMAP_DPS, SpiceFrame.IMAP_RTN)
+
+
+def get_spacecraft_velocity_rtn(epoch_tt2000_ns: float) -> ndarray:
+    """Return the spacecraft velocity at `epoch_tt2000_ns` (TT2000 ns) in RTN, km/s."""
+    with _spice_lock:
+        et = spiceypy.unitim(float(epoch_tt2000_ns) / ONE_SECOND_IN_NANOSECONDS, "TT", "ET")
+        state_eclipj2000 = imap_state(et, SpiceFrame.ECLIPJ2000)
+        rtn_from_eclipj2000 = get_rotation_matrix(et, SpiceFrame.ECLIPJ2000, SpiceFrame.IMAP_RTN)
+    return np.einsum("ij,j->i", rtn_from_eclipj2000, state_eclipj2000[3:])
 
 
 def chunk_l2_data(data: SwapiL2Data, chunk_size: int) -> Iterable[SwapiL2Data]:

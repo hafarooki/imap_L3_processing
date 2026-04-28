@@ -150,25 +150,16 @@ class TestComputeAngles(unittest.TestCase):
     """
 
     def test_antisunward_beam_with_identity_rotation(self):
-        # v_RTN = [450, 0, 0], identity rotation, no SC velocity
+        # v_RTN = [450, 0, 0], identity rotation
         # v_xyz = [450, 0, 0]
         # phi = arctan2(-450, 0) = -90°, theta = arcsin(0/450) = 0°
-        phi, theta = _compute_angles(
-            np.array([450.0, 0.0, 0.0]), np.eye(3), np.zeros(3)
-        )
+        phi, theta = _compute_angles(np.array([450.0, 0.0, 0.0]), np.eye(3))
         np.testing.assert_allclose(phi, -90.0, atol=1e-6)
         np.testing.assert_allclose(theta, 0.0, atol=1e-6)
 
-    def test_spacecraft_velocity_shifts_apparent_direction(self):
-        bulk_velocity_rtn = np.array([450.0, 0.0, 0.0])
-        sc_velocity = np.array([0.0, 30.0, 0.0])
-        phi_no_sc, _ = _compute_angles(bulk_velocity_rtn, np.eye(3), np.zeros(3))
-        phi_with_sc, _ = _compute_angles(bulk_velocity_rtn, np.eye(3), sc_velocity)
-        self.assertFalse(np.isclose(phi_no_sc, phi_with_sc))
-
     def test_elevation_nonzero_for_z_component(self):
         bulk_velocity_rtn = np.array([450.0, 0.0, 50.0])
-        _, theta = _compute_angles(bulk_velocity_rtn, np.eye(3), np.zeros(3))
+        _, theta = _compute_angles(bulk_velocity_rtn, np.eye(3))
         v_b = np.linalg.norm(bulk_velocity_rtn)
         expected_theta = np.degrees(np.arcsin(-50.0 / v_b))
         np.testing.assert_allclose(theta, expected_theta, atol=1e-6)
@@ -176,21 +167,17 @@ class TestComputeAngles(unittest.TestCase):
     def test_rotation_matrix_changes_azimuth_not_elevation(self):
         # 90° rotation about z: x→y, y→−x; elevation (z component) unchanged
         R = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=float)
-        phi_id, theta_id = _compute_angles(
-            np.array([450.0, 0.0, 0.0]), np.eye(3), np.zeros(3)
-        )
-        phi_rot, theta_rot = _compute_angles(
-            np.array([450.0, 0.0, 0.0]), R, np.zeros(3)
-        )
+        phi_id, theta_id = _compute_angles(np.array([450.0, 0.0, 0.0]), np.eye(3))
+        phi_rot, theta_rot = _compute_angles(np.array([450.0, 0.0, 0.0]), R)
         np.testing.assert_allclose(theta_rot, theta_id, atol=1e-6)
         self.assertFalse(np.isclose(phi_rot, phi_id))
 
     def test_result_independent_of_bulk_speed_magnitude_for_angles(self):
-        # Angles depend only on direction, not magnitude (given no SC velocity)
+        # Angles depend only on direction, not magnitude
         v1 = np.array([300.0, 50.0, -20.0])
         v2 = v1 * 2
-        phi1, theta1 = _compute_angles(v1, np.eye(3), np.zeros(3))
-        phi2, theta2 = _compute_angles(v2, np.eye(3), np.zeros(3))
+        phi1, theta1 = _compute_angles(v1, np.eye(3))
+        phi2, theta2 = _compute_angles(v2, np.eye(3))
         np.testing.assert_allclose(phi1, phi2, atol=1e-4)
         np.testing.assert_allclose(theta1, theta2, atol=1e-4)
 
@@ -382,7 +369,6 @@ class TestModelCountRates(unittest.TestCase):
         voltages = np.geomspace(peak_v * 0.8, peak_v * 1.3, 5)
         cls.grids, cls.cs, cls.cea, cls.at, cls.ats = _build_proton_arrays(sr, voltages)
         cls.rot = np.tile(np.eye(3), (5, 1, 1))
-        cls.sc_vel = np.zeros(3)
 
     def _mcr(self, density, temperature, velocity):
         return _model_count_rates(
@@ -395,7 +381,6 @@ class TestModelCountRates(unittest.TestCase):
             self.at,
             self.ats,
             self.rot,
-            self.sc_vel,
             PROTON_MASS_KG,
         )
 
@@ -468,7 +453,6 @@ class TestGetInitialGuess(unittest.TestCase):
             spin_period_s=spin_s,
             dt_s=dt_s,
         )
-        self.sc_vel = np.zeros(3)
 
         self.count_rate = _model_count_rates(
             self.true_density,
@@ -480,12 +464,10 @@ class TestGetInitialGuess(unittest.TestCase):
             self.at,
             self.ats,
             self.rotation_matrices,
-            self.sc_vel,
             PROTON_MASS_KG,
         )
 
-    def _run(self, spacecraft_velocity_rtn=None):
-        sc = self.sc_vel if spacecraft_velocity_rtn is None else spacecraft_velocity_rtn
+    def _run(self):
         return _get_initial_guess(
             self.count_rate,
             self.voltages,
@@ -495,13 +477,12 @@ class TestGetInitialGuess(unittest.TestCase):
             self.at,
             self.ats,
             self.rotation_matrices,
-            sc,
         )
 
     def test_recovers_bulk_speed(self):
         # Initial guess returns the radial speed only; compare to v_R, not |v_true|.
         np.testing.assert_allclose(
-            self._run().bulk_velocity_rtn_sun[0], self.true_speed, rtol=0.02
+            self._run().bulk_velocity_rtn[0], self.true_speed, rtol=0.02
         )
 
     def test_recovers_temperature(self):
@@ -515,19 +496,11 @@ class TestGetInitialGuess(unittest.TestCase):
         # in the initial density. The optimizer corrects this in step 3.
         np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.2)
 
-    def test_bulk_velocity_is_anti_sunward(self):
+    def test_bulk_velocity_initial_guess(self):
         result = self._run()
-        self.assertGreater(result.bulk_velocity_rtn_sun[0], 0)
-        np.testing.assert_allclose(result.bulk_velocity_rtn_sun[1:], 0.0)
-
-    def test_spacecraft_velocity_does_not_affect_initial_bulk_velocity(self):
-        # The initial guess is purely radial regardless of SC velocity.
-        result = self._run(spacecraft_velocity_rtn=np.array([10.0, 5.0, -3.0]))
-        np.testing.assert_allclose(
-            result.bulk_velocity_rtn_sun,
-            np.array([self.true_speed, 0.0, 0.0]),
-            rtol=0.02,
-        )
+        self.assertGreater(result.bulk_velocity_rtn[0], 0)
+        np.testing.assert_allclose(result.bulk_velocity_rtn[1], -30.0, atol=1.0)
+        np.testing.assert_allclose(result.bulk_velocity_rtn[2], 0.0, atol=1e-6)
 
 
 _R_BASE_RTN_TO_SWAPI = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
@@ -575,7 +548,6 @@ class TestOptimize(unittest.TestCase):
         )
 
         cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
-        cls.sc_vel = np.zeros(3)
 
         cls.count_rate = _model_count_rates(
             cls.true_density,
@@ -587,13 +559,12 @@ class TestOptimize(unittest.TestCase):
             cls.at,
             cls.ats,
             cls.rot,
-            cls.sc_vel,
             PROTON_MASS_KG,
         )
         cls.initial_guess = ProtonSolarWindMoments(
             density=cls.true_density * 0.8,
             temperature=cls.true_temperature * 1.2,
-            bulk_velocity_rtn_sun=np.array([cls.true_speed * 1.05, 0.0, 0.0]),
+            bulk_velocity_rtn=np.array([cls.true_speed * 1.05, 0.0, 0.0]),
             bad_fit_flag=0,
         )
 
@@ -606,7 +577,6 @@ class TestOptimize(unittest.TestCase):
             self.at,
             self.ats,
             self.rot,
-            self.sc_vel,
             self.initial_guess,
         )
 
@@ -620,7 +590,7 @@ class TestOptimize(unittest.TestCase):
 
     def test_recovers_bulk_velocity(self):
         np.testing.assert_allclose(
-            self._run().bulk_velocity_rtn_sun, self.true_velocity, rtol=0.05, atol=1.0
+            self._run().bulk_velocity_rtn, self.true_velocity, rtol=0.05, atol=1.0
         )
 
     def test_success_flag_on_good_fit(self):
@@ -655,7 +625,6 @@ class TestUncertainties(unittest.TestCase):
         )
 
         cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
-        cls.sc_vel = np.zeros(3)
 
         cls.count_rate = _model_count_rates(
             cls.true_density,
@@ -667,13 +636,12 @@ class TestUncertainties(unittest.TestCase):
             cls.at,
             cls.ats,
             cls.rot,
-            cls.sc_vel,
             PROTON_MASS_KG,
         )
         cls.initial_guess = ProtonSolarWindMoments(
             density=cls.true_density * 0.8,
             temperature=cls.true_temperature * 1.2,
-            bulk_velocity_rtn_sun=np.array([cls.true_speed * 1.05, 0.0, 0.0]),
+            bulk_velocity_rtn=np.array([cls.true_speed * 1.05, 0.0, 0.0]),
             bad_fit_flag=0,
         )
         cls.result = _optimize(
@@ -684,7 +652,6 @@ class TestUncertainties(unittest.TestCase):
             cls.at,
             cls.ats,
             cls.rot,
-            cls.sc_vel,
             cls.initial_guess,
         )
 
@@ -741,16 +708,15 @@ class TestUncertainties(unittest.TestCase):
                 at,
                 ats,
                 rot,
-                self.sc_vel,
                 PROTON_MASS_KG,
             )
             ig = ProtonSolarWindMoments(
                 density=self.true_density * 0.8,
                 temperature=self.true_temperature * 1.2,
-                bulk_velocity_rtn_sun=np.array([self.true_speed * 1.05, 0.0, 0.0]),
+                bulk_velocity_rtn=np.array([self.true_speed * 1.05, 0.0, 0.0]),
                 bad_fit_flag=0,
             )
-            return _optimize(cr, grids, cs, cea, at, ats, rot, self.sc_vel, ig)
+            return _optimize(cr, grids, cs, cea, at, ats, rot, ig)
 
         r5 = run_with_n_sweeps(5)
         r10 = run_with_n_sweeps(10)
@@ -760,8 +726,8 @@ class TestUncertainties(unittest.TestCase):
     def test_speed_uncertainty_via_propagation(self):
         """sigma_speed from covariance matches finite-difference estimate."""
         result = self.result
-        vr, vt, vn = result.bulk_velocity_rtn_sun
-        speed = float(np.linalg.norm(result.bulk_velocity_rtn_sun))
+        vr, vt, vn = result.bulk_velocity_rtn
+        speed = float(np.linalg.norm(result.bulk_velocity_rtn))
         v_hat = np.array([vr, vt, vn]) / speed
         sigma_speed = float(np.sqrt(v_hat @ result.velocity_covariance @ v_hat))
         self.assertGreater(sigma_speed, 0.0)
@@ -1047,7 +1013,6 @@ class TestIntegrationRealL2Spectrum(unittest.TestCase):
         )
 
         cls.rot = _L2_ROTATION_MATRICES.reshape(n_sweeps * n_bins, 3, 3)
-        cls.sc_vel = _L2_SPACECRAFT_VELOCITY_RTN
         cls.count_rate = _L2_COUNT_RATES.ravel()
 
         ig = _get_initial_guess(
@@ -1059,7 +1024,6 @@ class TestIntegrationRealL2Spectrum(unittest.TestCase):
             cls.at,
             cls.ats,
             cls.rot,
-            cls.sc_vel,
         )
         cls.result = _optimize(
             cls.count_rate,
@@ -1069,7 +1033,6 @@ class TestIntegrationRealL2Spectrum(unittest.TestCase):
             cls.at,
             cls.ats,
             cls.rot,
-            cls.sc_vel,
             ig,
         )
 
@@ -1077,12 +1040,12 @@ class TestIntegrationRealL2Spectrum(unittest.TestCase):
         self.assertEqual(self.result.bad_fit_flag, SwapiL3Flags.NONE)
 
     def test_bulk_speed_reasonable(self):
-        speed = float(np.linalg.norm(self.result.bulk_velocity_rtn_sun))
+        speed = float(np.linalg.norm(self.result.bulk_velocity_rtn))
         self.assertGreater(speed, 350.0, "Speed too low")
         self.assertLess(speed, 650.0, "Speed too high")
 
     def test_dominant_component_is_radial(self):
-        vr, vt, vn = self.result.bulk_velocity_rtn_sun
+        vr, vt, vn = self.result.bulk_velocity_rtn
         self.assertGreater(vr, abs(vt), "V_R should dominate V_T")
         self.assertGreater(vr, abs(vn), "V_R should dominate V_N")
 
@@ -1098,14 +1061,13 @@ class TestIntegrationRealL2Spectrum(unittest.TestCase):
         model = _model_count_rates(
             self.result.density,
             self.result.temperature,
-            self.result.bulk_velocity_rtn_sun,
+            self.result.bulk_velocity_rtn,
             self.grids,
             self.cs,
             self.cea,
             self.at,
             self.ats,
             self.rot,
-            self.sc_vel,
             PROTON_MASS_KG,
         )
         # Real data has Poisson noise; normalized residuals will be O(√N) per bin.
@@ -1142,7 +1104,6 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
         times = np.zeros(len(voltages), dtype=np.int64)
         grids, cs, cea, at, ats = _build_proton_arrays(sr, voltages)
         rot = np.tile(np.eye(3), (len(voltages), 1, 1))
-        sc_vel = np.zeros(3)
         count_rate = _model_count_rates(
             5.0,
             10.0 * EV_TO_KELVIN,
@@ -1153,20 +1114,19 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
             at,
             ats,
             rot,
-            sc_vel,
             PROTON_MASS_KG,
         )
 
         with patch(
             "imap_l3_processing.swapi.l3a.utils.get_swapi_geometry",
-            return_value=(rot, sc_vel),
+            return_value=rot,
         ):
             result = self.fit(count_rate, voltages, times, sr)
 
         self.assertIsInstance(result, ProtonSolarWindMoments)
         self.assertGreater(result.density, 0)
         self.assertGreater(result.temperature, 0)
-        speed = float(np.linalg.norm(result.bulk_velocity_rtn_sun))
+        speed = float(np.linalg.norm(result.bulk_velocity_rtn))
         self.assertGreater(speed, 300.0)
         self.assertLess(speed, 700.0)
 
@@ -1183,7 +1143,6 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
         times = np.zeros(len(voltages), dtype=np.int64)
         grids, cs, cea, at, ats = _build_proton_arrays(sr, voltages)
         rot = np.tile(np.eye(3), (len(voltages), 1, 1))
-        sc_vel = np.zeros(3)
         count_rate = _model_count_rates(
             5.0,
             10.0 * EV_TO_KELVIN,
@@ -1194,7 +1153,6 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
             at,
             ats,
             rot,
-            sc_vel,
             PROTON_MASS_KG,
         )
         below = count_rate < 0.5 * float(np.max(count_rate))
@@ -1205,7 +1163,7 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
 
         with patch(
             "imap_l3_processing.swapi.l3a.utils.get_swapi_geometry",
-            return_value=(rot, sc_vel),
+            return_value=rot,
         ):
             baseline = self.fit(count_rate, voltages, times, sr)
             with_perturb = self.fit(perturbed, voltages, times, sr)
@@ -1215,8 +1173,8 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
             with_perturb.temperature, baseline.temperature, rtol=1e-3
         )
         np.testing.assert_allclose(
-            with_perturb.bulk_velocity_rtn_sun,
-            baseline.bulk_velocity_rtn_sun,
+            with_perturb.bulk_velocity_rtn,
+            baseline.bulk_velocity_rtn,
             rtol=1e-3,
             atol=1e-2,
         )
@@ -1252,7 +1210,6 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
             sr, all_voltages
         )
         cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
-        cls.sc_vel = np.zeros(3)
 
         true_rate = _model_count_rates(
             cls.true_density,
@@ -1264,7 +1221,6 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
             cls.at,
             cls.ats,
             cls.rot,
-            cls.sc_vel,
             PROTON_MASS_KG,
         )
         # Deadtime is applied at the residual stage; synthesize "observed" data accordingly.
@@ -1285,7 +1241,7 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
             ig = ProtonSolarWindMoments(
                 density=cls.true_density,
                 temperature=cls.true_temperature,
-                bulk_velocity_rtn_sun=cls.true_velocity.copy(),
+                bulk_velocity_rtn=cls.true_velocity.copy(),
                 bad_fit_flag=0,
             )
             return _optimize(
@@ -1296,7 +1252,6 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
                 cls.at,
                 cls.ats,
                 cls.rot,
-                cls.sc_vel,
                 ig,
             )
 
@@ -1306,7 +1261,7 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
         cls.densities = np.array([r.density for r in results])
         cls.temperatures = np.array([r.temperature for r in results])
         cls.velocities = np.array(
-            [r.bulk_velocity_rtn_sun for r in results]
+            [r.bulk_velocity_rtn for r in results]
         )  # shape (N, 3)
         cls.mean_density_sigma = float(np.mean([r.density_sigma for r in results]))
         cls.mean_temperature_sigma = float(
@@ -1343,7 +1298,6 @@ class TestGetInitialGuessCurveFitFailure(unittest.TestCase):
         )
         count_rate = np.ones(len(voltages))
         rotation_matrices = np.tile(np.eye(3), (len(voltages), 1, 1))
-        sc_vel = np.zeros(3)
         dummy_cs = np.ones(len(voltages))
         dummy_cea = np.ones(len(voltages))
         dummy_at = np.ones(100)
@@ -1366,14 +1320,13 @@ class TestGetInitialGuessCurveFitFailure(unittest.TestCase):
                 dummy_at,
                 0.1,
                 rotation_matrices,
-                sc_vel,
             )
 
         # Fallback: bulk_speed = speed[peak_idx], sigma_v = 50.0 km/s
         peak_idx = int(np.nanargmax(count_rate))
         expected_speed = float(esa_voltage_to_proton_speed(voltages[peak_idx]))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn_sun[0], expected_speed, rtol=0.01
+            result.bulk_velocity_rtn[0], expected_speed, rtol=0.01
         )
         # Fallback sigma_v = 50 km/s → T = m_p * (50e3)^2 / k_B ≈ 302,778 K (≈ 26.1 eV)
         np.testing.assert_allclose(result.temperature, 26.1 * EV_TO_KELVIN, rtol=0.01)
@@ -1533,7 +1486,6 @@ class TestColdPlasmaTransverseRecovery(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.sr = _load_swapi_response()
-        cls.sc_vel = np.zeros(3)
 
     def _run(self, bulk_speed, temperature_k, density, vT, vN, seed):
         voltages = np.geomspace(
@@ -1555,30 +1507,25 @@ class TestColdPlasmaTransverseRecovery(unittest.TestCase):
             at,
             ats,
             rot,
-            self.sc_vel,
             PROTON_MASS_KG,
         )
         rng = np.random.default_rng(seed)
         cr_noisy = rng.poisson(np.maximum(cr, 0.0)).astype(float)
-        ig = _get_initial_guess(
-            cr_noisy, esa_full, grids, cs, cea, at, ats, rot, self.sc_vel
-        )
-        return _optimize(
-            cr_noisy, grids, cs, cea, at, ats, rot, self.sc_vel, ig
-        ), true_vel
+        ig = _get_initial_guess(cr_noisy, esa_full, grids, cs, cea, at, ats, rot)
+        return _optimize(cr_noisy, grids, cs, cea, at, ats, rot, ig), true_vel
 
     def _assert_velocity_recovered(self, result, true_vel):
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn_sun[1],
+            result.bulk_velocity_rtn[1],
             true_vel[1],
             atol=self._ATOL_KMS,
-            err_msg=f"vT: fit={result.bulk_velocity_rtn_sun[1]:.1f}, true={true_vel[1]:.1f}",
+            err_msg=f"vT: fit={result.bulk_velocity_rtn[1]:.1f}, true={true_vel[1]:.1f}",
         )
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn_sun[2],
+            result.bulk_velocity_rtn[2],
             true_vel[2],
             atol=self._ATOL_KMS,
-            err_msg=f"vN: fit={result.bulk_velocity_rtn_sun[2]:.1f}, true={true_vel[2]:.1f}",
+            err_msg=f"vN: fit={result.bulk_velocity_rtn[2]:.1f}, true={true_vel[2]:.1f}",
         )
 
     def test_cold_plasma_high_vt(self):

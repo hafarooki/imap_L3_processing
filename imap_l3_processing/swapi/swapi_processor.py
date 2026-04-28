@@ -45,6 +45,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
 from imap_l3_processing.swapi.l3a.swapi_l3a_dependencies import SwapiL3ADependencies
 from imap_l3_processing.swapi.l3a.utils import (
     chunk_l2_data,
+    get_spacecraft_velocity_rtn,
     get_swapi_dsrf_to_rtn,
     get_swapi_geometry,
 )
@@ -66,39 +67,38 @@ logger = logging.getLogger(__name__)
 
 
 def _derive_proton_velocity_angles(
-    fitting_result: ProtonSolarWindMoments, chunk_epoch_center_tt2000_ns, spacecraft_velocity_rtn_sun
+    fitting_result: ProtonSolarWindMoments,
+    chunk_epoch_center_tt2000_ns
 ) -> tuple:
     """Return (speed, clock_angle, deflection_angle) as ufloats from proton moments."""
-    # TODO use correct formula
+    R = get_swapi_dsrf_to_rtn(np.array([chunk_epoch_center_tt2000_ns]))[0].T
+    u = R @ (fitting_result.bulk_velocity_rtn)
 
-    R = get_rotation_matrix(to_et_time(chunk_epoch_center_tt2000_ns), SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_DPS)
-    bulk_velocity_DPS = R @ (fitting_result.bulk_velocity_rtn_sun - spacecraft_velocity_rtn_sun)
-    deflection = np.arccos(bulk_velocity_DPS[2] / np.linalg.norm(bulk_velocity_DPS))
-    clock = np.arctan2(-bulk_velocity_DPS[1], bulk_velocity_DPS[0])
-
-    bulk_azimuth, bulk_elevation = _compute_angles(fitting_result.bulk_velocity_rtn_sun, )
-
-    speed = float(np.linalg.norm(fitting_result.bulk_velocity_rtn_sun))
-    cov_v = fitting_result.velocity_covariance
-    v_hat = np.array([vr, vt, vn]) / speed
-    speed_sigma = float(np.sqrt(v_hat @ cov_v @ v_hat))
-    vtn2 = float(vt**2 + vn**2)
-    vtn = float(np.sqrt(vtn2))
+    speed = float(np.linalg.norm(u))
     speed2 = speed**2
-    if vtn2 > 0:
-        g_clock = np.array([0.0, vn / vtn2, -vt / vtn2])
-        clock_sigma = float(np.degrees(np.sqrt(g_clock @ cov_v @ g_clock)))
+    vxy2 = float(u[0] ** 2 + u[1] ** 2)
+    vxy = float(np.sqrt(vxy2))
+
+    cov_DPS = R @ fitting_result.velocity_covariance @ R.T
+
+    g_speed = u / speed
+    speed_sigma = float(np.sqrt(g_speed @ cov_DPS @ g_speed))
+
+    if vxy2 > 0:
+        g_clock = np.array([-u[1] / vxy2, u[0] / vxy2, 0.0])
+        clock_sigma = float(np.degrees(np.sqrt(g_clock @ cov_DPS @ g_clock)))
         g_defl = np.array(
-            [-vtn / speed2, vr * vt / (vtn * speed2), vr * vn / (vtn * speed2)]
+            [u[0] * u[2] / (speed2 * vxy), u[1] * u[2] / (speed2 * vxy), -vxy / speed2]
         )
-        defl_sigma = float(np.degrees(np.sqrt(g_defl @ cov_v @ g_defl)))
+        defl_sigma = float(np.degrees(np.sqrt(g_defl @ cov_DPS @ g_defl)))
     else:
         clock_sigma = np.nan
         defl_sigma = np.nan
+
     return (
         ufloat(speed, speed_sigma),
-        ufloat(np.degrees(np.arctan2(vt, vn)), clock_sigma),
-        ufloat(np.degrees(np.arctan2(vtn, vr)), defl_sigma),
+        ufloat(np.degrees(np.arctan2(u[1], u[0])), clock_sigma),
+        ufloat(np.degrees(np.arccos(u[2] / speed)), defl_sigma),
     )
 
 
@@ -138,11 +138,10 @@ class SwapiProcessor(Processor):
         epoch,
         bin_slice,
         rotation_matrices=None,
-        spacecraft_velocity_rtn=None,
     ) -> ProtonSolarWindMoments:
         """Prepare arrays from *bin_slice* and fit proton solar wind moments.
 
-        ``rotation_matrices`` / ``spacecraft_velocity_rtn`` may be passed when
+        ``rotation_matrices``  may be passed when
         pre-computed by the caller (e.g. for the alpha stage-2 fit) to avoid a
         second SPICE call; if omitted ``fit_solar_wind_proton_moments`` resolves
         them internally.
@@ -164,7 +163,6 @@ class SwapiProcessor(Processor):
             dependencies.swapi_response,
             central_effective_area_scale=proton_eff_scale,
             rotation_matrices=rotation_matrices,
-            spacecraft_velocity_rtn=spacecraft_velocity_rtn,
         )
 
     def process(self):
@@ -220,7 +218,7 @@ class SwapiProcessor(Processor):
                     data_chunk, dependencies, epoch, SWAPI_SCIENCE_BINS
                 )
                 speed, clock_angle, deflection_angle = _derive_proton_velocity_angles(
-                    fitting_result
+                    fitting_result, epoch
                 )
                 quality_flag |= fitting_result.bad_fit_flag
             except Exception:
@@ -365,7 +363,7 @@ class SwapiProcessor(Processor):
                 + passband_indices * (12 / 72 * ONE_SECOND_IN_NANOSECONDS)
             ).flatten()
 
-            rotation_matrices, sc_velocity_rtn = get_swapi_geometry(measurement_times)
+            rotation_matrices = get_swapi_geometry(measurement_times)
 
             eps_p_lab = float(dependencies.efficiency_calibration_table.eps_p_lab)
             proton_eff_scale = (
@@ -392,7 +390,6 @@ class SwapiProcessor(Processor):
                 epoch_center_of_chunk,
                 SWAPI_COARSE_SWEEP_BINS,
                 rotation_matrices=rotation_matrices,
-                spacecraft_velocity_rtn=sc_velocity_rtn,
             )
 
             b_hat_rtn = _compute_b_hat_rtn(
@@ -411,14 +408,13 @@ class SwapiProcessor(Processor):
                 alpha_eff_scale,
                 proton_eff_scale,
                 rotation_matrices=rotation_matrices,
-                spacecraft_velocity_rtn=sc_velocity_rtn,
             )
             return _annotate(
                 mom,
                 b_hat_rtn,
                 float(proton_moments.density),
                 float(proton_moments.temperature),
-                np.asarray(proton_moments.bulk_velocity_rtn_sun, dtype=float),
+                np.asarray(proton_moments.bulk_velocity_rtn, dtype=float),
             )
         except Exception:
             logger.info(
@@ -544,6 +540,7 @@ class SwapiProcessor(Processor):
             deflection_angle = ufloat(np.nan, np.nan)
             density = ufloat(np.nan, np.nan)
             temperature = ufloat(np.nan, np.nan)
+            bulk_velocity_rtn_sun = np.full(3, np.nan)
             quality_flag = SwapiL3Flags.NONE
             epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
             try:
@@ -555,8 +552,10 @@ class SwapiProcessor(Processor):
                     data_chunk, dependencies, epoch, SWAPI_SCIENCE_BINS
                 )
                 speed, clock_angle, deflection_angle = _derive_proton_velocity_angles(
-                    fitting_result
+                    fitting_result, epoch
                 )
+                sc_velocity_rtn = get_spacecraft_velocity_rtn(epoch)
+                bulk_velocity_rtn_sun = fitting_result.bulk_velocity_rtn + sc_velocity_rtn
                 density = ufloat(fitting_result.density, fitting_result.density_sigma)
                 temperature = ufloat(
                     fitting_result.temperature, fitting_result.temperature_sigma
@@ -575,6 +574,7 @@ class SwapiProcessor(Processor):
                 density,
                 temperature,
                 quality_flag,
+                bulk_velocity_rtn_sun,
             )
 
         with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
@@ -587,6 +587,7 @@ class SwapiProcessor(Processor):
         proton_solar_wind_density = [r[4] for r in results]
         proton_solar_wind_temperatures = [r[5] for r in results]
         quality_flags = [r[6] for r in results]
+        bulk_velocities_rtn_sun = [r[7] for r in results]
 
         proton_solar_wind_speed_metadata = replace(
             self.input_metadata, descriptor="proton-sw"
@@ -600,6 +601,7 @@ class SwapiProcessor(Processor):
             np.array(proton_solar_wind_clock_angles),
             np.array(proton_solar_wind_deflection_angles),
             np.array(quality_flags),
+            np.array(bulk_velocities_rtn_sun),
         )
 
         return proton_solar_wind_l3_data

@@ -116,7 +116,6 @@ _W_AT = None
 _W_ATS = None
 _W_ROT = None
 _W_ESA = None
-_W_SC = np.zeros(3)
 _W_PARAMS = None  # tuple of (bulk_speeds, temperatures, densities, vTs, vNs)
 
 
@@ -146,7 +145,6 @@ def _init_worker(sw_files, voltages, params):
         _W_AT,
         _W_ATS,
         _W_ROT,
-        _W_SC,
         PROTON_MASS_KG,
     )
 
@@ -171,7 +169,6 @@ def _process_chunk(idx_range):
             _W_AT,
             _W_ATS,
             _W_ROT,
-            _W_SC,
             PROTON_MASS_KG,
         )
         cr = apply_deadtime_correction_array(cr)
@@ -182,7 +179,7 @@ def _process_chunk(idx_range):
 
         # Initial guess is reported on the unmasked input.
         ig = _get_initial_guess(
-            cr, _W_ESA, _W_TILED, _W_CS, _W_CEA, _W_AT, _W_ATS, _W_ROT, _W_SC
+            cr, _W_ESA, _W_TILED, _W_CS, _W_CEA, _W_AT, _W_ATS, _W_ROT
         )
         # Final fit goes through the production entry point so the half-mean mask
         # is applied at the keep boundary before the JIT integrator runs.
@@ -191,8 +188,7 @@ def _process_chunk(idx_range):
             _W_ESA,
             measurement_time=None,
             swapi_response=_W_SR,
-            rotation_matrices=_W_ROT,
-            spacecraft_velocity_rtn=_W_SC,
+            rotation_matrices=_W_ROT
         )
 
         rows.append(
@@ -204,14 +200,11 @@ def _process_chunk(idx_range):
                 vN,
                 ig.density,
                 ig.temperature,
-                ig.bulk_velocity_rtn_sun[0],
-                ig.bulk_velocity_rtn_sun[1],
-                ig.bulk_velocity_rtn_sun[2],
                 result.density,
                 result.temperature,
-                result.bulk_velocity_rtn_sun[0],
-                result.bulk_velocity_rtn_sun[1],
-                result.bulk_velocity_rtn_sun[2],
+                result.bulk_velocity_rtn[0],
+                result.bulk_velocity_rtn[1],
+                result.bulk_velocity_rtn[2],
                 bool(result.bad_fit_flag),
             )
         )
@@ -309,7 +302,6 @@ def main():
     _at0 = np.asarray(sr.azimuthal_transmission, dtype=float)
     _ats0 = float(sr.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
     _rot0 = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
-    _sc0 = np.zeros(3)
     _cr0 = _model_count_rates(
         8.0,
         10.0 * EV_TO_KELVIN,
@@ -320,20 +312,18 @@ def main():
         _at0,
         _ats0,
         _rot0,
-        _sc0,
         PROTON_MASS_KG,
     )
     _ig0 = _get_initial_guess(
-        _cr0, _esa0, _tiled0, _cs0, _cea0, _at0, _ats0, _rot0, _sc0
+        _cr0, _esa0, _tiled0, _cs0, _cea0, _at0, _ats0, _rot0
     )
-    _optimize(_cr0, _tiled0, _cs0, _cea0, _at0, _ats0, _rot0, _sc0, _ig0)
+    _optimize(_cr0, _tiled0, _cs0, _cea0, _at0, _ats0, _rot0, _ig0)
     fit_solar_wind_proton_moments(
         _cr0,
         _esa0,
         measurement_time=None,
         swapi_response=sr,
         rotation_matrices=_rot0,
-        spacecraft_velocity_rtn=_sc0,
     )
     print("JIT ready.")
 

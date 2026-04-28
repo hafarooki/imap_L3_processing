@@ -84,7 +84,6 @@ def _alpha_residuals_njit(
     az_trans,
     az_trans_spacing,
     rotation_matrices,
-    spacecraft_velocity_rtn,
 ):
     n_a = np.exp(x[0])
     T_a = np.exp(x[1])
@@ -100,7 +99,6 @@ def _alpha_residuals_njit(
         az_trans,
         az_trans_spacing,
         rotation_matrices,
-        spacecraft_velocity_rtn,
         ALPHA_PARTICLE_MASS_KG,
     )
     combined_obs = apply_deadtime_correction_array(proton_true_rate + alpha_true)
@@ -117,7 +115,6 @@ def fit_solar_wind_alpha_moments(
     alpha_effective_area_scale: float,
     proton_effective_area_scale: float,
     rotation_matrices: Optional[ndarray] = None,
-    spacecraft_velocity_rtn: Optional[ndarray] = None,
 ) -> AlphaSolarWindMoments:
     """Fit (n_α, T_α, Δv) given proton moments held fixed.
 
@@ -134,14 +131,14 @@ def fit_solar_wind_alpha_moments(
     ``bad_fit_flag |= ALPHA_MAG_DATA_FALLBACK``. If the proton speed is also near-zero,
     returns ``bad_fit_flag = MAG_GAP`` with NaN moments.
 
-    ``rotation_matrices`` and ``spacecraft_velocity_rtn`` may be precomputed and reused
-    from the Stage 1 proton fit; if ``None``, computed internally from ``measurement_time``.
+    ``rotation_matrices`` may be precomputed and reused from the Stage 1 proton fit;
+    if ``None``, computed internally from ``measurement_time``.
     """
     # Guard: stage 1 failed → don't trust v_p*.
     if int(proton_moments.bad_fit_flag) != int(SwapiL3Flags.NONE):
         return _nan_alpha_moments(SwapiL3Flags.STALE_PROTON)
 
-    proton_bulk_rtn = np.asarray(proton_moments.bulk_velocity_rtn_sun, dtype=float)
+    proton_bulk_rtn = np.asarray(proton_moments.bulk_velocity_rtn, dtype=float)
     proton_speed = np.linalg.norm(proton_bulk_rtn)
     mag_gap_fallback = False
 
@@ -161,12 +158,10 @@ def fit_solar_wind_alpha_moments(
         b_hat_rtn = b_hat_check
 
     # SPICE shared with Stage 1 if provided; otherwise compute here.
-    if rotation_matrices is None or spacecraft_velocity_rtn is None:
+    if rotation_matrices is None:
         from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
 
-        rotation_matrices, spacecraft_velocity_rtn = get_swapi_geometry(
-            measurement_time
-        )
+        rotation_matrices = get_swapi_geometry(measurement_time)
 
     # V-only passband grids cached by V; species/V/time-dependent scalars are per-measurement.
     passband_grids = numba.typed.List(
@@ -201,14 +196,13 @@ def fit_solar_wind_alpha_moments(
     proton_true_rate = _model_count_rates(
         float(proton_moments.density),
         float(proton_moments.temperature),
-        np.asarray(proton_moments.bulk_velocity_rtn_sun, dtype=float),
+        np.asarray(proton_moments.bulk_velocity_rtn, dtype=float),
         passband_grids,
         proton_central_speeds,
         proton_central_eff_areas,
         az_trans,
         az_trans_spacing,
         rotation_matrices,
-        spacecraft_velocity_rtn,
         PROTON_MASS_KG,
     )
 
@@ -223,7 +217,6 @@ def fit_solar_wind_alpha_moments(
         az_trans=az_trans,
         az_trans_spacing=az_trans_spacing,
         rotation_matrices=rotation_matrices,
-        spacecraft_velocity_rtn=spacecraft_velocity_rtn,
         proton_bulk_velocity_rtn=proton_bulk_rtn,
         b_hat_rtn=b_hat_rtn,
     )
@@ -249,7 +242,6 @@ def fit_solar_wind_alpha_moments(
             az_trans,
             az_trans_spacing,
             rotation_matrices,
-            spacecraft_velocity_rtn,
         )
 
     x0 = np.array([np.log(max(n0, 1e-3)), np.log(max(T0, 1e-3)), dv0])
@@ -428,7 +420,6 @@ def _alpha_initial_guess(
     az_trans: ndarray,
     az_trans_spacing: float,
     rotation_matrices: ndarray,
-    spacecraft_velocity_rtn: ndarray,
     proton_bulk_velocity_rtn: ndarray,
     b_hat_rtn: ndarray,
 ) -> Optional[tuple]:
@@ -480,7 +471,6 @@ def _alpha_initial_guess(
         az_trans,
         az_trans_spacing,
         rotation_matrices,
-        spacecraft_velocity_rtn,
         ALPHA_PARTICLE_MASS_KG,
     )
     unit_alpha_avg = unit_alpha.reshape(n_sweeps, n_bins).mean(axis=0)

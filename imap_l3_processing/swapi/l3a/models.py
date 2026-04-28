@@ -22,6 +22,7 @@ PROTON_SOLAR_WIND_CLOCK_ANGLE_UNCERTAINTY_CDF_VAR_NAME = "proton_sw_clock_angle_
 
 PROTON_SOLAR_WIND_DEFLECTION_ANGLE_CDF_VAR_NAME = "proton_sw_deflection_angle"
 PROTON_SOLAR_WIND_DEFLECTION_ANGLE_UNCERTAINTY_CDF_VAR_NAME = "proton_sw_deflection_angle_uncert"
+PROTON_SOLAR_WIND_BULK_VELOCITY_RTN_SUN_CDF_VAR_NAME = "proton_sw_bulk_velocity_rtn_sun"
 
 ALPHA_SOLAR_WIND_SPEED_CDF_VAR_NAME = "alpha_sw_speed"
 ALPHA_SOLAR_WIND_SPEED_UNCERTAINTY_CDF_VAR_NAME = "alpha_sw_speed_uncert"
@@ -72,6 +73,7 @@ class SwapiL3ProtonSolarWindData(DataProduct):
     proton_sw_clock_angle: np.ndarray[float]
     proton_sw_deflection_angle: np.ndarray[float]
     quality_flags: np.ndarray[SwapiL3Flags]
+    proton_sw_bulk_velocity_rtn_sun: np.ndarray[float]  # shape (N, 3), km/s, inertial RTN
 
     def to_data_product_variables(self) -> list[DataProductVariable]:
         return [
@@ -92,6 +94,8 @@ class SwapiL3ProtonSolarWindData(DataProduct):
                                 nominal_values(self.proton_sw_deflection_angle)),
             DataProductVariable(PROTON_SOLAR_WIND_DEFLECTION_ANGLE_UNCERTAINTY_CDF_VAR_NAME,
                                 std_devs(self.proton_sw_deflection_angle)),
+            DataProductVariable(PROTON_SOLAR_WIND_BULK_VELOCITY_RTN_SUN_CDF_VAR_NAME,
+                                self.proton_sw_bulk_velocity_rtn_sun),
             DataProductVariable(SWAPI_QUALITY_FLAGS_CDF_VAR_NAME, self.quality_flags)
         ]
 

@@ -80,7 +80,7 @@ INITIAL_TEMPERATURE_FLOOR_K = (
 class ProtonSolarWindMoments:
     density: float  # cm^-3
     temperature: float  # K
-    bulk_velocity_rtn_sun: ndarray  # shape (3,), km/s, [R, T, N]; inertial frame
+    bulk_velocity_rtn: ndarray  # shape (3,), km/s, [R, T, N]; inertial frame
     bad_fit_flag: int
     density_sigma: float = np.nan
     temperature_sigma: float = np.nan
@@ -95,25 +95,22 @@ def fit_solar_wind_proton_moments(
     measurement_time: ndarray,
     swapi_response: SWAPIResponse,
     central_effective_area_scale: float = 1.0,
-    rotation_matrices: ndarray = None,
-    spacecraft_velocity_rtn: ndarray = None,
+    rotation_matrices: ndarray|None = None
 ) -> ProtonSolarWindMoments:
     """Fit proton solar wind moments. ``central_effective_area_scale`` should be
     ``ε_p(t)/ε_p(t_lab)`` from the efficiency LUT — it's applied to each measurement's
     lab-derived central effective area before integration.
 
-    ``rotation_matrices`` and ``spacecraft_velocity_rtn`` may be precomputed and reused
+    ``rotation_matrices`` may be precomputed and reused
     across stage 1/stage 2 fits to avoid duplicate SPICE calls; if ``None``, the function
     computes them internally from ``measurement_time``."""
     from imap_l3_processing.constants import PROTON_MASS_PER_CHARGE_M_P_PER_E
     from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
 
     # Algorithm described in docs/swapi/solar-wind-moments.md
-    # Step 1: Get RTN-to-SWAPI rotation matrices and spacecraft velocity from SPICE
-    if rotation_matrices is None or spacecraft_velocity_rtn is None:
-        rotation_matrices, spacecraft_velocity_rtn = get_swapi_geometry(
-            measurement_time
-        )
+    # Step 1: Get RTN-to-SWAPI rotation matrices from SPICE
+    if rotation_matrices is None:
+        rotation_matrices = get_swapi_geometry(measurement_time)
 
     # Spin axis (body +Y in RTN) for the wrong-basin flip check in _optimize.
     # Captured here, before the half-mean mask below may drop the bin at index 0.
@@ -160,8 +157,7 @@ def fit_solar_wind_proton_moments(
         central_effective_areas,
         az_trans,
         az_trans_spacing,
-        rotation_matrices,
-        spacecraft_velocity_rtn,
+        rotation_matrices
     )
 
     # Step 3: Optimize solar wind parameters to best match model count rate to observed
@@ -173,7 +169,6 @@ def fit_solar_wind_proton_moments(
         az_trans,
         az_trans_spacing,
         rotation_matrices,
-        spacecraft_velocity_rtn,
         initial_guess,
         spin_axis_rtn=spin_axis_rtn,
     )
@@ -187,8 +182,7 @@ def _get_initial_guess(
     central_effective_areas: ndarray,
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
-    rotation_matrices: ndarray,
-    spacecraft_velocity_rtn: ndarray,
+    rotation_matrices: ndarray
 ) -> ProtonSolarWindMoments:
     speed = esa_voltage_to_proton_speed(esa_voltage)
 
@@ -221,7 +215,7 @@ def _get_initial_guess(
     )
 
     # Initial transverse velocity is zero; `_optimize` handles the wrong-basin trap.
-    bulk_velocity_rtn = np.array([float(bulk_speed), 0.0, 0.0])
+    bulk_velocity_rtn = np.array([float(bulk_speed), -30, 0.0])
 
     # Scale density so that the unit model count rate matches the mean observed count rate.
     unit_model = _model_count_rates(
@@ -234,7 +228,6 @@ def _get_initial_guess(
         azimuthal_transmission,
         azimuthal_transmission_spacing,
         rotation_matrices,
-        spacecraft_velocity_rtn,
         PROTON_MASS_KG,
     )
     density = float(np.nanmean(count_rate) / np.nanmean(unit_model))
@@ -242,7 +235,7 @@ def _get_initial_guess(
     return ProtonSolarWindMoments(
         density=density,
         temperature=temperature,
-        bulk_velocity_rtn_sun=bulk_velocity_rtn,
+        bulk_velocity_rtn=bulk_velocity_rtn,
         bad_fit_flag=0,
     )
 
@@ -250,11 +243,9 @@ def _get_initial_guess(
 @numba.njit(nogil=True)
 def _compute_angles(
     bulk_velocity_rtn: ndarray,
-    rotation_matrix: ndarray,
-    spacecraft_velocity_rtn: ndarray,
+    rotation_matrix: ndarray
 ):
-    sc_frame_velocity = bulk_velocity_rtn - spacecraft_velocity_rtn
-    bulk_velocity_xyz = rotation_matrix @ sc_frame_velocity
+    bulk_velocity_xyz = rotation_matrix @ bulk_velocity_rtn
     bulk_speed = np.linalg.norm(bulk_velocity_rtn)
     phi = np.degrees(np.arctan2(-bulk_velocity_xyz[0], -bulk_velocity_xyz[1]))
     theta = np.degrees(np.arcsin(-bulk_velocity_xyz[2] / bulk_speed))
@@ -272,7 +263,6 @@ def _model_count_rates(
     azimuthal_transmission: ndarray,  # shape (M,), constant lookup table
     azimuthal_transmission_spacing: float,  # deg, constant
     rotation_matrices: ndarray,  # shape (N, 3, 3), RTN-to-SWAPI at each measurement time
-    spacecraft_velocity_rtn: ndarray,  # shape (3,), km/s
     mass_kg: float,
 ) -> ndarray:
     """Pre-deadtime model count rate per measurement bin.
@@ -286,13 +276,12 @@ def _model_count_rates(
         np.sqrt(BOLTZMANN_CONSTANT_JOULES_PER_KELVIN * temperature / mass_kg)
         / METERS_PER_KILOMETER
     )
-    bulk_speed = np.linalg.norm(bulk_velocity_rtn)
+    bulk_speed = float(np.linalg.norm(bulk_velocity_rtn))
     n = len(passband_grids)
     result = np.empty(n)
     for i in range(n):
-        ii = numba.int64(i)
         phi, theta = _compute_angles(
-            bulk_velocity_rtn, rotation_matrices[ii], spacecraft_velocity_rtn
+            bulk_velocity_rtn, rotation_matrices[i]
         )
         sw_params = SWParams(
             density=density,
@@ -301,11 +290,11 @@ def _model_count_rates(
             bulk_elevation=theta,
             thermal_speed=thermal_speed,
         )
-        result[ii] = calculate_integral(
-            passband_grids[ii],
+        result[i] = calculate_integral(
+            passband_grids[i],
             sw_params,
-            central_speeds[ii],
-            central_effective_areas[ii],
+            central_speeds[i],
+            central_effective_areas[i],
             azimuthal_transmission,
             azimuthal_transmission_spacing,
         )
@@ -767,7 +756,6 @@ def _residuals_njit(
     azimuthal_transmission,
     azimuthal_transmission_spacing,
     rotation_matrices,
-    spacecraft_velocity_rtn,
     mass_kg,
 ):
     density = np.exp(x[0])
@@ -783,7 +771,6 @@ def _residuals_njit(
         azimuthal_transmission,
         azimuthal_transmission_spacing,
         rotation_matrices,
-        spacecraft_velocity_rtn,
         mass_kg,
     )
     # Deadtime acts on the observed true rate (here, proton-only). For two-species
@@ -799,13 +786,12 @@ def _optimize(
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
     rotation_matrices: ndarray,
-    spacecraft_velocity_rtn: ndarray,
     initial_guess: ProtonSolarWindMoments,
     spin_axis_rtn: ndarray = None,
 ) -> ProtonSolarWindMoments:
     from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
-    vr0, vt0, vn0 = initial_guess.bulk_velocity_rtn_sun
+    vr0, vt0, vn0 = initial_guess.bulk_velocity_rtn
 
     sigma = np.sqrt(np.maximum(count_rate * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
 
@@ -833,7 +819,6 @@ def _optimize(
             azimuthal_transmission,
             azimuthal_transmission_spacing,
             rotation_matrices,
-            spacecraft_velocity_rtn,
             PROTON_MASS_KG,
         )
 
@@ -876,7 +861,7 @@ def _optimize(
     return ProtonSolarWindMoments(
         density=density,
         temperature=temperature,
-        bulk_velocity_rtn_sun=bulk_velocity_rtn,
+        bulk_velocity_rtn=bulk_velocity_rtn,
         bad_fit_flag=bad_fit_flag,
         density_sigma=density_sigma,
         temperature_sigma=temperature_sigma,
