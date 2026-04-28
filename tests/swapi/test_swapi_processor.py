@@ -1765,7 +1765,12 @@ class TestSwapiProcessor(TestCase):
 def create_swapi_l3a_dependencies_with_mocks():
     data = Mock()
     alpha_temperature_density_calibration_table = Mock()
+    # Default to ε_p(t) = ε_α(t) = ε_p_lab so the moments fit's central_effective_area_scale
+    # comes out to 1.0 — matches behavior tests written before efficiency wiring.
     efficiency_calibration_table = Mock()
+    efficiency_calibration_table.get_proton_efficiency_for.return_value = 0.11
+    efficiency_calibration_table.get_alpha_efficiency_for.return_value = 0.11
+    efficiency_calibration_table.eps_p_lab = 0.11
     geometric_factor_calibration_table = Mock()
     instrument_response_calibration_table = Mock()
     density_of_neutral_helium_calibration_table = Mock()

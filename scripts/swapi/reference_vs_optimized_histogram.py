@@ -20,7 +20,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from imap_l3_processing.constants import METERS_PER_KILOMETER, PROTON_CHARGE_COULOMBS, PROTON_MASS_KG
+from imap_l3_processing.constants import (
+    METERS_PER_KILOMETER, PROTON_CHARGE_COULOMBS, PROTON_MASS_KG,
+    PROTON_CHARGE_OVER_MASS_C_PER_KG, PROTON_MASS_PER_CHARGE_M_P_PER_E,
+)
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     SWParams, calculate_integral,
     N_ELEVATION, N_AZIMUTH_SG, N_AZIMUTH_OA, N_SPEED,
@@ -51,6 +54,9 @@ def main():
     references = df['integral'].to_numpy()
     optimized = np.empty(len(df))
 
+    az_trans = np.asarray(swapi_response.azimuthal_transmission, dtype=float)
+    az_trans_spacing = float(swapi_response.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
+
     print(f"Computing {len(df)} optimized integrals...")
     for i, row in enumerate(df.itertuples(index=False)):
         thermal_speed = float(
@@ -63,8 +69,11 @@ def main():
             bulk_elevation=float(row.bulk_elevation),
             thermal_speed=thermal_speed,
         )
-        grid = swapi_response.create_passband_grid(_peak_voltage(float(row.bulk_speed)))
-        optimized[i] = calculate_integral(grid, sw)
+        v_peak = _peak_voltage(float(row.bulk_speed))
+        grid = swapi_response.create_passband_grid(v_peak)
+        cs = swapi_response.central_speed(v_peak, PROTON_MASS_PER_CHARGE_M_P_PER_E)
+        cea = swapi_response.get_central_effective_area(v_peak)
+        optimized[i] = calculate_integral(grid, sw, cs, cea, az_trans, az_trans_spacing)
         if (i + 1) % 1000 == 0:
             print(f"  {i + 1}/{len(df)}", flush=True)
 

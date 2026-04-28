@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import numpy.testing as npt
 
+from imap_l3_processing.constants import PROTON_MASS_KG, PROTON_CHARGE_OVER_MASS_C_PER_KG, PROTON_CHARGE_COULOMBS
 from imap_l3_processing.swapi.l3a.science.swapi_response import (
     SWAPIResponse, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS,
     eval_boundary_min, eval_boundary_max,

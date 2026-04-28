@@ -24,7 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from imap_l3_processing.constants import METERS_PER_KILOMETER, PROTON_CHARGE_COULOMBS, PROTON_MASS_KG
+from imap_l3_processing.constants import METERS_PER_KILOMETER, PROTON_CHARGE_COULOMBS, PROTON_MASS_KG, PROTON_CHARGE_OVER_MASS_C_PER_KG
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     SWParams, calculate_integral,
 )

@@ -26,6 +26,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from imap_l3_processing.constants import (
+    PROTON_MASS_KG,
+    PROTON_CHARGE_OVER_MASS_C_PER_KG,
+    PROTON_CHARGE_COULOMBS,
+    PROTON_MASS_PER_CHARGE_M_P_PER_E,
+)
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_SCIENCE_BINS,
@@ -33,6 +39,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     _model_count_rates,
+    apply_deadtime_correction_array,
     _residuals_njit,
     SWAPI_LIVETIME_S,
 )
@@ -83,16 +90,34 @@ def main():
         voltages = (
             cdf["esa_energy"][...].mean(axis=0)[SWAPI_SCIENCE_BINS] / SWAPI_L2_K_FACTOR
         )
-    base_grids = numba.typed.List([sr.create_passband_grid(v) for v in voltages])
-    tiled = numba.typed.List()
-    for _ in range(_N_SWEEPS):
-        for g in base_grids:
-            tiled.append(g)
+    all_voltages = np.tile(voltages, _N_SWEEPS)
+    tiled = numba.typed.List([sr.create_passband_grid(v) for v in all_voltages])
+    tiled_cs = np.array(
+        [sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in all_voltages]
+    )
+    tiled_cea = np.array([sr.get_central_effective_area(v) for v in all_voltages])
+    at = np.asarray(sr.azimuthal_transmission, dtype=float)
+    ats = float(sr.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
     rot = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
     sc_vel = np.zeros(3)
 
     true_vel = np.array([CASE_V_R, CASE_VT, CASE_VN])
-    cr_clean = _model_count_rates(CASE_DENSITY, CASE_T_EV, true_vel, tiled, rot, sc_vel)
+    cr_clean_true = _model_count_rates(
+        CASE_DENSITY,
+        CASE_T_EV,
+        true_vel,
+        tiled,
+        tiled_cs,
+        tiled_cea,
+        at,
+        ats,
+        rot,
+        sc_vel,
+        PROTON_MASS_KG,
+    )
+    # Deadtime is now applied at the residual stage, not inside _model_count_rates.
+    # Synthesize "data" from the post-deadtime observed rate so chi² minima land at truth.
+    cr_clean = apply_deadtime_correction_array(cr_clean_true)
     cr = (
         np.random.default_rng(CASE_SEED)
         .poisson(np.maximum(cr_clean, 0.0))
@@ -107,7 +132,19 @@ def main():
     for i, vN_ in enumerate(grid_vN):
         for j, vT_ in enumerate(grid_vT):
             x = np.array([np.log(CASE_DENSITY), np.log(CASE_T_EV), CASE_V_R, vT_, vN_])
-            r = _residuals_njit(x, cr, sigma, tiled, rot, sc_vel)
+            r = _residuals_njit(
+                x,
+                cr,
+                sigma,
+                tiled,
+                tiled_cs,
+                tiled_cea,
+                at,
+                ats,
+                rot,
+                sc_vel,
+                PROTON_MASS_KG,
+            )
             chi2[i, j] = float(np.sum(r * r))
 
     fig, ax = plt.subplots(figsize=(9, 7))

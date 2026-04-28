@@ -32,7 +32,7 @@ class SWParams(NamedTuple):
 
 N_ELEVATION = 21
 N_AZIMUTH_SG = 21
-N_AZIMUTH_OA = 41
+N_AZIMUTH_OA = 21
 N_SPEED = 11
 
 # Gauss-Legendre quadrature nodes and weights on the standard interval [-1, 1].
@@ -48,6 +48,14 @@ _GL_NODES_AZIMUTH_OA, _GL_WEIGHTS_AZIMUTH_OA = np.polynomial.legendre.leggauss(
     N_AZIMUTH_OA
 )
 _GL_NODES_SPEED, _GL_WEIGHTS_SPEED = np.polynomial.legendre.leggauss(N_SPEED)
+
+# OA azimuth integration: a scan of `density × transmission` at the in-passband
+# elevation peak across the full OA range finds where the integrand is non-
+# negligible. Then the fixed-N GL above runs over that trimmed range. The
+# previous gaussian-only `angular_width` was wasteful because OA transmission is
+# essentially zero from 20°–25° — the typical proton at |bulk_az| < 6° opened a
+# 1° OA sliver entirely in the dead zone. See `_trim_oa_azimuth_by_integrand`.
+OA_SCAN_THRESHOLD = 1e-3  # trim where g < threshold × max(g)
 
 EPSILON_OA = 1e-6
 EPSILON_SG = 1e-6
@@ -83,23 +91,75 @@ def fit_solar_wind_proton_moments(
     esa_voltage: ndarray,
     measurement_time: ndarray,
     swapi_response: SWAPIResponse,
+    central_effective_area_scale: float = 1.0,
+    rotation_matrices: ndarray = None,
+    spacecraft_velocity_rtn: ndarray = None,
 ) -> ProtonSolarWindMoments:
+    """Fit proton solar wind moments. ``central_effective_area_scale`` should be
+    ``ε_p(t)/ε_p(t_lab)`` from the efficiency LUT — it's applied to each measurement's
+    lab-derived central effective area before integration.
+
+    ``rotation_matrices`` and ``spacecraft_velocity_rtn`` may be precomputed and reused
+    across stage 1/stage 2 fits to avoid duplicate SPICE calls; if ``None``, the function
+    computes them internally from ``measurement_time``."""
+    from imap_l3_processing.constants import PROTON_MASS_PER_CHARGE_M_P_PER_E
     from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
 
     # Algorithm described in docs/swapi/solar-wind-moments.md
     # Step 1: Get RTN-to-SWAPI rotation matrices and spacecraft velocity from SPICE
-    rotation_matrices, spacecraft_velocity_rtn = get_swapi_geometry(measurement_time)
+    if rotation_matrices is None or spacecraft_velocity_rtn is None:
+        rotation_matrices, spacecraft_velocity_rtn = get_swapi_geometry(
+            measurement_time
+        )
 
-    # Precompute passband grids (one per measurement) for use in model evaluation
+    # Spin axis (body +Y in RTN) for the wrong-basin flip check in _optimize.
+    # Captured here, before the half-mean mask below may drop the bin at index 0.
+    spin_axis_rtn = rotation_matrices[0, 1, :].copy()
+
+    # Drop any 0V (or non-finite) ESA steps. Some sweeps include a zero-energy
+    # step that carries no useful information and would make central_speed = 0,
+    # producing divide-by-zero deep inside the JIT integrator.
+    keep = (esa_voltage > 0) & np.isfinite(esa_voltage)
+
+    # Fit only bins with count rate >= 0.1 * max if that doesn't result in less than 5 points being used.
+    cr_mean = float(np.nanmean(count_rate[keep])) if np.any(keep) else 0.0
+    half_mean_mask = count_rate >= 0.1 * cr_mean
+    if int((keep & half_mean_mask).sum()) >= 5:
+        keep = keep & half_mean_mask
+
+    if not np.all(keep):
+        esa_voltage = esa_voltage[keep]
+        count_rate = count_rate[keep]
+        rotation_matrices = rotation_matrices[keep]
+        if measurement_time is not None:
+            measurement_time = np.asarray(measurement_time)[keep]
+
+    # V-only passband grids (cached by V across calls), plus per-measurement species/V-
+    # dependent scalars for v_0 and lab-derived central effective area times the time scale.
     passband_grids = numba.typed.List(
         [swapi_response.create_passband_grid(v) for v in esa_voltage]
     )
+    central_speeds = np.array(
+        [
+            swapi_response.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E)
+            for v in esa_voltage
+        ]
+    )
+    central_effective_areas = np.array(
+        [swapi_response.get_central_effective_area(v) for v in esa_voltage]
+    ) * float(central_effective_area_scale)
+    az_trans = np.asarray(swapi_response.azimuthal_transmission, dtype=float)
+    az_trans_spacing = float(swapi_response.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
 
     # Step 2: Initial guess — Gaussian fit to count rate vs speed, anti-sunward velocity
     initial_guess = _get_initial_guess(
         count_rate,
         esa_voltage,
         passband_grids,
+        central_speeds,
+        central_effective_areas,
+        az_trans,
+        az_trans_spacing,
         rotation_matrices,
         spacecraft_velocity_rtn,
     )
@@ -108,9 +168,14 @@ def fit_solar_wind_proton_moments(
     return _optimize(
         count_rate,
         passband_grids,
+        central_speeds,
+        central_effective_areas,
+        az_trans,
+        az_trans_spacing,
         rotation_matrices,
         spacecraft_velocity_rtn,
         initial_guess,
+        spin_axis_rtn=spin_axis_rtn,
     )
 
 
@@ -118,6 +183,10 @@ def _get_initial_guess(
     count_rate: ndarray,
     esa_voltage: ndarray,
     passband_grids: numba.typed.List,
+    central_speeds: ndarray,
+    central_effective_areas: ndarray,
+    azimuthal_transmission: ndarray,
+    azimuthal_transmission_spacing: float,
     rotation_matrices: ndarray,
     spacecraft_velocity_rtn: ndarray,
 ) -> ProtonSolarWindMoments:
@@ -134,7 +203,7 @@ def _get_initial_guess(
         )
     except RuntimeError:
         bulk_speed = speed[peak_idx]
-        sigma_v = 50.0
+        sigma_v = 0
 
     sigma_floor_v = (
         math.sqrt(
@@ -152,14 +221,19 @@ def _get_initial_guess(
     # Initial transverse velocity is zero; `_optimize` handles the wrong-basin trap.
     bulk_velocity_rtn = np.array([float(bulk_speed), 0.0, 0.0])
 
-    # Scale density so that the unit model count rate matches the mean observed count rate
+    # Scale density so that the unit model count rate matches the mean observed count rate.
     unit_model = _model_count_rates(
         1.0,
         temperature,
         bulk_velocity_rtn,
         passband_grids,
+        central_speeds,
+        central_effective_areas,
+        azimuthal_transmission,
+        azimuthal_transmission_spacing,
         rotation_matrices,
         spacecraft_velocity_rtn,
+        PROTON_MASS_KG,
     )
     density = float(np.nanmean(count_rate) / np.nanmean(unit_model))
 
@@ -190,20 +264,34 @@ def _model_count_rates(
     density: float,
     temperature: float,  # eV
     bulk_velocity_rtn: ndarray,  # shape (3,), inertial RTN, km/s
-    passband_grids: numba.typed.List,  # PassbandGrid per measurement, length N
+    passband_grids: numba.typed.List,  # PassbandGrid per measurement, length N (V-only)
+    central_speeds: ndarray,  # shape (N,), km/s, species/V-dependent v_0
+    central_effective_areas: ndarray,  # shape (N,), cm^2, V-dependent and includes species/time scale
+    azimuthal_transmission: ndarray,  # shape (M,), constant lookup table
+    azimuthal_transmission_spacing: float,  # deg, constant
     rotation_matrices: ndarray,  # shape (N, 3, 3), RTN-to-SWAPI at each measurement time
     spacecraft_velocity_rtn: ndarray,  # shape (3,), km/s
+    mass_kg: float,
 ) -> ndarray:
+    """Pre-deadtime model count rate per measurement bin.
+
+    `passband_grids[i]` carries the V-only passband shape; `central_speeds[i]` and
+    `central_effective_areas[i]` encode the species/V/time-dependent scalars. The
+    azimuthal transmission table is constant across measurements and passed once.
+    Deadtime is applied at the residual stage so it acts on the combined
+    (proton + alpha) rate."""
+    # Thermal speed uses elementary charge (PROTON_CHARGE_COULOMBS = e), NEVER species charge,
+    # because "temperature in eV" means k_B T = T_eV * e Joules regardless of species.
     thermal_speed = (
-        np.sqrt(temperature * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG)
-        / METERS_PER_KILOMETER
+        np.sqrt(temperature * PROTON_CHARGE_COULOMBS / mass_kg) / METERS_PER_KILOMETER
     )
     bulk_speed = np.linalg.norm(bulk_velocity_rtn)
     n = len(passband_grids)
     result = np.empty(n)
     for i in range(n):
+        ii = numba.int64(i)
         phi, theta = _compute_angles(
-            bulk_velocity_rtn, rotation_matrices[i], spacecraft_velocity_rtn
+            bulk_velocity_rtn, rotation_matrices[ii], spacecraft_velocity_rtn
         )
         sw_params = SWParams(
             density=density,
@@ -212,19 +300,46 @@ def _model_count_rates(
             bulk_elevation=theta,
             thermal_speed=thermal_speed,
         )
-        result[i] = apply_deadtime_correction(
-            calculate_integral(passband_grids[i], sw_params)
+        result[ii] = calculate_integral(
+            passband_grids[ii],
+            sw_params,
+            central_speeds[ii],
+            central_effective_areas[ii],
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
         )
     return result
 
 
 @numba.njit(nogil=True)
 def apply_deadtime_correction(true_rate: float) -> float:
+    """Scalar deadtime correction (kept for back-compat with tests).
+    Use `apply_deadtime_correction_array` for the vectorized form used by the residual."""
     return true_rate / (1.0 + SWAPI_DEADTIME_S * true_rate)
 
 
+@numba.njit(nogil=True)
+def apply_deadtime_correction_array(true_rates: ndarray) -> ndarray:
+    """Vectorized deadtime correction. Applied at the residual stage so that for the
+    two-species fit it acts on the *combined* (proton + alpha) true rate."""
+    return true_rates / (1.0 + SWAPI_DEADTIME_S * true_rates)
+
+
 @numba.njit(fastmath=True, nogil=True)
-def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
+def calculate_integral(
+    grid: PassbandGrid,
+    sw_params: SWParams,
+    central_speed: float,
+    central_effective_area: float,
+    azimuthal_transmission: ndarray,
+    azimuthal_transmission_spacing: float,
+):
+    """Pre-deadtime model count rate at one ESA voltage step.
+
+    The V-only `grid` carries passband-shape arrays + boundaries; species/V/time-dependent
+    quantities are passed as scalars (`central_speed`, `central_effective_area`) plus the
+    constant azimuthal transmission table. `central_effective_area` should already include
+    any species/time efficiency correction (e.g. ε_species(t)/ε_p(t_lab) × A_lab(V))."""
     sin_bulk_elevation = math.sin((math.pi / 180) * sw_params.bulk_elevation)
     cos_bulk_elevation = math.cos((math.pi / 180) * sw_params.bulk_elevation)
 
@@ -232,17 +347,36 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
 
     for region in (0, -1, +1):
         is_sunglasses = region == 0
+        # Normalization point: speed_ratio = central_speed / central_speed = 1.
         passband_norm = interpolate_passband(
-            grid, is_sunglasses, elevation=0, speed=grid.central_speed
+            grid, is_sunglasses, elevation=0, speed_ratio=1.0
         )
 
         min_elevation, max_elevation, min_azimuth, max_azimuth = _get_angular_limits(
-            sw_params, region, grid
+            sw_params, region, grid, central_speed
         )
 
         # skip region if completely out of FOV
         if max_elevation <= min_elevation or max_azimuth <= min_azimuth:
             continue
+
+        # For OA, replace the gaussian-only azimuth bounds with a transmission-aware
+        # scan. The original [bulk_az − width, bulk_az + width] clamp wastes nodes
+        # in the OA dead zone (T < 1e-3 from 20°–25°). The scan estimates
+        # density × T at the elevation peak inside the OA passband, sweeping
+        # azimuth, and trims to where the integrand exceeds OA_SCAN_THRESHOLD × max.
+        if not is_sunglasses:
+            min_azimuth, max_azimuth = _trim_oa_azimuth_by_integrand(
+                sw_params,
+                region,
+                central_speed,
+                min_elevation,
+                max_elevation,
+                azimuthal_transmission,
+                azimuthal_transmission_spacing,
+            )
+            if max_azimuth <= min_azimuth:
+                continue
 
         # TODO choose speed points dynamically for each elevation by zero-trimming;
         # must fit a linear model to the minimum and maximum point for integration
@@ -265,7 +399,12 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
         azimuth_weights = half_az * az_weights
 
         interpolated_transmission = np.array(
-            [_interpolate_transmission(grid, x) for x in azimuth_points]
+            [
+                _interpolate_transmission(
+                    azimuthal_transmission, azimuthal_transmission_spacing, x
+                )
+                for x in azimuth_points
+            ]
         )
 
         elevation_integral = 0
@@ -273,10 +412,10 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
             sin_elevation = math.sin((math.pi / 180) * elevation)
             cos_elevation = math.cos((math.pi / 180) * elevation)
 
-            passband_lower_speed = grid.central_speed * _eval_boundary(
+            passband_lower_speed = central_speed * _eval_boundary(
                 grid, is_sunglasses, elevation, True
             )
-            passband_upper_speed = grid.central_speed * _eval_boundary(
+            passband_upper_speed = central_speed * _eval_boundary(
                 grid, is_sunglasses, elevation, False
             )
 
@@ -286,6 +425,8 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
                 passband_lower_speed,
                 passband_upper_speed,
             )
+
+            # skip if out of passband
             if max_speed <= min_speed:
                 continue
 
@@ -294,10 +435,14 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
             speed_points = mid_sp + half_sp * _GL_NODES_SPEED
             speed_weights = half_sp * _GL_WEIGHTS_SPEED
 
+            # TODO create array outside of loop and just update it; or just flip azimuth and speed integrals
             passband_times_speed3_row = (
                 np.array(
                     [
-                        x**3 * interpolate_passband(grid, is_sunglasses, elevation, x)
+                        x**3
+                        * interpolate_passband(
+                            grid, is_sunglasses, elevation, x / central_speed
+                        )
                         for x in speed_points
                     ]
                 )
@@ -333,7 +478,7 @@ def calculate_integral(grid: PassbandGrid, sw_params: SWParams):
 
         count_rate += (
             elevation_integral
-            * grid.central_effective_area
+            * central_effective_area
             * sw_params.density
             * (np.sqrt(2 * np.pi) * sw_params.thermal_speed) ** -3
             * 1e5  # km/cm/s -> 1/s
@@ -385,13 +530,16 @@ def _exponential_term(sw_params: SWParams, cos_angle: float, speed: float) -> fl
 
 
 @numba.njit(nogil=True)
-def _get_angular_limits(sw_params: SWParams, region: int, grid: PassbandGrid):
+def _get_angular_limits(
+    sw_params: SWParams, region: int, grid: PassbandGrid, central_speed: float
+):
     epsilon = EPSILON_SG if region == 0 else EPSILON_OA
+
     angular_width = (180 / np.pi) * np.arccos(
         _clamp(
             sw_params.thermal_speed**2
             * np.log(epsilon)
-            / (grid.central_speed * sw_params.bulk_speed)
+            / (central_speed * sw_params.bulk_speed)
             + 1,
             -1,
             1,
@@ -423,6 +571,111 @@ def _get_angular_limits(sw_params: SWParams, region: int, grid: PassbandGrid):
     return min_elevation, max_elevation, min_azimuth, max_azimuth
 
 
+OA_FULL_AZ_LO = 20.0
+OA_FULL_AZ_HI = 150.0
+OA_SCAN_SPACING_MAX_DEG = 1.0  # ceiling — coarse for typical (T~10 eV)
+OA_SCAN_SPACING_MIN_DEG = 0.1  # floor — fine for cold-plasma extremes
+OA_SKIP_ABS_THRESHOLD = 1e-9  # max of density × T below this → skip OA region
+
+
+@numba.njit(nogil=True)
+def _trim_oa_azimuth_by_integrand(
+    sw_params: SWParams,
+    region: int,
+    central_speed: float,
+    min_elevation: float,
+    max_elevation: float,
+    azimuthal_transmission: ndarray,
+    azimuthal_transmission_spacing: float,
+):
+    """Find the OA azimuth subrange where the integrand is non-negligible.
+
+    Scans `density × T` at (elevation=peak-within-passband, speed=central_speed)
+    on a grid across the full OA passband. Spacing is adapted to the gaussian
+    angular width σ_ang (= thermal_speed / bulk_speed) so cold plasma peaks
+    aren't missed by a coarse sample.
+
+    Returns `(0.0, 0.0)` to signal "skip OA region entirely"."""
+    if region == +1:
+        scan_lo, scan_hi = OA_FULL_AZ_LO, OA_FULL_AZ_HI
+    else:
+        scan_lo, scan_hi = -OA_FULL_AZ_HI, -OA_FULL_AZ_LO
+
+    # Adaptive resolution: ~half of σ_ang so the scan resolves the gaussian peak
+    # in azimuth even when it's < 1° wide.
+    sigma_ang_deg = (180.0 / math.pi) * sw_params.thermal_speed / sw_params.bulk_speed
+    spacing = 0.5 * sigma_ang_deg
+    if spacing < OA_SCAN_SPACING_MIN_DEG:
+        spacing = OA_SCAN_SPACING_MIN_DEG
+    elif spacing > OA_SCAN_SPACING_MAX_DEG:
+        spacing = OA_SCAN_SPACING_MAX_DEG
+    n_scan = int(math.ceil((scan_hi - scan_lo) / spacing)) + 1
+    if n_scan < 2:
+        n_scan = 2
+
+    # Pick the elevation closest to bulk_el that's inside the integration window.
+    # That's where density (gaussian peak vs el at fixed az) is maximal.
+    scan_el = sw_params.bulk_elevation
+    if scan_el < min_elevation:
+        scan_el = min_elevation
+    elif scan_el > max_elevation:
+        scan_el = max_elevation
+
+    sin_be = math.sin((math.pi / 180) * sw_params.bulk_elevation)
+    cos_be = math.cos((math.pi / 180) * sw_params.bulk_elevation)
+    sin_se = math.sin((math.pi / 180) * scan_el)
+    cos_se = math.cos((math.pi / 180) * scan_el)
+
+    bulk_az = sw_params.bulk_azimuth
+    bs = sw_params.bulk_speed
+    cs = central_speed
+    inv_2thermal2 = 1.0 / (2.0 * sw_params.thermal_speed**2)
+
+    g = np.empty(n_scan)
+    g_max = 0.0
+    step = (scan_hi - scan_lo) / (n_scan - 1)
+    for i in range(n_scan):
+        az = scan_lo + i * step
+        cos_da = math.cos((math.pi / 180) * (az - bulk_az))
+        cos_angle = sin_be * sin_se + cos_be * cos_se * cos_da
+        d2 = cs * cs + bs * bs - 2.0 * cs * bs * cos_angle
+        density = math.exp(-d2 * inv_2thermal2)
+        T = _interpolate_transmission(
+            azimuthal_transmission, azimuthal_transmission_spacing, az
+        )
+        gi = density * T
+        g[i] = gi
+        if gi > g_max:
+            g_max = gi
+
+    if g_max < OA_SKIP_ABS_THRESHOLD:
+        return 0.0, 0.0
+
+    threshold_val = OA_SCAN_THRESHOLD * g_max
+    # Always anchor to the OA inner boundary (SG/OA transition at ±20°): T = 0
+    # there, so g(boundary) is below threshold even when the peak is right next
+    # to it. Trimming the boundary side cuts off the rising-edge contribution.
+    # Trim only the FAR end, where density has decayed.
+    if region == +1:
+        az_lo = scan_lo  # = 20°
+        az_hi = scan_lo
+        for i in range(n_scan - 1, -1, -1):
+            if g[i] > threshold_val:
+                az_hi = scan_lo + i * step
+                break
+    else:
+        az_hi = scan_hi  # = -20°
+        az_lo = scan_hi
+        for i in range(n_scan):
+            if g[i] > threshold_val:
+                az_lo = scan_lo + i * step
+                break
+
+    if az_hi <= az_lo:
+        return 0.0, 0.0
+    return az_lo, az_hi
+
+
 @numba.njit(nogil=True)
 def _dynamic_limits(
     center: float, width: float, lower_bound: float, upper_bound: float
@@ -438,13 +691,17 @@ def _clamp(x: float, lower: float, upper: float) -> float:
 
 
 @numba.njit(nogil=True)
-def _interpolate_transmission(grid: PassbandGrid, azimuth: float) -> float:
+def _interpolate_transmission(
+    azimuthal_transmission: ndarray,
+    azimuthal_transmission_spacing: float,
+    azimuth: float,
+) -> float:
     azimuth = (azimuth + 180) % 360 - 180
-    i_float = abs(azimuth) / grid.azimuthal_transmission_spacing
+    i_float = abs(azimuth) / azimuthal_transmission_spacing
     i_lower = int(math.floor(i_float))
     i_upper = i_lower + 1
 
-    n = len(grid.azimuthal_transmission)
+    n = len(azimuthal_transmission)
     if i_lower < 0:
         i_lower = 0
     elif i_lower >= n:
@@ -457,24 +714,27 @@ def _interpolate_transmission(grid: PassbandGrid, azimuth: float) -> float:
     weight_lower = float(i_upper) - i_float
     weight_upper = i_float - float(i_lower)
     return (
-        grid.azimuthal_transmission[i_lower] * weight_lower
-        + grid.azimuthal_transmission[i_upper] * weight_upper
+        azimuthal_transmission[i_lower] * weight_lower
+        + azimuthal_transmission[i_upper] * weight_upper
     )
 
 
 @numba.njit(nogil=True)
 def interpolate_passband(
-    grid: PassbandGrid, is_sunglasses: bool, elevation: float, speed: float
+    grid: PassbandGrid, is_sunglasses: bool, elevation: float, speed_ratio: float
 ) -> float:
+    """Interpolate the V-only passband at the given (elevation, speed_ratio = v / v_0).
+
+    The grid contains passband values on a (elevation, speed_ratio) lattice so this
+    function is species-independent — convert v -> speed_ratio at the call site using
+    the species-specific `central_speed`."""
     grid_values = grid.values_sunglasses if is_sunglasses else grid.values_open_aperture
 
     i_float = (elevation - grid.min_elevation) / grid.elevation_spacing
     if i_float < 0 or i_float + 1 >= grid_values.shape[0]:
         return 0.0
 
-    j_float = (
-        speed / grid.central_speed - grid.min_speed_ratio
-    ) / grid.speed_ratio_spacing
+    j_float = (speed_ratio - grid.min_speed_ratio) / grid.speed_ratio_spacing
     if j_float < 0 or j_float + 1 >= grid_values.shape[1]:
         return 0.0
 
@@ -495,35 +755,61 @@ def interpolate_passband(
     )
 
 
-@numba.njit(nogil=True)
+@numba.njit
 def _residuals_njit(
-    x, count_rate, sigma, passband_grids, rotation_matrices, spacecraft_velocity_rtn
+    x,
+    count_rate,
+    sigma,
+    passband_grids,
+    central_speeds,
+    central_effective_areas,
+    azimuthal_transmission,
+    azimuthal_transmission_spacing,
+    rotation_matrices,
+    spacecraft_velocity_rtn,
+    mass_kg,
 ):
     density = np.exp(x[0])
     temperature = np.exp(x[1])
     bulk_velocity_rtn = x[2:5]
-    model = _model_count_rates(
+    model_true = _model_count_rates(
         density,
         temperature,
         bulk_velocity_rtn,
         passband_grids,
+        central_speeds,
+        central_effective_areas,
+        azimuthal_transmission,
+        azimuthal_transmission_spacing,
         rotation_matrices,
         spacecraft_velocity_rtn,
+        mass_kg,
     )
-    return (model - count_rate) / sigma
+    # Deadtime acts on the observed true rate (here, proton-only). For two-species
+    # joint observation, the alpha fitter applies it to (proton+alpha) true.
+    return (apply_deadtime_correction_array(model_true) - count_rate) / sigma
 
 
 def _optimize(
     count_rate: ndarray,
     passband_grids: numba.typed.List,
+    central_speeds: ndarray,
+    central_effective_areas: ndarray,
+    azimuthal_transmission: ndarray,
+    azimuthal_transmission_spacing: float,
     rotation_matrices: ndarray,
     spacecraft_velocity_rtn: ndarray,
     initial_guess: ProtonSolarWindMoments,
+    spin_axis_rtn: ndarray = None,
 ) -> ProtonSolarWindMoments:
     from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
     vr0, vt0, vn0 = initial_guess.bulk_velocity_rtn
+
     sigma = np.sqrt(np.maximum(count_rate * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
+
+    if spin_axis_rtn is None:
+        spin_axis_rtn = rotation_matrices[0, 1, :].copy()
 
     x0 = np.array(
         [
@@ -541,8 +827,13 @@ def _optimize(
             count_rate,
             sigma,
             passband_grids,
+            central_speeds,
+            central_effective_areas,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
             rotation_matrices,
             spacecraft_velocity_rtn,
+            PROTON_MASS_KG,
         )
 
     # See docs/swapi/solar-wind-moments.md for diff_step rationale.
@@ -552,7 +843,6 @@ def _optimize(
     # Spin axis in RTN = body-Y direction expressed in RTN coords = row 1 of R[i].
     # 180° rotation about that axis: v' = 2(v·s)s − v.
     chi2 = float(np.sum(result.fun**2))
-    spin_axis_rtn = rotation_matrices[0, 1, :]
     v_rtn = result.x[2:5]
     v_flipped = 2.0 * float(np.dot(v_rtn, spin_axis_rtn)) * spin_axis_rtn - v_rtn
     x_flipped = result.x.copy()

@@ -8,9 +8,10 @@ sweeps per fit — matching the production processor exactly. Synthetic count ra
 are generated from the forward model with realistic SWAPI geometry (spin axis =
 boresight = +Y_SWAPI, 15 s spin period) and Poisson noise.
 
-Because all cases share the same voltage sweep, passband grids are built once and
-reused. The optimizer is parallelised across cases via ThreadPoolExecutor (numba
-functions release the GIL).
+All cases share the same voltage sweep so passband grids are built once per worker.
+Cases are split into chunks across a ProcessPoolExecutor — threads don't help here
+because scipy.optimize.least_squares does most of its bookkeeping in pure Python
+and holds the GIL.
 
 Solar wind parameter ranges (seed=7):
   bulk_speed:   300–800 km/s   (uniform)
@@ -28,7 +29,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import time
-from concurrent.futures import ThreadPoolExecutor
+import os
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor  # noqa: F401
 import numpy as np
 import numba
 import spacepy.pycdf
@@ -40,7 +42,9 @@ import matplotlib.pyplot as plt
 from imap_l3_processing.constants import (
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
+    PROTON_CHARGE_OVER_MASS_C_PER_KG,
     METERS_PER_KILOMETER,
+    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
@@ -51,6 +55,8 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     _get_initial_guess,
     _optimize,
     _model_count_rates,
+    apply_deadtime_correction_array,
+    fit_solar_wind_proton_moments,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -98,71 +104,150 @@ def _spin_rotation_matrices(n: int) -> np.ndarray:
     return R
 
 
-def _run_cases(sr: SWAPIResponse, voltages: np.ndarray) -> dict:
+# Worker-process state. Initialized once per worker via _init_worker, then reused
+# across all chunks routed to that worker. Avoids per-task pickle of SWAPIResponse
+# and per-task rebuild of the passband-grid typed.List.
+_W_SR = None
+_W_TILED = None
+_W_CS = None
+_W_CEA = None
+_W_AT = None
+_W_ATS = None
+_W_ROT = None
+_W_ESA = None
+_W_SC = np.zeros(3)
+_W_PARAMS = None  # tuple of (bulk_speeds, temperatures, densities, vTs, vNs)
+
+
+def _init_worker(sw_files, voltages, params):
+    global _W_SR, _W_TILED, _W_CS, _W_CEA, _W_AT, _W_ATS, _W_ROT, _W_ESA, _W_PARAMS
+    _W_SR = SWAPIResponse.from_files(*sw_files)
+    all_voltages = np.tile(voltages, _N_SWEEPS)
+    _W_TILED = numba.typed.List([_W_SR.create_passband_grid(v) for v in all_voltages])
+    _W_CS = np.array(
+        [_W_SR.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in all_voltages]
+    )
+    _W_CEA = np.array([_W_SR.get_central_effective_area(v) for v in all_voltages])
+    _W_AT = np.asarray(_W_SR.azimuthal_transmission, dtype=float)
+    _W_ATS = float(_W_SR.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
+    _W_ROT = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
+    _W_ESA = all_voltages
+    _W_PARAMS = params
+
+    # Force JIT compile in this worker so the chunk loop runs at full speed from i=0.
+    _model_count_rates(
+        8.0,
+        10.0,
+        np.array([500.0, 0.0, 0.0]),
+        _W_TILED,
+        _W_CS,
+        _W_CEA,
+        _W_AT,
+        _W_ATS,
+        _W_ROT,
+        _W_SC,
+        PROTON_MASS_KG,
+    )
+
+
+def _process_chunk(idx_range):
+    bulk_speeds, temperatures, densities, vTs, vNs = _W_PARAMS
+    rows = []
+    for i in idx_range:
+        v_b = float(bulk_speeds[i])
+        T = float(temperatures[i])
+        n = float(densities[i])
+        vT = float(vTs[i])
+        vN = float(vNs[i])
+
+        cr = _model_count_rates(
+            n,
+            T,
+            np.array([v_b, vT, vN]),
+            _W_TILED,
+            _W_CS,
+            _W_CEA,
+            _W_AT,
+            _W_ATS,
+            _W_ROT,
+            _W_SC,
+            PROTON_MASS_KG,
+        )
+        cr = apply_deadtime_correction_array(cr)
+        cr = (
+            np.random.default_rng(i).poisson(np.maximum(cr * 0.145, 0.0)).astype(float)
+            / 0.145
+        )
+
+        # Initial guess is reported on the unmasked input.
+        ig = _get_initial_guess(
+            cr, _W_ESA, _W_TILED, _W_CS, _W_CEA, _W_AT, _W_ATS, _W_ROT, _W_SC
+        )
+        # Final fit goes through the production entry point so the half-mean mask
+        # is applied at the keep boundary before the JIT integrator runs.
+        result = fit_solar_wind_proton_moments(
+            cr,
+            _W_ESA,
+            measurement_time=None,
+            swapi_response=_W_SR,
+            rotation_matrices=_W_ROT,
+            spacecraft_velocity_rtn=_W_SC,
+        )
+
+        rows.append(
+            (
+                n,
+                T,
+                v_b,
+                vT,
+                vN,
+                ig.density,
+                ig.temperature,
+                ig.bulk_velocity_rtn[0],
+                ig.bulk_velocity_rtn[1],
+                ig.bulk_velocity_rtn[2],
+                result.density,
+                result.temperature,
+                result.bulk_velocity_rtn[0],
+                result.bulk_velocity_rtn[1],
+                result.bulk_velocity_rtn[2],
+                bool(result.bad_fit_flag),
+            )
+        )
+    return rows
+
+
+def _run_cases(sw_files, voltages: np.ndarray) -> dict:
     rng = np.random.default_rng(_RNG_SEED)
     bulk_speeds = rng.uniform(300, 800, _N_SAMPLES)
     temperatures = np.exp(rng.uniform(np.log(2), np.log(50), _N_SAMPLES))
     densities = rng.uniform(2, 20, _N_SAMPLES)
     vTs = rng.uniform(-50, 50, _N_SAMPLES)
     vNs = rng.uniform(-50, 50, _N_SAMPLES)
+    params = (bulk_speeds, temperatures, densities, vTs, vNs)
 
-    sc_vel = np.zeros(3)
-
-    # All cases share the same voltage sweep → build grids once.
-    print("  Building passband grids (once for all cases)...")
+    # The fit is GIL-bound (scipy.optimize.least_squares does most of its bookkeeping
+    # in pure Python), so threads give no speedup. Use processes; each worker initialises
+    # its own SWAPIResponse + passband-grid typed.List once via initializer, then runs
+    # a contiguous chunk of cases.
+    n_workers = max(1, (os.cpu_count() or 1))
+    chunks = [
+        range(start, min(start + (_N_SAMPLES + n_workers - 1) // n_workers, _N_SAMPLES))
+        for start in range(0, _N_SAMPLES, (_N_SAMPLES + n_workers - 1) // n_workers)
+    ]
+    print(
+        f"  Running {_N_SAMPLES} fits across {n_workers} processes "
+        f"({len(chunks)} chunks)..."
+    )
     t0 = time.perf_counter()
-    base_grids = numba.typed.List([sr.create_passband_grid(v) for v in voltages])
-    # Tile for N_SWEEPS: [sweep0_bin0..bin70, sweep1_bin0..bin70, ...]
-    tiled_grids = numba.typed.List()
-    for _ in range(_N_SWEEPS):
-        for g in base_grids:
-            tiled_grids.append(g)
-    print(f"  Grids done in {time.perf_counter() - t0:.2f}s.")
-
-    # Rotation matrices: same structure for every case (synthetic geometry).
-    rot = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
-    esa_full = np.tile(voltages, _N_SWEEPS)
-
-    def run_one(i):
-        v_b = float(bulk_speeds[i])
-        T = float(temperatures[i])
-        n = float(densities[i])
-        vT = float(vTs[i])
-        vN = float(vNs[i])
-        true_vel = np.array([v_b, vT, vN])
-
-        cr = _model_count_rates(n, T, true_vel, tiled_grids, rot, sc_vel)
-        cr = (
-            np.random.default_rng(i).poisson(np.maximum(cr * 0.145, 0.0)).astype(float)
-            / 0.145
-        )
-
-        ig = _get_initial_guess(cr, esa_full, tiled_grids, rot, sc_vel)
-        result = _optimize(cr, tiled_grids, rot, sc_vel, ig)
-
-        return (
-            n,
-            T,
-            v_b,
-            vT,
-            vN,
-            ig.density,
-            ig.temperature,
-            ig.bulk_velocity_rtn[0],
-            ig.bulk_velocity_rtn[1],
-            ig.bulk_velocity_rtn[2],
-            result.density,
-            result.temperature,
-            result.bulk_velocity_rtn[0],
-            result.bulk_velocity_rtn[1],
-            result.bulk_velocity_rtn[2],
-            bool(result.bad_fit_flag),
-        )
-
-    print(f"  Running {_N_SAMPLES} fits in parallel...")
-    t0 = time.perf_counter()
-    with ThreadPoolExecutor() as pool:
-        rows = list(pool.map(run_one, range(_N_SAMPLES)))
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        initializer=_init_worker,
+        initargs=(sw_files, voltages, params),
+    ) as pool:
+        rows = []
+        for chunk_rows in pool.map(_process_chunk, chunks):
+            rows.extend(chunk_rows)
     print(f"  Fits done in {time.perf_counter() - t0:.1f}s.")
 
     keys = (
@@ -200,34 +285,57 @@ def _rmse_label(truth, est, scale):
 
 def main():
     print("Loading calibration data...")
-    sr = SWAPIResponse.from_files(
+    sw_files = (
         _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
         _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
         _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
     )
+    sr = SWAPIResponse.from_files(*sw_files)
 
     print("Loading realistic SWAPI science voltages...")
     voltages = _load_science_voltages()
     print(f"  {len(voltages)} bins, {voltages.min():.1f}–{voltages.max():.1f} V")
 
-    print("Warming up JIT...")
-    _grids0 = numba.typed.List([sr.create_passband_grid(v) for v in voltages])
-    _tiled0 = numba.typed.List()
-    for _ in range(_N_SWEEPS):
-        for g in _grids0:
-            _tiled0.append(g)
-    _rot0 = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
+    print("Warming up JIT (driver process)...")
     _esa0 = np.tile(voltages, _N_SWEEPS)
+    _tiled0 = numba.typed.List([sr.create_passband_grid(v) for v in _esa0])
+    _cs0 = np.array(
+        [sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in _esa0]
+    )
+    _cea0 = np.array([sr.get_central_effective_area(v) for v in _esa0])
+    _at0 = np.asarray(sr.azimuthal_transmission, dtype=float)
+    _ats0 = float(sr.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
+    _rot0 = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
     _sc0 = np.zeros(3)
     _cr0 = _model_count_rates(
-        8.0, 10.0, np.array([500.0, 0.0, 0.0]), _tiled0, _rot0, _sc0
+        8.0,
+        10.0,
+        np.array([500.0, 0.0, 0.0]),
+        _tiled0,
+        _cs0,
+        _cea0,
+        _at0,
+        _ats0,
+        _rot0,
+        _sc0,
+        PROTON_MASS_KG,
     )
-    _ig0 = _get_initial_guess(_cr0, _esa0, _tiled0, _rot0, _sc0)
-    _optimize(_cr0, _tiled0, _rot0, _sc0, _ig0)
+    _ig0 = _get_initial_guess(
+        _cr0, _esa0, _tiled0, _cs0, _cea0, _at0, _ats0, _rot0, _sc0
+    )
+    _optimize(_cr0, _tiled0, _cs0, _cea0, _at0, _ats0, _rot0, _sc0, _ig0)
+    fit_solar_wind_proton_moments(
+        _cr0,
+        _esa0,
+        measurement_time=None,
+        swapi_response=sr,
+        rotation_matrices=_rot0,
+        spacecraft_velocity_rtn=_sc0,
+    )
     print("JIT ready.")
 
     t_total = time.perf_counter()
-    data = _run_cases(sr, voltages)
+    data = _run_cases(sw_files, voltages)
     print(f"Total wall time: {time.perf_counter() - t_total:.1f}s")
 
     n_bad = data["bad_flag"].sum()

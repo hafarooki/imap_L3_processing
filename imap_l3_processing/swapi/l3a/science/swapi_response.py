@@ -13,16 +13,16 @@ _TARGET_SPEED_RATIOS = np.linspace(0.9, 1.1, 101)
 
 
 class PassbandGrid(NamedTuple):
+    """V-only passband geometry. Species- and time-dependent quantities (central speed,
+    central effective area, azimuthal transmission) are tracked separately on
+    `SWAPIResponse` and passed alongside this grid into `calculate_integral`."""
+
     min_elevation: float
     elevation_spacing: float
     min_speed_ratio: float
     speed_ratio_spacing: float
-    central_effective_area: float
-    central_speed: float
     values_sunglasses: NDArray
     values_open_aperture: NDArray
-    azimuthal_transmission: NDArray
-    azimuthal_transmission_spacing: float
     min_OA_boundary: NDArray  # shape (2, n): row 0 = elevations, row 1 = min speed ratios
     max_OA_boundary: NDArray  # shape (2, n): row 0 = elevations, row 1 = max speed ratios
     min_SG_boundary: NDArray
@@ -124,19 +124,41 @@ class SWAPIResponse:
         values = np.exp(np.polyval(coeffs.values.T, log_beam_energy))
         return pd.DataFrame(values, index=coeffs.index, columns=['value'])
 
+    # Azimuthal transmission table is sampled at 0.1 deg spacing; constant for all V/species.
+    AZIMUTHAL_TRANSMISSION_SPACING_DEG = 0.1
+
+    def central_speed(self, esa_voltage: float, mass_per_charge_m_p_per_e: float) -> float:
+        """Central proton-frame speed (km/s) at the given ESA voltage for a species
+        whose mass-per-charge is `mass_per_charge_m_p_per_e` (1 for proton, ≈2 for alpha):
+            v_0 = sqrt(2 k* |V| (e/m_p) / mass_per_charge_m_p_per_e).
+        """
+        from imap_l3_processing.constants import (
+            METERS_PER_KILOMETER,
+            PROTON_CHARGE_OVER_MASS_C_PER_KG,
+        )
+
+        return float(
+            np.sqrt(
+                2.0 * SWAPI_K_FACTOR * abs(esa_voltage)
+                * PROTON_CHARGE_OVER_MASS_C_PER_KG / float(mass_per_charge_m_p_per_e)
+            ) / METERS_PER_KILOMETER
+        )
+
     def create_passband_grid(self, esa_voltage: float) -> PassbandGrid:
-        # Cached by voltage: pandas pivot/unstack inside _build_passband_array dominates
-        # this function (~1.8 ms per call), and fits typically reuse the same 72 ESA
-        # voltages across many sweeps and many fits within one processor run.
+        """Build a V-only PassbandGrid (passband-shape arrays + boundaries + active-el ranges).
+
+        Species- and time-dependent quantities — central speed, central effective area,
+        azimuthal transmission — are tracked separately on this `SWAPIResponse` and must be
+        passed alongside the grid when calling `calculate_integral`. Cache key is V only.
+
+        Cached because pandas pivot/unstack inside `_build_passband_array` dominates this
+        function (~1.8 ms per call), and fits typically reuse the same 72 ESA voltages
+        across many sweeps within one processor run.
+        """
         cache_key = float(esa_voltage)
         cached = self._grid_cache.get(cache_key)
         if cached is not None:
             return cached
-
-        from imap_l3_processing.swapi.l3a.science.speed_calculation import esa_voltage_to_proton_speed
-
-        central_speed = float(esa_voltage_to_proton_speed(esa_voltage))
-        central_effective_area = self.get_central_effective_area(esa_voltage)
 
         oa_values = self.get_passband_values(esa_voltage, 'OA')
         sg_values = self.get_passband_values(esa_voltage, 'SG')
@@ -149,12 +171,8 @@ class SWAPIResponse:
             elevation_spacing=float(_TARGET_ELEVATIONS[1] - _TARGET_ELEVATIONS[0]),
             min_speed_ratio=float(_TARGET_SPEED_RATIOS[0]),
             speed_ratio_spacing=float(_TARGET_SPEED_RATIOS[1] - _TARGET_SPEED_RATIOS[0]),
-            central_effective_area=central_effective_area,
-            central_speed=central_speed,
             values_open_aperture=oa_grid,
             values_sunglasses=sg_grid,
-            azimuthal_transmission=self.azimuthal_transmission,
-            azimuthal_transmission_spacing=0.1,
             min_OA_boundary=self._min_OA_boundary,
             max_OA_boundary=self._max_OA_boundary,
             min_SG_boundary=self._min_SG_boundary,

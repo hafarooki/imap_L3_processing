@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import numpy as np
 
+from imap_l3_processing.constants import PROTON_MASS_KG, PROTON_CHARGE_OVER_MASS_C_PER_KG, PROTON_CHARGE_COULOMBS
 from imap_l3_processing.swapi.l3a.science.swapi_response import (
     SWAPIResponse, eval_boundary_min, eval_boundary_max,
 )

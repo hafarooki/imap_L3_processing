@@ -7,6 +7,8 @@ from uncertainties.unumpy import nominal_values
 from imap_l3_processing.constants import (
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
+    ALPHA_PARTICLE_CHARGE_COULOMBS,
+    ALPHA_PARTICLE_MASS_KG,
     METERS_PER_KILOMETER,
 )
 
@@ -37,6 +39,19 @@ def esa_voltage_to_proton_speed(esa_voltage: ArrayLike) -> np.ndarray:
             * PROTON_CHARGE_COULOMBS
             * np.abs(esa_voltage)
             / PROTON_MASS_KG
+        )
+        / METERS_PER_KILOMETER
+    )
+
+
+def esa_voltage_to_alpha_speed(esa_voltage: ArrayLike) -> np.ndarray:
+    return (
+        np.sqrt(
+            2
+            * SWAPI_K_FACTOR
+            * ALPHA_PARTICLE_CHARGE_COULOMBS
+            * np.abs(esa_voltage)
+            / ALPHA_PARTICLE_MASS_KG
         )
         / METERS_PER_KILOMETER
     )

@@ -13,6 +13,19 @@ ALPHA_PARTICLE_MASS_KG = 6.644_657_3450e-27
 PUI_PARTICLE_CHARGE_COULOMBS = PROTON_CHARGE_COULOMBS
 HE_PUI_PARTICLE_MASS_KG = 6.64556828337e-27
 
+# q/m ratios in C/kg (used internally for SI-unit conversions).
+PROTON_CHARGE_OVER_MASS_C_PER_KG = PROTON_CHARGE_COULOMBS / PROTON_MASS_KG
+ALPHA_CHARGE_OVER_MASS_C_PER_KG = ALPHA_PARTICLE_CHARGE_COULOMBS / ALPHA_PARTICLE_MASS_KG
+
+# Mass-per-charge in units of m_p/e (proton = 1, alpha ≈ 2). This is the species index
+# used by SWAPI's central-speed conversion: v_0 = sqrt(2 k* |V| (e/m_p) / mass_per_charge_m_p_per_e),
+# matching the prototype calibration code in ~/projects/swapi-calibration.
+PROTON_MASS_PER_CHARGE_M_P_PER_E = 1.0
+ALPHA_MASS_PER_CHARGE_M_P_PER_E = (
+    (ALPHA_PARTICLE_MASS_KG / PROTON_MASS_KG)
+    / (ALPHA_PARTICLE_CHARGE_COULOMBS / PROTON_CHARGE_COULOMBS)
+)
+
 BOLTZMANN_CONSTANT_JOULES_PER_KELVIN = 1.380_649e-23
 
 ONE_SECOND_IN_MICROSECONDS = 1_000_000

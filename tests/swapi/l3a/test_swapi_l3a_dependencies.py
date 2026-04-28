@@ -98,6 +98,7 @@ class TestSwapiL3ADependencies(unittest.TestCase):
             sentinel.azimuthal_transmission,
             sentinel.central_effective_area,
             sentinel.passband_fit_coefficients,
+            None,  # mag_l1d path is optional; absent when no MAG dep is provided
         )
 
         self.assertEqual(mock_from_file_paths.return_value, actual_swapi_l3_dependencies)

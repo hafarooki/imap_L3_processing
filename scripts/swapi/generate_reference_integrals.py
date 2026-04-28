@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import numpy as np
 import pandas as pd
 
-from imap_l3_processing.constants import METERS_PER_KILOMETER, PROTON_CHARGE_COULOMBS, PROTON_MASS_KG
+from imap_l3_processing.constants import METERS_PER_KILOMETER, PROTON_CHARGE_COULOMBS, PROTON_MASS_KG, PROTON_CHARGE_OVER_MASS_C_PER_KG
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import SWParams
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse

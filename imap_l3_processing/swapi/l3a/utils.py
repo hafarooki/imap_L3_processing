@@ -41,6 +41,17 @@ def get_swapi_geometry(measurement_time: ndarray) -> tuple[ndarray, ndarray]:
     return rotation_matrices, spacecraft_velocity_rtn
 
 
+def get_swapi_dsrf_to_rtn(measurement_time_tt2000_ns: ndarray) -> ndarray:
+    """DSRF→RTN rotation at each measurement time (TT2000 ns). Returns shape (N, 3, 3).
+
+    Mirrors the TT2000→ET conversion in get_swapi_geometry; used by the alpha moments
+    fitter to rotate MAG L1D unit-B vectors (DSRF) into RTN before applying the
+    field-aligned-drift constraint v_α = v_p* + Δv·B̂."""
+    et_times = np.array([spiceypy.unitim(float(t), "TT", "ET")
+                         for t in np.atleast_1d(measurement_time_tt2000_ns) / ONE_SECOND_IN_NANOSECONDS])
+    return get_rotation_matrix(et_times, SpiceFrame.IMAP_DPS, SpiceFrame.IMAP_RTN)
+
+
 def chunk_l2_data(data: SwapiL2Data, chunk_size: int) -> Iterable[SwapiL2Data]:
     i = 0
     while i < len(data.sci_start_time):
