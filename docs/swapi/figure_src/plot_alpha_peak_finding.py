@@ -67,10 +67,10 @@ _SPIN_S = 15.0
 _R_BASE = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
 
 # Spectrum parameters.
-_N_P, _T_P = 5.0, 10.0
+_N_P, _T_P = 5.0, 50.0
 _V_P_RTN = np.array([450.0, 0.0, 0.0])
-_N_A, _T_A = 0.25, 10.0  # ~5% abundance, same temperature as protons
-_DELTA_V = 30.0
+_N_A, _T_A = 0.05, 60.0  # ~4% abundance, same temperature as protons
+_DELTA_V = 10.0
 _B_HAT = np.array([1.0, 0.0, 0.0])
 _V_A_RTN = _V_P_RTN + _DELTA_V * _B_HAT
 _VOLTAGES = np.geomspace(60.0, 5000.0, _N_BINS)[::-1]
@@ -193,9 +193,7 @@ def main():
     # ------------------------------------------------------------------
     fig, ax = plt.subplots(1, 1, figsize=(10, 6))
     fig.suptitle(
-        "Alpha peak-finding count-rate forward model fit\n"
-        r"$n_p=5\,\mathrm{cm}^{-3},\ T_p=10\,\mathrm{eV},\ v_p=450\,\mathrm{km/s}$;  "
-        r"$n_\alpha=0.25\,\mathrm{cm}^{-3}\ (\sim 5\%),\ T_\alpha=10\,\mathrm{eV},\ \Delta v=+30\,\mathrm{km/s}$",
+        "Alpha peak-finding count-rate forward model fit",
         fontsize=11,
     )
 
@@ -273,7 +271,7 @@ def main():
     ax.set_xlabel("ESA Voltage ($|V|$) [V]", fontsize=12)
     ax.set_ylabel("Count Rate [Hz]", fontsize=12)
     ax.set_ylim(0, 1e5)
-    ax.legend(fontsize=10, loc="upper right")
+    ax.legend(fontsize=10, loc="upper left")
     ax.grid(True, which="both", alpha=0.25)
 
     fig.tight_layout()
