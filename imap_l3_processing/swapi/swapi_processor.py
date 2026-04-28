@@ -1,4 +1,6 @@
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace, astuple
 
 import numpy as np
@@ -191,9 +193,9 @@ class SwapiProcessor(Processor):
         proton_solar_wind_deflection_angles = []
         proton_quality_flags = []
 
-        for data_chunk in chunk_l2_data(data, 5):
+        def _process_pui_proton_chunk(data_chunk):
             epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
-            proton_solar_wind_speed = ufloat(np.nan, np.nan)
+            speed = ufloat(np.nan, np.nan)
             clock_angle = ufloat(np.nan, np.nan)
             deflection_angle = ufloat(np.nan, np.nan)
             quality_flag = SwapiL3Flags.NONE
@@ -202,21 +204,27 @@ class SwapiProcessor(Processor):
                     np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
                 ):
                     raise ValueError("Fill values in input data")
-                # central_effective_area lab table is the proton ABM-derived effective area
-                # at t_lab; scale at runtime by ε_p(t)/ε_p_lab to track time drift.
                 fitting_result = self._fit_proton_moments_for_chunk(
                     data_chunk, dependencies, epoch, SWAPI_SCIENCE_BINS
                 )
-                proton_solar_wind_speed, clock_angle, deflection_angle = (
-                    _derive_proton_velocity_angles(fitting_result)
+                speed, clock_angle, deflection_angle = _derive_proton_velocity_angles(
+                    fitting_result
                 )
                 quality_flag |= fitting_result.bad_fit_flag
-            except Exception as e:
+            except Exception:
                 logger.info(
                     f"Exception occurred at epoch {epoch}, continuing with fill value",
                     exc_info=True,
                 )
-            proton_solar_wind_speeds.append(proton_solar_wind_speed)
+            return speed, clock_angle, deflection_angle, quality_flag
+
+        with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            pui_proton_results = list(
+                executor.map(_process_pui_proton_chunk, chunk_l2_data(data, 5))
+            )
+
+        for speed, clock_angle, deflection_angle, quality_flag in pui_proton_results:
+            proton_solar_wind_speeds.append(speed)
             proton_solar_wind_clock_angles.append(clock_angle)
             proton_solar_wind_deflection_angles.append(deflection_angle)
             proton_quality_flags.append(quality_flag)
@@ -237,6 +245,7 @@ class SwapiProcessor(Processor):
         pui_density = []
         pui_temperature = []
         bad_fit_flags = []
+
         for data_chunk, sw_velocity in zip(
             chunk_l2_data(data, 50), ten_minute_solar_wind_velocities
         ):
@@ -269,9 +278,7 @@ class SwapiProcessor(Processor):
                 ionization_rate = fit_params.ionization_rate
                 cutoff_speed = fit_params.cutoff_speed
                 background_count_rate = fit_params.background_count_rate
-
                 bad_fit_flag |= fit_params.flags
-
                 density = calculate_helium_pui_density(
                     epoch,
                     sw_velocity,
@@ -286,7 +293,7 @@ class SwapiProcessor(Processor):
                     fit_params,
                     dependencies.helium_inflow_vector,
                 )
-            except Exception as e:
+            except Exception:
                 logger.info(
                     f"Exception occurred at epoch {epoch}, continuing with fill value",
                     exc_info=True,
@@ -443,13 +450,22 @@ class SwapiProcessor(Processor):
         moments_ref_proton_velocity_rtn = []
         moments_bad_fit_flag = []
 
-        for data_chunk in chunk_l2_data(data, 5):
+        def _process_alpha_chunk(data_chunk):
+            epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
+            mom = self._fit_alpha_moments_for_chunk(data_chunk, dependencies, epoch)
+            return epoch, mom
+
+        with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            alpha_results = list(
+                executor.map(_process_alpha_chunk, chunk_l2_data(data, 5))
+            )
+
+        for epoch, mom in alpha_results:
             alpha_solar_wind_speed = ufloat(np.nan, np.nan)
             alpha_density = ufloat(np.nan, np.nan)
             alpha_temperature = ufloat(np.nan, np.nan)
             alpha_pre_lut_density = ufloat(np.nan, np.nan)
             alpha_pre_lut_temperature = ufloat(np.nan, np.nan)
-            epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
             bad_fit_flag = SwapiL3Flags.NONE
             epochs.append(epoch)
             alpha_solar_wind_speeds.append(alpha_solar_wind_speed)
@@ -459,9 +475,6 @@ class SwapiProcessor(Processor):
             alpha_solar_wind_pre_lut_densities.append(alpha_pre_lut_density)
             alpha_solar_wind_pre_lut_temperatures.append(alpha_pre_lut_temperature)
 
-            # Stage 1 + Stage 2 moments fit. Independent of LUT pipeline above; failures
-            # populate NaN moments and an appropriate bad_fit_flag without raising further.
-            mom = self._fit_alpha_moments_for_chunk(data_chunk, dependencies, epoch)
             moments_density.append(mom.density)
             moments_density_uncert.append(mom.density_sigma)
             moments_temperature.append(mom.temperature)
@@ -513,58 +526,55 @@ class SwapiProcessor(Processor):
         return alpha_solar_wind_l3_data
 
     def process_l3a_proton(self, data, dependencies) -> SwapiL3ProtonSolarWindData:
-        epochs = []
-
-        proton_solar_wind_speeds = []
-        proton_solar_wind_temperatures = []
-        proton_solar_wind_density = []
-        proton_solar_wind_clock_angles = []
-        proton_solar_wind_deflection_angles = []
-        quality_flags = []
-
-        for data_chunk in chunk_l2_data(data, 5):
-            proton_solar_wind_speed = ufloat(np.nan, np.nan)
+        def _process_chunk(data_chunk):
+            speed = ufloat(np.nan, np.nan)
             clock_angle = ufloat(np.nan, np.nan)
             deflection_angle = ufloat(np.nan, np.nan)
-            proton_density = ufloat(np.nan, np.nan)
-            proton_temperature = ufloat(np.nan, np.nan)
+            density = ufloat(np.nan, np.nan)
+            temperature = ufloat(np.nan, np.nan)
             quality_flag = SwapiL3Flags.NONE
-
-            epoch_center_of_chunk = (
-                data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
-            )
+            epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
             try:
                 if np.any(
                     np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
                 ):
                     raise ValueError("Fill values in input data")
                 fitting_result = self._fit_proton_moments_for_chunk(
-                    data_chunk, dependencies, epoch_center_of_chunk, SWAPI_SCIENCE_BINS
+                    data_chunk, dependencies, epoch, SWAPI_SCIENCE_BINS
                 )
-                proton_solar_wind_speed, clock_angle, deflection_angle = (
-                    _derive_proton_velocity_angles(fitting_result)
+                speed, clock_angle, deflection_angle = _derive_proton_velocity_angles(
+                    fitting_result
                 )
-                proton_density = ufloat(
-                    fitting_result.density, fitting_result.density_sigma
-                )
-                proton_temperature = ufloat(
+                density = ufloat(fitting_result.density, fitting_result.density_sigma)
+                temperature = ufloat(
                     fitting_result.temperature, fitting_result.temperature_sigma
                 )
                 quality_flag |= fitting_result.bad_fit_flag
-
-            except Exception as e:
+            except Exception:
                 logger.info(
-                    f"Exception occurred at epoch {epoch_center_of_chunk}, continuing with fill value",
+                    f"Exception occurred at epoch {epoch}, continuing with fill value",
                     exc_info=True,
                 )
+            return (
+                epoch,
+                speed,
+                clock_angle,
+                deflection_angle,
+                density,
+                temperature,
+                quality_flag,
+            )
 
-            proton_solar_wind_speeds.append(proton_solar_wind_speed)
-            proton_solar_wind_clock_angles.append(clock_angle)
-            proton_solar_wind_deflection_angles.append(deflection_angle)
-            proton_solar_wind_density.append(proton_density)
-            proton_solar_wind_temperatures.append(proton_temperature)
-            epochs.append(epoch_center_of_chunk)
-            quality_flags.append(quality_flag)
+        with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            results = list(executor.map(_process_chunk, chunk_l2_data(data, 5)))
+
+        epochs = [r[0] for r in results]
+        proton_solar_wind_speeds = [r[1] for r in results]
+        proton_solar_wind_clock_angles = [r[2] for r in results]
+        proton_solar_wind_deflection_angles = [r[3] for r in results]
+        proton_solar_wind_density = [r[4] for r in results]
+        proton_solar_wind_temperatures = [r[5] for r in results]
+        quality_flags = [r[6] for r in results]
 
         proton_solar_wind_speed_metadata = replace(
             self.input_metadata, descriptor="proton-sw"
@@ -596,6 +606,7 @@ class SwapiProcessor(Processor):
         cdf_alpha_deltas = []
         cdf_pui_deltas = []
         combined_energy_deltas = []
+
         for data_chunk in chunk_l2_data(data, 50):
             center_of_epoch = data_chunk.sci_start_time[0] + FIVE_MINUTES_IN_NANOSECONDS
             instrument_efficiency = (
@@ -607,25 +618,21 @@ class SwapiProcessor(Processor):
                 data_chunk.coincidence_count_rate,
                 data_chunk.coincidence_count_rate_uncertainty,
             )
-
             average_coincident_count_rates, energies = calculate_combined_sweeps(
                 coincidence_count_rates_with_uncertainty, data_chunk.energy
             )
-
             proton_velocities, proton_probabilities = calculate_proton_solar_wind_vdf(
                 energies,
                 average_coincident_count_rates,
                 instrument_efficiency,
                 dependencies.geometric_factor_calibration_table,
             )
-
             alpha_velocities, alpha_probabilities = calculate_alpha_solar_wind_vdf(
                 energies,
                 average_coincident_count_rates,
                 instrument_efficiency,
                 dependencies.geometric_factor_calibration_table,
             )
-
             pui_velocities, pui_probabilities = calculate_pui_solar_wind_vdf(
                 energies,
                 average_coincident_count_rates,
@@ -640,7 +647,6 @@ class SwapiProcessor(Processor):
                     dependencies.geometric_factor_calibration_table,
                 )
             )
-
             epochs.append(center_of_epoch)
             cdf_proton_velocities.append(proton_velocities)
             cdf_proton_probabilities.append(proton_probabilities)
