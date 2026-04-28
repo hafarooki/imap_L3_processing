@@ -95,7 +95,7 @@ def fit_solar_wind_proton_moments(
     measurement_time: ndarray,
     swapi_response: SWAPIResponse,
     central_effective_area_scale: float = 1.0,
-    rotation_matrices: ndarray|None = None
+    rotation_matrices: ndarray | None = None,
 ) -> ProtonSolarWindMoments:
     """Fit proton solar wind moments. ``central_effective_area_scale`` should be
     ``ε_p(t)/ε_p(t_lab)`` from the efficiency LUT — it's applied to each measurement's
@@ -157,7 +157,7 @@ def fit_solar_wind_proton_moments(
         central_effective_areas,
         az_trans,
         az_trans_spacing,
-        rotation_matrices
+        rotation_matrices,
     )
 
     # Step 3: Optimize solar wind parameters to best match model count rate to observed
@@ -182,7 +182,7 @@ def _get_initial_guess(
     central_effective_areas: ndarray,
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
-    rotation_matrices: ndarray
+    rotation_matrices: ndarray,
 ) -> ProtonSolarWindMoments:
     speed = esa_voltage_to_proton_speed(esa_voltage)
 
@@ -214,8 +214,10 @@ def _get_initial_guess(
         / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
     )
 
-    # Initial transverse velocity is zero; `_optimize` handles the wrong-basin trap.
-    bulk_velocity_rtn = np.array([float(bulk_speed), -30, 0.0])
+    # Set vT = -30 km/s and solve for vR so that |v| = bulk_speed from the Gaussian fit.
+    bulk_velocity_rtn = np.array(
+        [math.sqrt(max(float(bulk_speed) ** 2 - 30.0**2, 0.0)), -30.0, 0.0]
+    )
 
     # Scale density so that the unit model count rate matches the mean observed count rate.
     unit_model = _model_count_rates(
@@ -241,10 +243,7 @@ def _get_initial_guess(
 
 
 @numba.njit(nogil=True)
-def _compute_angles(
-    bulk_velocity_rtn: ndarray,
-    rotation_matrix: ndarray
-):
+def _compute_angles(bulk_velocity_rtn: ndarray, rotation_matrix: ndarray):
     bulk_velocity_xyz = rotation_matrix @ bulk_velocity_rtn
     bulk_speed = np.linalg.norm(bulk_velocity_rtn)
     phi = np.degrees(np.arctan2(-bulk_velocity_xyz[0], -bulk_velocity_xyz[1]))
@@ -280,9 +279,7 @@ def _model_count_rates(
     n = len(passband_grids)
     result = np.empty(n)
     for i in range(n):
-        phi, theta = _compute_angles(
-            bulk_velocity_rtn, rotation_matrices[i]
-        )
+        phi, theta = _compute_angles(bulk_velocity_rtn, rotation_matrices[i])
         sw_params = SWParams(
             density=density,
             bulk_speed=bulk_speed,

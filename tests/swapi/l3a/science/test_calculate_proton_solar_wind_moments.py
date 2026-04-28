@@ -1,3 +1,4 @@
+import math
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -498,7 +499,8 @@ class TestGetInitialGuess(unittest.TestCase):
 
     def test_bulk_velocity_initial_guess(self):
         result = self._run()
-        self.assertGreater(result.bulk_velocity_rtn[0], 0)
+        expected_vR = math.sqrt(max(self.true_speed ** 2 - 30.0 ** 2, 0.0))
+        np.testing.assert_allclose(result.bulk_velocity_rtn[0], expected_vR, rtol=0.02)
         np.testing.assert_allclose(result.bulk_velocity_rtn[1], -30.0, atol=1.0)
         np.testing.assert_allclose(result.bulk_velocity_rtn[2], 0.0, atol=1e-6)
 
