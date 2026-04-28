@@ -20,13 +20,12 @@ from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_temperature
 from imap_l3_processing.swapi.l3a.science.density_of_neutral_helium_lookup_table import \
     DensityOfNeutralHeliumLookupTable
 from imap_l3_processing.swapi.l3a.science.inflow_vector import InflowVector
-from imap_l3_processing.swapi.l3a.utils import read_l2_swapi_data
+from imap_l3_processing.swapi.l3a.utils import read_l2_swapi_data, read_l1d_mag_data
 from imap_l3_processing.swapi.l3b.science.efficiency_calibration_table import EfficiencyCalibrationTable
 from imap_l3_processing.swapi.l3b.science.geometric_factor_calibration_table import GeometricFactorCalibrationTable
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3b.science.instrument_response_lookup_table import \
     InstrumentResponseLookupTableCollection
-from imap_l3_processing.utils import read_l1d_mag_data
 
 
 @dataclass

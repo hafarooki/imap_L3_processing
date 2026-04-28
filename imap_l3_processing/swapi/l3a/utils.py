@@ -9,8 +9,16 @@ from spacepy.pycdf import CDF
 
 from imap_l3_processing.cdf.cdf_utils import read_numeric_variable
 from imap_l3_processing.constants import ONE_SECOND_IN_NANOSECONDS
+from imap_l3_processing.models import MagL1dData
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_processing.spice.geometry import SpiceFrame, get_rotation_matrix, imap_state
+
+
+def read_l1d_mag_data(cdf_path) -> MagL1dData:
+    with CDF(str(cdf_path)) as cdf:
+        return MagL1dData(
+            epoch=pycdf.lib.v_datetime_to_tt2000(cdf['epoch'][...]),
+            mag_data=read_numeric_variable(cdf["b_dsrf"])[:, :3])
 
 
 def read_l2_swapi_data(cdf: CDF) -> SwapiL2Data:

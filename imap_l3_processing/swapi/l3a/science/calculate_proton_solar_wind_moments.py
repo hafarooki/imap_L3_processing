@@ -204,7 +204,7 @@ def _get_initial_guess(
         )
     except RuntimeError:
         bulk_speed = speed[peak_idx]
-        sigma_v = 0
+        sigma_v = 50.0
 
     sigma_floor_v = (
         math.sqrt(
