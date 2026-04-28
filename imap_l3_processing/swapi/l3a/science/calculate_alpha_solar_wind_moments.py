@@ -33,9 +33,6 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     apply_deadtime_correction_array,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
-    get_alpha_peak_indices,
-)
-from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_K_FACTOR,
     esa_voltage_to_alpha_speed,
 )
@@ -124,13 +121,23 @@ def fit_solar_wind_alpha_moments(
     az_trans_spacing = float(swapi_response.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
 
     proton_central_speeds = np.array(
-        [swapi_response.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in esa_voltage]
+        [
+            swapi_response.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E)
+            for v in esa_voltage
+        ]
     )
     alpha_central_speeds = np.array(
-        [swapi_response.central_speed(v, ALPHA_MASS_PER_CHARGE_M_P_PER_E) for v in esa_voltage]
+        [
+            swapi_response.central_speed(v, ALPHA_MASS_PER_CHARGE_M_P_PER_E)
+            for v in esa_voltage
+        ]
     )
-    proton_central_eff_areas = central_effective_areas_lab * float(proton_effective_area_scale)
-    alpha_central_eff_areas = central_effective_areas_lab * float(alpha_effective_area_scale)
+    proton_central_eff_areas = central_effective_areas_lab * float(
+        proton_effective_area_scale
+    )
+    alpha_central_eff_areas = central_effective_areas_lab * float(
+        alpha_effective_area_scale
+    )
 
     # Frozen pre-deadtime proton model rate. Deadtime acts on (proton + alpha) below.
     proton_true_rate = _model_count_rates(
@@ -251,58 +258,74 @@ def _alpha_initial_guess(
     proton_bulk_velocity_rtn: ndarray,
     b_hat_rtn: ndarray,
 ) -> Optional[tuple]:
-    """Return (n_α, T_α, Δv=0) as a starting point for LM, or None if peak-finding fails."""
+    """Return (n_α, T_α, Δv₀) as a starting point for LM, or None if no alpha signal found.
 
+    Peak search uses log-space subtraction of the frozen proton model to reveal the alpha
+    bump, constrained to the voltage range [2×, 4×] the proton peak voltage (corresponding
+    to alpha speeds ≈ [1×, 1.41×] the proton speed). The Gaussian fit runs on the
+    log-ratio; Δv₀ is projected onto B̂ from the radial speed difference.
+    """
     n_meas = len(esa_voltage)
     if n_meas == 0:
         return None
 
-    # Average over sweeps for peak-finding only — the fit residuals are still flattened.
-    # Determine sweep count from a clean repeat of voltages: `esa_voltage` is laid out
-    # (sweep0_bins..., sweep1_bins...), with one of a few possible (sweep, bin) shapes.
-    # We require the caller to pass a consistent flatten that respects sweep grouping;
-    # detect n_sweeps by treating each sweep as having the same voltage axis.
     n_sweeps, n_bins = _infer_sweep_layout(esa_voltage)
     if n_sweeps is None:
         return None
 
     counts_per_sweep = count_rate.reshape(n_sweeps, n_bins)
     voltage_per_sweep = esa_voltage.reshape(n_sweeps, n_bins)[0]
-    proton_obs_per_sweep = apply_deadtime_correction_array(
-        proton_true_rate.reshape(n_sweeps, n_bins)
-    )
+    proton_true_avg = proton_true_rate.reshape(n_sweeps, n_bins).mean(axis=0)
 
     count_avg = counts_per_sweep.mean(axis=0)
-    proton_bg_avg = proton_obs_per_sweep.mean(axis=0)
-    energies_per_sweep = SWAPI_K_FACTOR * np.abs(voltage_per_sweep)
+    proton_obs_avg = apply_deadtime_correction_array(proton_true_avg)
 
-    try:
-        peak = get_alpha_peak_indices(count_avg, energies_per_sweep)
-    except Exception:
+    # Alpha voltage search range derived from the proton fit speed.
+    v_p_speed = float(np.linalg.norm(proton_bulk_velocity_rtn))
+    if v_p_speed < 1.0:
+        return None
+    proton_peak_voltage = (
+        PROTON_MASS_KG
+        * (v_p_speed * METERS_PER_KILOMETER) ** 2
+        / (2.0 * PROTON_CHARGE_COULOMBS * SWAPI_K_FACTOR)
+    )
+    alpha_min_voltage = 2.0 * proton_peak_voltage
+    alpha_max_voltage = 4.0 * proton_peak_voltage
+    abs_voltage = np.abs(voltage_per_sweep)
+    alpha_mask = (abs_voltage >= alpha_min_voltage) & (abs_voltage <= alpha_max_voltage)
+    if not np.any(alpha_mask):
         return None
 
-    peak_idx = np.arange(peak.start, peak.stop)
-    if len(peak_idx) < 3:
-        return None
-    residual_peak = np.maximum(count_avg[peak_idx] - proton_bg_avg[peak_idx], 0.0)
-    if not np.any(residual_peak > 0):
+    # Log-space residual: log(count / proton_model), both floored at 0.1 Hz.
+    proton_obs_clipped = np.maximum(proton_obs_avg, 0.1)
+    log_residual = np.log(np.maximum(count_avg, 0.1)) - np.log(proton_obs_clipped)
+
+    # Require the peak log-residual in the alpha range to be ≥ log(2):
+    # the observed rate must be at least 2× the proton model at the candidate peak.
+    peak_log_res = float(np.max(log_residual[alpha_mask]))
+    if peak_log_res < np.log(2.0):
         return None
 
-    speed_peak = esa_voltage_to_alpha_speed(voltage_per_sweep[peak_idx])
-    p0 = [residual_peak.max(), speed_peak[int(np.argmax(residual_peak))], 50.0]
+    # Gaussian fit to log-residual vs alpha speed within the search range.
+    alpha_speeds = esa_voltage_to_alpha_speed(voltage_per_sweep)
+    fit_speeds = alpha_speeds[alpha_mask]
+    fit_log_res = log_residual[alpha_mask]
+    peak_in_range = int(np.nanargmax(fit_log_res))
+
+    alpha_min_speed = float(esa_voltage_to_alpha_speed(alpha_min_voltage))
+    alpha_max_speed = float(esa_voltage_to_alpha_speed(alpha_max_voltage))
     try:
         (_, bulk_speed, sigma_v), _ = scipy.optimize.curve_fit(
             lambda v, A, mu, sigma: A * np.exp(-((v - mu) ** 2) / (2 * sigma**2)),
-            speed_peak,
-            residual_peak,
-            p0=p0,
-            bounds=([0, 0, 0], [np.inf, np.inf, np.inf]),
+            fit_speeds,
+            fit_log_res,
+            p0=[fit_log_res.max(), fit_speeds[peak_in_range], 50.0],
+            bounds=([0, alpha_min_speed, 0], [np.inf, alpha_max_speed, np.inf]),
         )
     except RuntimeError:
-        bulk_speed = float(speed_peak[int(np.argmax(residual_peak))])
+        bulk_speed = float(fit_speeds[peak_in_range])
         sigma_v = 50.0
 
-    # Floor the thermal width by the temperature floor (1 eV equivalent) for the alpha species.
     sigma_floor_v = float(
         np.sqrt(
             INITIAL_TEMPERATURE_FLOOR_EV
@@ -318,11 +341,21 @@ def _alpha_initial_guess(
         / PROTON_CHARGE_COULOMBS
     )
 
-    # Density: scale 1.0-density alpha model to the residual mean at the peak.
+    # Project the inferred radial speed difference onto B̂ to get the initial Δv.
+    # Assume the alpha differential velocity is anti-sunward (along the proton direction).
+    R_hat = proton_bulk_velocity_rtn / v_p_speed
+    dv0 = (float(bulk_speed) - v_p_speed) * float(np.dot(R_hat, b_hat_rtn))
+
+    # Density at FWHM bins: sum-based estimate using the marginal deadtime response.
+    fwhm_half_speed = float(np.sqrt(2.0 * np.log(2.0))) * sigma_thermal_v
+    fwhm_mask = alpha_mask & (np.abs(alpha_speeds - bulk_speed) <= fwhm_half_speed)
+    if not np.any(fwhm_mask):
+        fwhm_mask = alpha_mask
+
     unit_alpha = _model_count_rates(
         1.0,
         T_alpha,
-        proton_bulk_velocity_rtn + 0.0 * b_hat_rtn,  # Δv = 0 starting point
+        proton_bulk_velocity_rtn + dv0 * b_hat_rtn,
         passband_grids,
         alpha_central_speeds,
         alpha_central_eff_areas,
@@ -332,14 +365,23 @@ def _alpha_initial_guess(
         spacecraft_velocity_rtn,
         ALPHA_PARTICLE_MASS_KG,
     )
-    unit_alpha_per_sweep = unit_alpha.reshape(n_sweeps, n_bins).mean(axis=0)
-    denom = float(np.nanmean(unit_alpha_per_sweep[peak_idx]))
-    if denom <= 0 or not np.isfinite(denom):
-        return None
-    n_alpha = float(np.nanmean(residual_peak)) / denom
-    n_alpha = max(n_alpha, 1e-3)
+    unit_alpha_avg = unit_alpha.reshape(n_sweeps, n_bins).mean(axis=0)
 
-    return (n_alpha, T_alpha, 0.0)
+    # Marginal change in deadtime-corrected combined rate per unit alpha density.
+    delta_alpha_obs_avg = (
+        apply_deadtime_correction_array(proton_true_avg + unit_alpha_avg)
+        - proton_obs_avg
+    )
+
+    numerator = float(
+        max(np.sum(count_avg[fwhm_mask] - proton_obs_avg[fwhm_mask]), 0.0)
+    )
+    denominator = float(np.sum(delta_alpha_obs_avg[fwhm_mask]))
+    if denominator <= 0 or not np.isfinite(denominator):
+        return None
+    n_alpha = max(numerator / denominator, 1e-3)
+
+    return (n_alpha, T_alpha, dv0)
 
 
 def _infer_sweep_layout(esa_voltage: ndarray) -> tuple:

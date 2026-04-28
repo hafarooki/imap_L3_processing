@@ -274,12 +274,24 @@ When the LUT contains only the lab row, `proton_eff_scale = 1.0` exactly and pro
 
 ### Initial guess
 
-Stage 2's initial guess uses the alpha bump remaining after subtracting the deadtime-applied proton background:
-1. Average the 5 sweeps to find the alpha peak via `get_alpha_peak_indices` (which assumes decreasing energy ordering).
-2. Compute the residual `count_avg − deadtime(proton_true).mean()` at peak bins, clip to ≥ 0.
-3. Gaussian fit on speed-axis $\sqrt{2 k^* q_\alpha |V| / m_\alpha}$. Floor the thermal width by the 1 eV temperature floor.
-4. Density: scale a unit-density alpha model to the residual mean at peak bins; clip to $\geq 10^{-3}$ to keep $\log n$ finite.
-5. $\Delta v_0 = 0$ (typical $|\Delta v| \lesssim v_A \sim 10\text{–}50$ km/s).
+Stage 2's initial guess locates the alpha bump via log-space subtraction of the frozen proton model:
+
+1. Average the 5 sweeps: `count_avg`, `proton_true_avg`, `proton_obs_avg = deadtime(proton_true_avg)`.
+2. Compute the alpha voltage search range from the proton fit speed $v_p^*$:
+   $$V_p^\text{peak} = \frac{m_p (v_p^*)^2}{2 e k^*}, \qquad V_\alpha \in [2 V_p^\text{peak},\; 4 V_p^\text{peak}]$$
+   This spans $\approx [1\times,\, \sqrt{2}\times]$ the proton speed for alphas.
+3. Form the log-space residual (both terms floored at 0.1 Hz to avoid log blow-up):
+   $$\ell_i = \log\!\max(C_i, 0.1) - \log\!\max(R_i^p, 0.1)$$
+   Guard: if $\max_i \ell_i < \log 2$ (observed rate never 2× the proton model in the alpha range), return no-guess.
+4. Gaussian fit on $\ell_i$ vs. $v_i^\alpha = \sqrt{2 k^* q_\alpha |V_i| / m_\alpha}$ within the voltage range, with $\mu$ bounded to $[v_\alpha^\text{min}, v_\alpha^\text{max}]$. Yields bulk speed $v_b^\alpha$ and thermal width $\sigma_v$. Floor $\sigma_v$ by the 1 eV temperature floor.
+5. Initial $\Delta v$: project the inferred radial speed difference onto $\hat{\mathbf{B}}$:
+   $$\Delta v_0 = (v_b^\alpha - v_p^*)\;(\hat{\mathbf{v}}_p \cdot \hat{\mathbf{B}})$$
+   This correctly handles reversed-field ($\hat{\mathbf{B}}$ sunward) and perpendicular-field geometries. When $\hat{\mathbf{v}}_p \cdot \hat{\mathbf{B}} \approx 0$, $\Delta v_0 \approx 0$ and the signed-Δv basin flip handles the ambiguity.
+6. Density via sum-based estimate at FWHM bins only. Define the FWHM mask as bins within $\sqrt{2\ln 2}\,\sigma_v$ of $v_b^\alpha$. The marginal deadtime response per unit alpha density is
+   $$\delta_i = \text{deadtime}(R_i^p + R_i^{\alpha,\text{unit}}) - R_i^p$$
+   where $R_i^{\alpha,\text{unit}}$ is the unit-density alpha model at $v_p^* + \Delta v_0 \hat{\mathbf{B}}$. Then:
+   $$n_{\alpha,0} = \max\!\left(\frac{\sum_\text{FWHM}(C_i - R_i^p)}{\sum_\text{FWHM} \delta_i},\; 10^{-3}\right)$$
+   Summing (not averaging) gives the Poisson-correct estimator; clipping the numerator to $\geq 0$ after summing lets positive and negative residuals cancel before the floor.
 
 ### Wrong-basin: signed-Δv flip
 

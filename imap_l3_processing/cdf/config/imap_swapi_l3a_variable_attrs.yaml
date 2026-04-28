@@ -578,3 +578,220 @@ alpha_sw_pre_lut_density:
   SCALETYP: log
   SCALEMIN: 0.001
   SCALEMAX: 5
+
+rtn_label:
+  NAME: rtn_label
+  DATA_TYPE: CDF_CHAR
+  CATDESC: RTN component labels
+  VAR_TYPE: metadata
+  RECORD_VARYING: NRV
+  FIELDNAM: RTN Label
+  FORMAT: a1
+  FILLVAL: ' '
+
+alpha_sw_moments_density:
+  NAME: alpha_sw_moments_density
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Alpha solar wind density from moments fit
+  DEPEND_0: epoch
+  VAR_TYPE: data
+  RECORD_VARYING: RV
+  DISPLAY_TYPE: time_series
+  VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
+  FIELDNAM: Alpha SW Moments Density
+  FORMAT: F19.3
+  LABLAXIS: Alpha SW moments density
+  UNITS: cm!E-3!N
+  VALIDMIN: 0
+  VALIDMAX: 100
+  FILLVAL: -1.000000e+31
+  SCALETYP: log
+  SCALEMIN: 0.001
+  SCALEMAX: 5
+  DELTA_PLUS_VAR: alpha_sw_moments_density_uncert
+  DELTA_MINUS_VAR: alpha_sw_moments_density_uncert
+alpha_sw_moments_density_uncert:
+  NAME: alpha_sw_moments_density_uncert
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Alpha solar wind density uncertainty from moments fit
+  DEPEND_0: epoch
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Alpha SW Moments Density Uncertainty
+  FORMAT: F19.3
+  LABLAXIS: Alpha SW moments density uncertainty
+  UNITS: cm!E-3!N
+  VALIDMIN: 0
+  VALIDMAX: 100
+  FILLVAL: -1.000000e+31
+alpha_sw_moments_temperature:
+  NAME: alpha_sw_moments_temperature
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Alpha solar wind temperature from moments fit
+  DEPEND_0: epoch
+  VAR_TYPE: data
+  RECORD_VARYING: RV
+  DISPLAY_TYPE: time_series
+  VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
+  FIELDNAM: Alpha SW Moments Temperature
+  FORMAT: F19.3
+  LABLAXIS: Alpha SW moments temperature
+  UNITS: eV
+  VALIDMIN: 0
+  VALIDMAX: 1000
+  FILLVAL: -1.000000e+31
+  SCALETYP: log
+  SCALEMIN: 0.1
+  SCALEMAX: 100
+  DELTA_PLUS_VAR: alpha_sw_moments_temperature_uncert
+  DELTA_MINUS_VAR: alpha_sw_moments_temperature_uncert
+alpha_sw_moments_temperature_uncert:
+  NAME: alpha_sw_moments_temperature_uncert
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Alpha solar wind temperature uncertainty from moments fit
+  DEPEND_0: epoch
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Alpha SW Moments Temperature Uncertainty
+  FORMAT: F19.3
+  LABLAXIS: Alpha SW moments temperature uncertainty
+  UNITS: eV
+  VALIDMIN: 0
+  VALIDMAX: 1000
+  FILLVAL: -1.000000e+31
+alpha_sw_moments_velocity_rtn:
+  NAME: alpha_sw_moments_velocity_rtn
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Alpha solar wind bulk velocity in RTN from moments fit
+  DEPEND_0: epoch
+  DEPEND_1: rtn_label
+  VAR_TYPE: data
+  RECORD_VARYING: RV
+  DISPLAY_TYPE: time_series
+  VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
+  FIELDNAM: Alpha SW Moments Velocity RTN
+  FORMAT: F19.3
+  LABLAXIS: Alpha SW moments velocity RTN
+  UNITS: km/s
+  VALIDMIN: -2000
+  VALIDMAX: 2000
+  FILLVAL: -1.000000e+31
+alpha_sw_moments_velocity_covariance_rtn:
+  NAME: alpha_sw_moments_velocity_covariance_rtn
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Alpha solar wind velocity covariance in RTN from moments fit
+  DEPEND_0: epoch
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Alpha SW Moments Velocity Covariance RTN
+  FORMAT: F19.3
+  LABLAXIS: Alpha SW moments velocity covariance RTN
+  UNITS: km!E2!N/s!E2!N
+  VALIDMIN: 0
+  VALIDMAX: 1.0e+8
+  FILLVAL: -1.000000e+31
+alpha_sw_moments_delta_v:
+  NAME: alpha_sw_moments_delta_v
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Alpha-proton differential streaming speed along B from moments fit
+  DEPEND_0: epoch
+  VAR_TYPE: data
+  RECORD_VARYING: RV
+  DISPLAY_TYPE: time_series
+  VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
+  FIELDNAM: Alpha SW Moments Delta V
+  FORMAT: F19.3
+  LABLAXIS: Alpha SW moments delta-v
+  UNITS: km/s
+  VALIDMIN: -2000
+  VALIDMAX: 2000
+  FILLVAL: -1.000000e+31
+  SCALETYP: linear
+  DELTA_PLUS_VAR: alpha_sw_moments_delta_v_uncert
+  DELTA_MINUS_VAR: alpha_sw_moments_delta_v_uncert
+alpha_sw_moments_delta_v_uncert:
+  NAME: alpha_sw_moments_delta_v_uncert
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Alpha-proton differential streaming speed uncertainty from moments fit
+  DEPEND_0: epoch
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Alpha SW Moments Delta V Uncertainty
+  FORMAT: F19.3
+  LABLAXIS: Alpha SW moments delta-v uncertainty
+  UNITS: km/s
+  VALIDMIN: 0
+  VALIDMAX: 2000
+  FILLVAL: -1.000000e+31
+alpha_sw_moments_b_hat_rtn:
+  NAME: alpha_sw_moments_b_hat_rtn
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Unit magnetic field vector in RTN used for alpha moments fit
+  DEPEND_0: epoch
+  DEPEND_1: rtn_label
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Alpha SW Moments B-hat RTN
+  FORMAT: F19.3
+  LABLAXIS: B-hat RTN
+  UNITS: ' '
+  VALIDMIN: -1
+  VALIDMAX: 1
+  FILLVAL: -1.000000e+31
+alpha_sw_moments_reference_proton_density:
+  NAME: alpha_sw_moments_reference_proton_density
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Reference proton density used in alpha moments fit
+  DEPEND_0: epoch
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Alpha SW Moments Reference Proton Density
+  FORMAT: F19.3
+  LABLAXIS: Ref proton density
+  UNITS: cm!E-3!N
+  VALIDMIN: 0
+  VALIDMAX: 150
+  FILLVAL: -1.000000e+31
+alpha_sw_moments_reference_proton_temperature:
+  NAME: alpha_sw_moments_reference_proton_temperature
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Reference proton temperature used in alpha moments fit
+  DEPEND_0: epoch
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Alpha SW Moments Reference Proton Temperature
+  FORMAT: F19.3
+  LABLAXIS: Ref proton temperature
+  UNITS: eV
+  VALIDMIN: 0
+  VALIDMAX: 1000
+  FILLVAL: -1.000000e+31
+alpha_sw_moments_reference_proton_velocity_rtn:
+  NAME: alpha_sw_moments_reference_proton_velocity_rtn
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Reference proton bulk velocity in RTN used in alpha moments fit
+  DEPEND_0: epoch
+  DEPEND_1: rtn_label
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Alpha SW Moments Reference Proton Velocity RTN
+  FORMAT: F19.3
+  LABLAXIS: Ref proton velocity RTN
+  UNITS: km/s
+  VALIDMIN: -2000
+  VALIDMAX: 2000
+  FILLVAL: -1.000000e+31
+alpha_sw_moments_bad_fit_flag:
+  NAME: alpha_sw_moments_bad_fit_flag
+  DATA_TYPE: CDF_UINT2
+  CATDESC: Quality flags for alpha moments fit
+  DEPEND_0: epoch
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Alpha SW Moments Bad Fit Flag
+  FORMAT: I5
+  UNITS: ' '
+  VALIDMIN: 0
+  VALIDMAX: 65534
+  FILLVAL: 65535
+  LABLAXIS: Alpha moments fit flags

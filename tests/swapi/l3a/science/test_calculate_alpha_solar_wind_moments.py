@@ -261,9 +261,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
     def setUpClass(cls):
         cls.sr = _swapi_response()
         # Realistic-looking voltage axis covering proton (~530 V) and alpha (~265 V).
-        cls.voltages = np.geomspace(60.0, 5000.0, _N_BINS)[
-            ::-1
-        ]  # decreasing for get_alpha_peak_indices
+        cls.voltages = np.geomspace(60.0, 5000.0, _N_BINS)[::-1]  # decreasing (SWAPI sweep order)
         cls.n_p, cls.T_p = 5.0, 10.0
         cls.v_p_rtn = np.array([450.0, 0.0, 0.0])
         cls.n_a, cls.T_a = 0.2, 40.0
