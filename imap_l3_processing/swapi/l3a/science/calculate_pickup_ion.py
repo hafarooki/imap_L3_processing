@@ -17,8 +17,7 @@ from uncertainties.unumpy import uarray
 from imap_l3_processing.constants import PROTON_MASS_KG, PROTON_CHARGE_COULOMBS, \
     HE_PUI_PARTICLE_MASS_KG, PUI_PARTICLE_CHARGE_COULOMBS, ONE_AU_IN_KM, \
     METERS_PER_KILOMETER, CENTIMETERS_PER_METER, ONE_SECOND_IN_NANOSECONDS, BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
-from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_speed import calculate_combined_sweeps
-from imap_l3_processing.swapi.l3a.science.speed_calculation import calculate_sw_speed
+from imap_l3_processing.swapi.l3a.science.speed_calculation import calculate_combined_sweeps, calculate_sw_speed
 from imap_l3_processing.swapi.l3a.science.density_of_neutral_helium_lookup_table import \
     DensityOfNeutralHeliumLookupTable
 from imap_l3_processing.swapi.l3a.science.inflow_vector import InflowVector

@@ -111,6 +111,35 @@ def extract_coarse_sweep(data: np.ndarray):
         return data[1:63]
 
 
+def calculate_combined_sweeps(coincidence_count_rates, energies):
+    energies = np.mean(extract_coarse_sweep(energies), axis=0)
+    coincidence_count_rates = extract_coarse_sweep(coincidence_count_rates)
+    average_coin_rates = np.sum(coincidence_count_rates, axis=0) / len(coincidence_count_rates)
+    return average_coin_rates, energies
+
+
+def get_alpha_peak_indices(count_rates, energies) -> slice:
+    energies = np.asarray(energies)
+    assert np.all(energies[:-1] >= energies[1:]), "Energies must be decreasing"
+    proton_peak_index = get_peak_indices(count_rates, 0).start
+
+    def find_start_of_alpha_particle_peak():
+        last_count_rate = count_rates[proton_peak_index]
+        for i in reversed(range(proton_peak_index - 1)):
+            if count_rates[i] > last_count_rate:
+                return i
+            last_count_rate = count_rates[i]
+
+    start_of_alpha_peak = find_start_of_alpha_particle_peak()
+    if start_of_alpha_peak is None:
+        raise Exception("Alpha peak not found")
+    indices = np.arange(len(count_rates))
+    after_proton_peak = indices <= start_of_alpha_peak
+    before_4x_proton_energy = energies <= 4 * energies[proton_peak_index]
+    mask = after_proton_peak & before_4x_proton_energy
+    return get_peak_indices(count_rates, 2, mask)
+
+
 def calculate_sw_speed(particle_mass, particle_charge, energy):
     """Energy-per-charge → speed for an ion of given mass/charge. Handles scalars,
     arrays, and uncertainties.UFloat values."""

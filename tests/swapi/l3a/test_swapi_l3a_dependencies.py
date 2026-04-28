@@ -5,7 +5,7 @@ from unittest.mock import patch, call, sentinel
 import imap_data_access
 from imap_data_access.processing_input import ScienceInput, ProcessingInputCollection, AncillaryInput
 
-from imap_l3_processing.swapi.descriptors import SWAPI_L2_DESCRIPTOR, ALPHA_TEMPERATURE_DENSITY_LOOKUP_TABLE_DESCRIPTOR, \
+from imap_l3_processing.swapi.descriptors import SWAPI_L2_DESCRIPTOR, \
     INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR, DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR, \
     EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR, \
     GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR, HYDROGEN_INFLOW_VECTOR_DESCRIPTOR, HELIUM_INFLOW_VECTOR_DESCRIPTOR, \
@@ -29,7 +29,6 @@ class TestSwapiL3ADependencies(unittest.TestCase):
 
         mock_download.side_effect = [
             sentinel.swapi_l2_data,
-            sentinel.alpha_density_and_temperature_calibration_file,
             sentinel.efficiency_file,
             sentinel.geometric_factor_calibration_table,
             sentinel.instrument_response_table,
@@ -42,7 +41,6 @@ class TestSwapiL3ADependencies(unittest.TestCase):
         ]
 
         swapi_science_file_download_path = f"{mission}_{instrument}_{data_level}_{SWAPI_L2_DESCRIPTOR}_{start_date}_{version}.cdf"
-        swapi_alpha_temp_density_calibration_file_name = f"{mission}_{instrument}_{ALPHA_TEMPERATURE_DENSITY_LOOKUP_TABLE_DESCRIPTOR}_{start_date}_{version}.cdf"
         swapi_efficiency_file_name = f"{mission}_{instrument}_{EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR}_{start_date}_{version}.cdf"
         swapi_geometric_factor_calibration_file_name = f"{mission}_{instrument}_{GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR}_{start_date}_{version}.cdf"
         swapi_instrument_response_lookup_table_collection = f"{mission}_{instrument}_{INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR}_{start_date}_{version}.cdf"
@@ -55,7 +53,6 @@ class TestSwapiL3ADependencies(unittest.TestCase):
 
         input_collection.add([
             ScienceInput(swapi_science_file_download_path),
-            AncillaryInput(swapi_alpha_temp_density_calibration_file_name),
             AncillaryInput(swapi_efficiency_file_name),
             AncillaryInput(swapi_geometric_factor_calibration_file_name),
             AncillaryInput(swapi_instrument_response_lookup_table_collection),
@@ -74,7 +71,6 @@ class TestSwapiL3ADependencies(unittest.TestCase):
 
         mock_download.assert_has_calls([
             call(science_data_dir / swapi_science_file_download_path),
-            call(ancillary_data_dir / swapi_alpha_temp_density_calibration_file_name),
             call(ancillary_data_dir / swapi_efficiency_file_name),
             call(ancillary_data_dir / swapi_geometric_factor_calibration_file_name),
             call(ancillary_data_dir / swapi_instrument_response_lookup_table_collection),
@@ -88,7 +84,6 @@ class TestSwapiL3ADependencies(unittest.TestCase):
 
         mock_from_file_paths.assert_called_with(
             sentinel.swapi_l2_data,
-            sentinel.alpha_density_and_temperature_calibration_file,
             sentinel.efficiency_file,
             sentinel.geometric_factor_calibration_table,
             sentinel.instrument_response_table,
@@ -105,7 +100,6 @@ class TestSwapiL3ADependencies(unittest.TestCase):
 
     @patch('imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.CDF')
     @patch('imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.InflowVector.from_file')
-    @patch('imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.AlphaTemperatureDensityCalibrationTable.from_file')
     @patch('imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.EfficiencyCalibrationTable')
     @patch('imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.GeometricFactorCalibrationTable.from_file')
     @patch('imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.InstrumentResponseLookupTableCollection.from_file')
@@ -115,10 +109,8 @@ class TestSwapiL3ADependencies(unittest.TestCase):
     def test_from_file_paths(self, mock_read_l2_swapi, mock_swapi_response_from_files,
                              mock_neutral_helium_from_file,
                              mock_instrument_from_file, mock_geometric_from_file, mock_efficiency_lookup_class,
-                             mock_alpha_temp_from_file,
                              mock_inflow_vector_from_file, mock_CDF):
         l2 = Path("imap_swapi_l2_sci_20100105_v010.cdf")
-        alpha = Path("imap_swapi_alpha-density-temperature-lut_20100105_v010.cdf")
         efficiency = Path("imap_swapi_efficiency-lut_20100105_v010.cdf")
         gf = Path("imap_swapi_energy-gf-pui-lut_20100105_v010.cdf")
         instr = Path("imap_swapi_instrument-response-lut_20100105_v010.cdf")
@@ -130,7 +122,6 @@ class TestSwapiL3ADependencies(unittest.TestCase):
         pb = Path("imap_swapi_passband-fit-coefficients_20100105_v010.csv")
 
         mock_read_l2_swapi.return_value = sentinel.swapi_l2_data
-        mock_alpha_temp_from_file.return_value = sentinel.alpha_temp_data
         mock_efficiency_lookup_class.return_value = sentinel.efficiency_lookup
         mock_geometric_from_file.return_value = sentinel.geometric_data
         mock_instrument_from_file.return_value = sentinel.instrument_data
@@ -140,7 +131,6 @@ class TestSwapiL3ADependencies(unittest.TestCase):
 
         expected = SwapiL3ADependencies(
             data=sentinel.swapi_l2_data,
-            alpha_temperature_density_calibration_table=sentinel.alpha_temp_data,
             efficiency_calibration_table=sentinel.efficiency_lookup,
             geometric_factor_calibration_table=sentinel.geometric_data,
             instrument_response_calibration_table=sentinel.instrument_data,
@@ -150,12 +140,11 @@ class TestSwapiL3ADependencies(unittest.TestCase):
             swapi_response=sentinel.swapi_response,
         )
 
-        actual = SwapiL3ADependencies.from_file_paths(l2, alpha, efficiency, gf, instr, helium, h_vec, he_vec,
+        actual = SwapiL3ADependencies.from_file_paths(l2, efficiency, gf, instr, helium, h_vec, he_vec,
                                                      az, ea, pb)
 
         mock_CDF.assert_called_once_with(str(l2))
         mock_read_l2_swapi.assert_called_once_with(mock_CDF.return_value)
-        mock_alpha_temp_from_file.assert_called_once_with(alpha)
         mock_efficiency_lookup_class.assert_called_once_with(efficiency)
         mock_geometric_from_file.assert_called_once_with(gf)
         mock_instrument_from_file.assert_called_once_with(instr)

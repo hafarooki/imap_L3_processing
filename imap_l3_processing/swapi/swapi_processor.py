@@ -18,13 +18,6 @@ from imap_l3_processing.swapi.l3a.models import (
     SwapiL3AlphaSolarWindData,
     SwapiL3PickupIonData,
 )
-from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_speed import (
-    calculate_alpha_solar_wind_speed,
-    calculate_combined_sweeps,
-)
-from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_temperature_and_density import (
-    calculate_alpha_solar_wind_temperature_and_density_for_combined_sweeps,
-)
 from imap_l3_processing.swapi.l3a.science.calculate_pickup_ion import (
     calculate_ten_minute_velocities,
     calculate_pickup_ion_values,
@@ -40,6 +33,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     fit_solar_wind_proton_moments,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
+    calculate_combined_sweeps,
     extract_coarse_sweep,
     SWAPI_COARSE_SWEEP_BINS,
     SWAPI_SCIENCE_BINS,
@@ -457,51 +451,13 @@ class SwapiProcessor(Processor):
             alpha_pre_lut_temperature = ufloat(np.nan, np.nan)
             epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
             bad_fit_flag = SwapiL3Flags.NONE
-            try:
-                if np.any(
-                    np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
-                ):
-                    raise ValueError("Fill values in input data")
-                coincidence_count_rates_with_uncertainty = uarray(
-                    data_chunk.coincidence_count_rate,
-                    data_chunk.coincidence_count_rate_uncertainty,
-                )
-
-                alpha_solar_wind_speed = calculate_alpha_solar_wind_speed(
-                    coincidence_count_rates_with_uncertainty, data_chunk.energy
-                )
-
-                alpha_temperature_density = calculate_alpha_solar_wind_temperature_and_density_for_combined_sweeps(
-                    dependencies.alpha_temperature_density_calibration_table,
-                    alpha_solar_wind_speed,
-                    coincidence_count_rates_with_uncertainty,
-                    data_chunk.energy,
-                    dependencies.efficiency_calibration_table.get_alpha_efficiency_for(
-                        epoch
-                    ),
-                )
-
-                alpha_density = alpha_temperature_density.density
-                alpha_temperature = alpha_temperature_density.temperature
-                bad_fit_flag = alpha_temperature_density.bad_fit_flag
-                alpha_pre_lut_density = alpha_temperature_density.pre_lut_density
-                alpha_pre_lut_temperature = (
-                    alpha_temperature_density.pre_lut_temperature
-                )
-
-            except Exception as e:
-                logger.info(
-                    f"Exception occurred at epoch {epoch}, continuing with fill value",
-                    exc_info=True,
-                )
-            finally:
-                epochs.append(epoch)
-                alpha_solar_wind_speeds.append(alpha_solar_wind_speed)
-                alpha_solar_wind_densities.append(alpha_density)
-                alpha_solar_wind_temperatures.append(alpha_temperature)
-                alpha_solar_wind_bad_fit_flags.append(bad_fit_flag)
-                alpha_solar_wind_pre_lut_densities.append(alpha_pre_lut_density)
-                alpha_solar_wind_pre_lut_temperatures.append(alpha_pre_lut_temperature)
+            epochs.append(epoch)
+            alpha_solar_wind_speeds.append(alpha_solar_wind_speed)
+            alpha_solar_wind_densities.append(alpha_density)
+            alpha_solar_wind_temperatures.append(alpha_temperature)
+            alpha_solar_wind_bad_fit_flags.append(bad_fit_flag)
+            alpha_solar_wind_pre_lut_densities.append(alpha_pre_lut_density)
+            alpha_solar_wind_pre_lut_temperatures.append(alpha_pre_lut_temperature)
 
             # Stage 1 + Stage 2 moments fit. Independent of LUT pipeline above; failures
             # populate NaN moments and an appropriate bad_fit_flag without raising further.

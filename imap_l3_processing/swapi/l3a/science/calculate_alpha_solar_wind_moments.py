@@ -32,7 +32,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     _model_count_rates,
     apply_deadtime_correction_array,
 )
-from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_speed import (
+from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     get_alpha_peak_indices,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (

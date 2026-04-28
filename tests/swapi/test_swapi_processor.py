@@ -32,9 +32,6 @@ from imap_l3_processing.swapi.l3a.models import (
     SwapiL3PickupIonData,
     SwapiL3AlphaSolarWindData,
 )
-from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_temperature_and_density import (
-    AlphaSolarWindTemperatureAndDensity,
-)
 from imap_l3_processing.swapi.l3a.science.calculate_pickup_ion import FittingParameters
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_L2_K_FACTOR
 from imap_l3_processing.swapi.l3a.swapi_l3a_dependencies import (
@@ -1003,20 +1000,16 @@ class TestSwapiProcessor(TestCase):
     @patch("imap_l3_processing.utils.ImapAttributeManager")
     @patch("imap_l3_processing.swapi.swapi_processor.SwapiL3AlphaSolarWindData")
     @patch("imap_l3_processing.utils.write_cdf")
+    @patch("imap_l3_processing.swapi.swapi_processor.SwapiProcessor._fit_alpha_moments_for_chunk")
     @patch("imap_l3_processing.swapi.swapi_processor.chunk_l2_data")
-    @patch("imap_l3_processing.swapi.swapi_processor.calculate_alpha_solar_wind_speed")
-    @patch(
-        "imap_l3_processing.swapi.swapi_processor.calculate_alpha_solar_wind_temperature_and_density_for_combined_sweeps"
-    )
     @patch("imap_l3_processing.swapi.swapi_processor.SwapiL3ADependencies")
     @patch("imap_l3_processing.processor.spiceypy")
     def test_process_l3a_alpha(
         self,
         mock_spicepy,
         mock_swapi_l3_dependencies_class,
-        mock_alpha_calculate_temperature_and_density,
-        mock_calculate_alpha_solar_wind_speed,
         mock_chunk_l2_data,
+        mock_fit_alpha_moments_for_chunk,
         mock_write_cdf,
         mock_alpha_solar_wind_data_constructor,
         mock_imap_attribute_manager,
@@ -1034,26 +1027,6 @@ class TestSwapiProcessor(TestCase):
 
         mock_spicepy.ktotal.return_value = 0
 
-        returned_alpha_temperature = ufloat(400000, 2000)
-        returned_alpha_density = ufloat(0.15, 0.01)
-
-        returned_pre_lut_temp = ufloat(300000, 1000)
-        returned_pre_lut_density = ufloat(0.2, 0.02)
-
-        returned_bad_flags = SwapiL3Flags.NONE
-        mock_alpha_calculate_temperature_and_density.return_value = (
-            AlphaSolarWindTemperatureAndDensity(
-                returned_alpha_temperature,
-                returned_alpha_density,
-                returned_pre_lut_temp,
-                returned_pre_lut_density,
-                returned_bad_flags,
-            )
-        )
-
-        returned_alpha_speed = ufloat(450000, 1000)
-        mock_calculate_alpha_solar_wind_speed.return_value = ufloat(450000, 1000)
-
         initial_epoch = 10
 
         epoch = np.array([initial_epoch, 11, 12, 13])
@@ -1066,14 +1039,7 @@ class TestSwapiProcessor(TestCase):
                 [19, 20, 21, 22, 23],
             ]
         )
-        coincidence_count_rate_uncertainty = np.array(
-            [
-                [0.1, 0.2, 0.3, 0.4, 0.5],
-                [0.1, 0.2, 0.3, 0.4, 0.5],
-                [0.1, 0.2, 0.3, 0.4, 0.5],
-                [0.1, 0.2, 0.3, 0.4, 0.5],
-            ]
-        )
+        coincidence_count_rate_uncertainty = np.zeros_like(coincidence_count_rate, dtype=float)
 
         chunk_of_five = SwapiL2Data(
             epoch, energy, coincidence_count_rate, coincidence_count_rate_uncertainty
@@ -1085,7 +1051,6 @@ class TestSwapiProcessor(TestCase):
 
         input_file_names = [
             f"imap_{instrument}_{incoming_data_level}_{SWAPI_L2_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{ALPHA_TEMPERATURE_DENSITY_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
             f"imap_{instrument}_{GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
             f"imap_{instrument}_{INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
             f"imap_{instrument}_{DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
@@ -1100,6 +1065,23 @@ class TestSwapiProcessor(TestCase):
         input_metadata = InputMetadata(
             instrument, outgoing_data_level, start_date, end_date, input_version
         )
+
+        # Set up a mock AlphaSolarWindMoments returned by the moments fitter.
+        mock_moments = Mock()
+        mock_moments.density = 0.05
+        mock_moments.density_sigma = 0.01
+        mock_moments.temperature = 1000.0
+        mock_moments.temperature_sigma = 50.0
+        mock_moments.bulk_velocity_rtn = np.array([450.0, 0.0, 0.0])
+        mock_moments.velocity_covariance_rtn = np.zeros((3, 3))
+        mock_moments.delta_v = 10.0
+        mock_moments.delta_v_sigma = 1.0
+        mock_moments._b_hat_rtn = np.array([1.0, 0.0, 0.0])
+        mock_moments._ref_proton_density = 5.0
+        mock_moments._ref_proton_temperature = 10.0
+        mock_moments._ref_proton_velocity_rtn = np.array([440.0, 0.0, 0.0])
+        mock_moments.bad_fit_flag = SwapiL3Flags.NONE
+        mock_fit_alpha_moments_for_chunk.return_value = mock_moments
 
         alpha_solar_wind_data = mock_alpha_solar_wind_data_constructor.return_value
         expected_alpha_metadata = replace(input_metadata, descriptor="alpha-sw")
@@ -1144,65 +1126,9 @@ class TestSwapiProcessor(TestCase):
         mock_swapi_l3_dependencies_class.fetch_dependencies.assert_called_once_with(
             dependencies
         )
-        swapi_l3a_dependencies = (
-            mock_swapi_l3_dependencies_class.fetch_dependencies.return_value
-        )
-        mock_alpha_temperature_density_calibration_table = (
-            swapi_l3a_dependencies.alpha_temperature_density_calibration_table
-        )
-        self.assertEqual(
-            swapi_l3a_dependencies.efficiency_calibration_table.get_alpha_efficiency_for.return_value,
-            mock_alpha_calculate_temperature_and_density.call_args_list[0].args[4],
-        )
-
-        swapi_l3a_dependencies.efficiency_calibration_table.get_alpha_efficiency_for.assert_called_once_with(
-            initial_epoch + THIRTY_SECONDS_IN_NANOSECONDS
-        )
 
         mock_chunk_l2_data.assert_has_calls([call(sentinel.swapi_l2_data, 5)])
-
-        expected_count_rate_with_uncertainties = uarray(
-            coincidence_count_rate, coincidence_count_rate_uncertainty
-        )
-
-        self.assertEqual(
-            mock_alpha_temperature_density_calibration_table,
-            mock_alpha_calculate_temperature_and_density.call_args_list[0].args[0],
-        )
-        self.assert_ufloat_equal(
-            returned_alpha_speed,
-            mock_alpha_calculate_temperature_and_density.call_args_list[0].args[1],
-        )
-        np.testing.assert_array_equal(
-            nominal_values(expected_count_rate_with_uncertainties),
-            nominal_values(
-                mock_alpha_calculate_temperature_and_density.call_args_list[0].args[2]
-            ),
-        )
-        np.testing.assert_array_equal(
-            std_devs(expected_count_rate_with_uncertainties),
-            std_devs(
-                mock_alpha_calculate_temperature_and_density.call_args_list[0].args[2]
-            ),
-        )
-        np.testing.assert_array_equal(
-            energy,
-            mock_alpha_calculate_temperature_and_density.call_args_list[0].args[3],
-        )
-
-        np.testing.assert_array_equal(
-            nominal_values(expected_count_rate_with_uncertainties),
-            nominal_values(
-                mock_calculate_alpha_solar_wind_speed.call_args_list[0].args[0]
-            ),
-        )
-        np.testing.assert_array_equal(
-            std_devs(expected_count_rate_with_uncertainties),
-            std_devs(mock_calculate_alpha_solar_wind_speed.call_args_list[0].args[0]),
-        )
-        np.testing.assert_array_equal(
-            energy, mock_calculate_alpha_solar_wind_speed.call_args_list[0].args[1]
-        )
+        mock_fit_alpha_moments_for_chunk.assert_called_once()
 
         mock_manager.add_global_attribute.assert_has_calls(
             [
@@ -1232,44 +1158,23 @@ class TestSwapiProcessor(TestCase):
             np.array([initial_epoch + THIRTY_SECONDS_IN_NANOSECONDS]),
             actual_alpha_epoch,
         )
+        # LUT pipeline is removed — speed, temperature, density, pre-LUT fields are always NaN.
+        self.assertTrue(np.all(np.isnan(nominal_values(actual_alpha_sw_speed))))
+        self.assertTrue(np.all(np.isnan(nominal_values(actual_alpha_sw_temperature))))
+        self.assertTrue(np.all(np.isnan(nominal_values(actual_alpha_sw_density))))
+        self.assertTrue(np.all(np.isnan(nominal_values(actual_pre_lut_temp))))
+        self.assertTrue(np.all(np.isnan(nominal_values(actual_pre_lut_density))))
         np.testing.assert_array_equal(
-            np.array([mock_calculate_alpha_solar_wind_speed.return_value]),
-            actual_alpha_sw_speed,
-        )
-        np.testing.assert_array_equal(
-            np.array(
-                [mock_alpha_calculate_temperature_and_density.return_value.temperature]
-            ),
-            actual_alpha_sw_temperature,
-        )
-        np.testing.assert_array_equal(
-            np.array(
-                [mock_alpha_calculate_temperature_and_density.return_value.density]
-            ),
-            actual_alpha_sw_density,
-        )
-        np.testing.assert_array_equal(
-            np.array(
-                [mock_alpha_calculate_temperature_and_density.return_value.bad_fit_flag]
-            ),
-            actual_bad_fit_flag,
+            actual_bad_fit_flag, np.array([SwapiL3Flags.NONE])
         )
 
+        # Moments kwargs are populated from _fit_alpha_moments_for_chunk.
+        kwargs = mock_alpha_solar_wind_data_constructor.call_args.kwargs
         np.testing.assert_array_equal(
-            np.array(
-                [
-                    mock_alpha_calculate_temperature_and_density.return_value.pre_lut_temperature
-                ]
-            ),
-            actual_pre_lut_temp,
+            kwargs["alpha_sw_moments_density"], np.array([mock_moments.density])
         )
         np.testing.assert_array_equal(
-            np.array(
-                [
-                    mock_alpha_calculate_temperature_and_density.return_value.pre_lut_density
-                ]
-            ),
-            actual_pre_lut_density,
+            kwargs["alpha_sw_moments_bad_fit_flag"], np.array([int(SwapiL3Flags.NONE)])
         )
 
         mock_manager.add_instrument_attrs.assert_called_once_with(
@@ -1764,7 +1669,6 @@ class TestSwapiProcessor(TestCase):
 
 def create_swapi_l3a_dependencies_with_mocks():
     data = Mock()
-    alpha_temperature_density_calibration_table = Mock()
     # Default to ε_p(t) = ε_α(t) = ε_p_lab so the moments fit's central_effective_area_scale
     # comes out to 1.0 — matches behavior tests written before efficiency wiring.
     efficiency_calibration_table = Mock()
@@ -1776,7 +1680,6 @@ def create_swapi_l3a_dependencies_with_mocks():
     density_of_neutral_helium_calibration_table = Mock()
     return SwapiL3ADependencies(
         data=data,
-        alpha_temperature_density_calibration_table=alpha_temperature_density_calibration_table,
         efficiency_calibration_table=efficiency_calibration_table,
         geometric_factor_calibration_table=geometric_factor_calibration_table,
         instrument_response_calibration_table=instrument_response_calibration_table,
