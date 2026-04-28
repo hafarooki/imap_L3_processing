@@ -121,11 +121,12 @@ def fit_solar_wind_proton_moments(
     # producing divide-by-zero deep inside the JIT integrator.
     keep = (esa_voltage > 0) & np.isfinite(esa_voltage)
 
-    # Fit only bins with count rate >= 0.1 * max if that doesn't result in less than 5 points being used.
-    cr_mean = float(np.nanmean(count_rate[keep])) if np.any(keep) else 0.0
-    half_mean_mask = count_rate >= 0.1 * cr_mean
-    if int((keep & half_mean_mask).sum()) >= 5:
-        keep = keep & half_mean_mask
+    # FWHM mask: keep only bins at or above half the peak count rate.  Bins in
+    # the deep tails carry almost no proton signal but add noise to the fit.
+    cr_max = float(np.nanmax(count_rate[keep])) if np.any(keep) else 0.0
+    fwhm_mask = count_rate >= 0.5 * cr_max
+    if int((keep & fwhm_mask).sum()) >= 5:
+        keep = keep & fwhm_mask
 
     if not np.all(keep):
         esa_voltage = esa_voltage[keep]

@@ -10,16 +10,18 @@
 
 ## TODO
 
-- [x] Validate usage of `esa_voltage` parameter throughout — `fit_solar_wind_proton_moments`, `create_passband_grid`, and `esa_voltage_to_proton_speed` all take true ESA voltage (V). The processor and validate script now divide L2's `esa_energy` field by `SWAPI_L2_K_FACTOR` (= 1.93) before passing it to the fitter. See "Two k-factors" below.
-- [x] Alphas — see "Alpha Particle Moments" section below for the two-stage proton-frozen fitter
-- [ ] Coordinate with cal-file format owner to add a `lab_time` field to the efficiency LUT. Interim: `eps_p_lab` is pinned to the first row at/after 2025-11-01 because the pre-2025-11 rows in the current LUT are placeholder values (0.02348 repeated) and using them as the lab denominator drove proton density 6× too low. Replace with the proper `lab_time` lookup once the LUT format gains the field (see `EfficiencyCalibrationTable.eps_p_lab`).
+- [ ] Validate alphas
 - [ ] Empirically validate alpha-species correction $\mathcal{A}_0^\alpha/\mathcal{A}_0^p = \varepsilon_\alpha/\varepsilon_p$ against OMNI alpha density (the paper does not prove this; alpha ABM measurements weren't taken)
+- [ ] Coordinate with cal-file format owner to add a `lab_time` field to the efficiency LUT.
+Interim: `eps_p_lab` is pinned to the first row at/after 2025-11-01 because the pre-2025-11 rows in the current LUT are placeholder values (0.02348 repeated) and using them as the lab denominator drove proton density 6× too low.
+Replace with the proper `lab_time` lookup once the LUT format gains the field (see `EfficiencyCalibrationTable.eps_p_lab`).
 - [ ] Remove old SW model from pickup ion code (?)
 - [ ] Dynamic calculation of pickup ion geometric factor (?)
-- [ ] finalize document
 - [ ] Make sure zero-energy fine sweeps are handled correctly
 - [ ] Fit to only FWHM for protons
 - [ ] Choose bad fit flags
+- [ ] Fix the integration edge cases 
+- [ ] finalize document
 - [ ] **clean up/refactor code**
 - [ ] Human review: run integration test output through a CDF reader and sanity-check variable names, units, and fill values (test passes automatically)
 - [ ] Human review: read through unit tests top-to-bottom and verify coverage is meaningful, not just passing (all 167 pass automatically)
