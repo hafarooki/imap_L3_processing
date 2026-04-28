@@ -14,7 +14,7 @@ peak voltages are marked.
 
 Spectrum parameters:
   proton  n=5 cm⁻³, T=10 eV, v_p=[450, 0, 0] km/s
-  alpha   n=0.2 cm⁻³, T=40 eV, Δv=+30 km/s along B̂=[1, 0, 0]
+  alpha   n=0.25 cm⁻³ (~5% abundance), T=10 eV, Δv=+30 km/s along B̂=[1, 0, 0]
   5 sweeps × 62 coarse bins, Poisson noise seed=7.
 
 Output: docs/swapi/figures/alpha_peak_finding.png
@@ -69,7 +69,7 @@ _R_BASE = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
 # Spectrum parameters.
 _N_P, _T_P = 5.0, 10.0
 _V_P_RTN = np.array([450.0, 0.0, 0.0])
-_N_A, _T_A = 0.2, 40.0
+_N_A, _T_A = 0.25, 10.0  # ~5% abundance, same temperature as protons
 _DELTA_V = 30.0
 _B_HAT = np.array([1.0, 0.0, 0.0])
 _V_A_RTN = _V_P_RTN + _DELTA_V * _B_HAT
@@ -195,7 +195,7 @@ def main():
     fig.suptitle(
         "Alpha peak-finding count-rate forward model fit\n"
         r"$n_p=5\,\mathrm{cm}^{-3},\ T_p=10\,\mathrm{eV},\ v_p=450\,\mathrm{km/s}$;  "
-        r"$n_\alpha=0.20\,\mathrm{cm}^{-3},\ T_\alpha=40\,\mathrm{eV},\ \Delta v=+30\,\mathrm{km/s}$",
+        r"$n_\alpha=0.25\,\mathrm{cm}^{-3}\ (\sim 5\%),\ T_\alpha=10\,\mathrm{eV},\ \Delta v=+30\,\mathrm{km/s}$",
         fontsize=11,
     )
 

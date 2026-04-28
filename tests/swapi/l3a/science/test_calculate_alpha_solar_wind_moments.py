@@ -264,7 +264,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
         cls.voltages = np.geomspace(60.0, 5000.0, _N_BINS)[::-1]  # decreasing (SWAPI sweep order)
         cls.n_p, cls.T_p = 5.0, 10.0
         cls.v_p_rtn = np.array([450.0, 0.0, 0.0])
-        cls.n_a, cls.T_a = 0.2, 40.0
+        cls.n_a, cls.T_a = 0.25, 10.0  # ~5% abundance, same temperature as protons
         cls.delta_v = 30.0
         cls.b_hat_rtn = np.array([1.0, 0.0, 0.0])
         cls.v_a_rtn = cls.v_p_rtn + cls.delta_v * cls.b_hat_rtn
@@ -309,8 +309,8 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
             spacecraft_velocity_rtn=self.sc_vel,
         )
         self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.NONE))
-        self.assertAlmostEqual(result.density, self.n_a, delta=0.1)
-        self.assertAlmostEqual(result.temperature, self.T_a, delta=8.0)
+        self.assertAlmostEqual(result.density, self.n_a, delta=0.05)
+        self.assertAlmostEqual(result.temperature, self.T_a, delta=2.0)
         self.assertAlmostEqual(result.delta_v, self.delta_v, delta=10.0)
 
 
