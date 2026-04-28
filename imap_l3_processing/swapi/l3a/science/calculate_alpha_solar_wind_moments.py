@@ -278,7 +278,7 @@ def fit_solar_wind_alpha_moments(
 
 
 class _AlphaPeakFit(NamedTuple):
-    """Intermediate results of the log-residual Gaussian fit, used by both the
+    """Intermediate results of the count-rate Gaussian fit, used by both the
     initial-guess logic and the diagnostic figure script."""
 
     bulk_speed: float
@@ -286,12 +286,10 @@ class _AlphaPeakFit(NamedTuple):
     gauss_A: float
     T_alpha: float
     alpha_mask: ndarray
-    log_residual: ndarray
+    alpha_speeds: ndarray
+    proton_obs_avg: ndarray
     alpha_min_voltage: float
     alpha_max_voltage: float
-    fit_speeds: ndarray
-    fit_log_res: ndarray
-    fit_sigma_ell: ndarray
 
 
 def _alpha_peak_fit(
@@ -335,30 +333,41 @@ def _alpha_peak_fit(
     alpha_min_speed = float(esa_voltage_to_alpha_speed(alpha_min_voltage))
     alpha_max_speed = float(esa_voltage_to_alpha_speed(alpha_max_voltage))
 
-    # Fit to all bins (not just alpha window) with peak constrained to alpha range.
-    # Using more data improves sigma conditioning when the peak is near the window edge.
-    fit_speeds = alpha_speeds
-    fit_log_res = log_residual
-    fit_count_avg = count_avg
-    peak_idx = int(np.nanargmax(log_residual))
-    fit_sigma_ell = 1.0 / np.sqrt(
-        np.maximum(fit_count_avg, 0.1) * n_sweeps * SWAPI_LIVETIME_S
-    )
+    # Fit count rates directly: count_obs = deadtime_corrected(proton_true + alpha_gaussian).
+    # Find initial speed guess from peak in count space, within alpha window.
+    peak_idx_global = int(np.nanargmax(count_avg))
+    peak_speed_global = alpha_speeds[peak_idx_global]
+    peak_idx_in_window = int(np.nanargmax(count_avg[alpha_mask]))
+    alpha_indices = np.where(alpha_mask)[0]
+    peak_idx_in_window = alpha_indices[peak_idx_in_window]
+    peak_speed = alpha_speeds[peak_idx_in_window]
 
-    gauss_A = float(fit_log_res[peak_idx])
+    # Forward model: observed count = deadtime(proton_true + alpha_gaussian).
+    # Capture proton_obs_avg and alpha_speeds in closure for curve_fit.
+    def count_rate_forward_model(bin_indices, A, mu, sigma):
+        idx = bin_indices.astype(int)
+        alpha_contrib = A * np.exp(-((alpha_speeds[idx] - mu) ** 2) / (2 * sigma**2))
+        combined = proton_obs_clipped[idx] + alpha_contrib
+        return apply_deadtime_correction_array(combined)
+
+    bin_indices = np.arange(len(voltage_per_sweep))
+    fit_sigma_counts = np.sqrt(np.maximum(count_avg, 1.0))
+
     try:
         (gauss_A, bulk_speed, sigma_v), _ = scipy.optimize.curve_fit(
-            lambda v, A, mu, sigma: A * np.exp(-((v - mu) ** 2) / (2 * sigma**2)),
-            fit_speeds,
-            fit_log_res,
-            p0=[gauss_A, alpha_speeds[peak_idx], 50.0],
+            count_rate_forward_model,
+            bin_indices,
+            count_avg,
+            p0=[count_avg[peak_idx_in_window] * 0.1, peak_speed, 50.0],
             bounds=([0, alpha_min_speed, 0], [np.inf, alpha_max_speed, np.inf]),
-            sigma=fit_sigma_ell,
+            sigma=fit_sigma_counts,
             absolute_sigma=True,
+            maxfev=2000,
         )
     except RuntimeError:
-        bulk_speed = float(alpha_speeds[peak_idx])
+        bulk_speed = peak_speed
         sigma_v = 50.0
+        gauss_A = count_avg[peak_idx_in_window] * 0.1
 
     sigma_floor_v = float(
         np.sqrt(
@@ -381,12 +390,10 @@ def _alpha_peak_fit(
         gauss_A=float(gauss_A),
         T_alpha=T_alpha,
         alpha_mask=alpha_mask,
-        log_residual=log_residual,
+        alpha_speeds=alpha_speeds,
+        proton_obs_avg=proton_obs_clipped,
         alpha_min_voltage=float(alpha_min_voltage),
         alpha_max_voltage=float(alpha_max_voltage),
-        fit_speeds=fit_speeds,
-        fit_log_res=fit_log_res,
-        fit_sigma_ell=fit_sigma_ell,
     )
 
 

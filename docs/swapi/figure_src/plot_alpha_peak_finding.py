@@ -2,15 +2,15 @@
 """
 Plot alpha peak-finding walkthrough on a synthetic SWAPI alpha spectrum.
 
-Two-panel figure illustrating the _alpha_initial_guess steps:
+Single-panel figure illustrating the count-rate forward model fit:
 
-  Panel (a): 5-sweep averaged observed count rate vs the frozen proton model.
-             The alpha voltage search window [2V_p*, 4V_p*] is shaded; the
-             true alpha peak voltage is marked.
+  Observed count rate vs ESA voltage (scatter) with overlaid models:
+  - Frozen proton model (solid line)
+  - Fitted alpha Gaussian component (dashed line)
+  - Combined (proton + alpha) with deadtime correction (thick solid)
 
-  Panel (b): Log-space residual ℓ_i = ln(max(C_i, 0.1)) − ln(max(R_i^p, 0.1))
-             inside the alpha window.  Gaussian fit overlaid; initial-guess peak
-             vs ground-truth bulk speed both marked.
+The alpha search window [2V_p*, 4V_p*] is shaded; true and fitted alpha
+peak voltages are marked.
 
 Spectrum parameters:
   proton  n=5 cm⁻³, T=10 eV, v_p=[450, 0, 0] km/s
@@ -145,7 +145,7 @@ def main():
     proton_obs_avg = apply_deadtime_correction_array(proton_true_avg)
 
     # ------------------------------------------------------------------
-    # Call the production peak-finder — no parallel reimplementation here.
+    # Call the production peak-finder.
     # ------------------------------------------------------------------
     v_p_speed = float(np.linalg.norm(_V_P_RTN))
     peak_fit = _alpha_peak_fit(
@@ -153,11 +153,7 @@ def main():
     )
     assert peak_fit is not None, "No alpha signal detected in synthetic spectrum"
 
-    alpha_speeds = esa_voltage_to_alpha_speed(voltage_per_sweep)
-    alpha_min_speed = float(esa_voltage_to_alpha_speed(peak_fit.alpha_min_voltage))
-    alpha_max_speed = float(esa_voltage_to_alpha_speed(peak_fit.alpha_max_voltage))
     proton_peak_voltage = peak_fit.alpha_min_voltage / 2.0
-
     true_alpha_speed = float(np.linalg.norm(_V_A_RTN))
     v_a_peak_voltage = (
         ALPHA_PARTICLE_MASS_KG
@@ -174,127 +170,111 @@ def main():
         f"               T_alpha = {peak_fit.T_alpha:.1f} eV  (truth = {_T_A:.1f} eV)"
     )
 
-    # Sort by ascending voltage for clean line plots (panel a).
+    # Compute the three model curves for visualization.
     abs_voltage = np.abs(voltage_per_sweep)
     sort_idx = np.argsort(abs_voltage)
     abs_v_s = abs_voltage[sort_idx]
     count_avg_s = count_avg[sort_idx]
-    proton_obs_avg_s = proton_obs_avg[sort_idx]
+    proton_obs_avg_s = peak_fit.proton_obs_avg[sort_idx]
+
+    # Alpha Gaussian component and combined model (with deadtime).
+    alpha_model = peak_fit.gauss_A * np.exp(
+        -((peak_fit.alpha_speeds - peak_fit.bulk_speed) ** 2)
+        / (2 * peak_fit.sigma_v**2)
+    )
+    combined_no_dt = peak_fit.proton_obs_avg + alpha_model
+    combined_with_dt = apply_deadtime_correction_array(combined_no_dt)
+
+    alpha_model_s = alpha_model[sort_idx]
+    combined_with_dt_s = combined_with_dt[sort_idx]
 
     # ------------------------------------------------------------------
     # Figure
     # ------------------------------------------------------------------
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5.5))
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
     fig.suptitle(
-        "Alpha peak-finding on the validation spectrum\n"
+        "Alpha peak-finding count-rate forward model fit\n"
         r"$n_p=5\,\mathrm{cm}^{-3},\ T_p=10\,\mathrm{eV},\ v_p=450\,\mathrm{km/s}$;  "
         r"$n_\alpha=0.20\,\mathrm{cm}^{-3},\ T_\alpha=40\,\mathrm{eV},\ \Delta v=+30\,\mathrm{km/s}$",
         fontsize=11,
     )
 
-    # --- Panel (a): spectrum + search window ---
-    ax1.plot(
+    # Observed data.
+    ax.plot(
         abs_v_s,
         count_avg_s,
         ".",
         color="tab:blue",
-        markersize=5,
+        markersize=6,
         label="Observed (5-sweep avg)",
+        zorder=3,
     )
-    ax1.plot(
+
+    # Frozen proton model.
+    ax.plot(
         abs_v_s,
         proton_obs_avg_s,
         color="tab:orange",
-        lw=1.8,
-        ls="--",
-        label=r"Frozen proton model $R_i^p$",
+        lw=2.0,
+        label=r"Proton model $R_p(V)$",
+        zorder=2,
     )
-    ax1.set_xscale("log")
-    ax1.set_yscale("symlog", linthresh=1)
-    ax1.axvspan(
+
+    # Alpha Gaussian component.
+    ax.plot(
+        abs_v_s,
+        alpha_model_s,
+        color="forestgreen",
+        lw=2.0,
+        ls="--",
+        label=rf"Alpha Gaussian: $\hat{{v}}_\alpha={peak_fit.bulk_speed:.0f}$ km/s, "
+        rf"$\hat{{T}}_\alpha={peak_fit.T_alpha:.0f}$ eV",
+        zorder=2,
+    )
+
+    # Combined with deadtime correction.
+    ax.plot(
+        abs_v_s,
+        combined_with_dt_s,
+        color="tab:red",
+        lw=2.5,
+        label=r"Proton + Alpha (deadtime corrected)",
+        zorder=2,
+    )
+
+    ax.set_xscale("log")
+    ax.set_yscale("symlog", linthresh=1)
+    ax.axvspan(
         peak_fit.alpha_min_voltage,
         peak_fit.alpha_max_voltage,
-        alpha=0.10,
+        alpha=0.08,
         color="tab:green",
         label=r"$\alpha$ search window $[2V_p^*,\,4V_p^*]$",
+        zorder=1,
     )
-    ax1.axvline(
+    ax.axvline(
         v_a_peak_voltage,
-        color="forestgreen",
+        color="black",
         lw=1.5,
         ls=":",
-        label=rf"True $v_\alpha$ = {true_alpha_speed:.0f} km/s",
+        label=rf"True $v_\alpha = {true_alpha_speed:.0f}$ km/s",
+        zorder=1.5,
     )
-    ax1.axvline(
+    ax.axvline(
         proton_peak_voltage,
         color="sienna",
         lw=1.0,
         ls=":",
         alpha=0.7,
         label=rf"$v_p^*$ = {v_p_speed:.0f} km/s",
+        zorder=1.5,
     )
-    ax1.set_xlabel("ESA Voltage ($|V|$) [V]", fontsize=11)
-    ax1.set_ylabel("Count Rate [Hz]", fontsize=11)
-    ax1.set_title("(a) 5-sweep averaged spectrum")
-    ax1.set_ylim(0, 1e5)
-    ax1.legend(fontsize=9)
-    ax1.grid(True, which="both", alpha=0.25)
 
-    # --- Panel (b): log-residual + Gaussian fit ---
-    ax2.plot(
-        peak_fit.fit_speeds[~peak_fit.alpha_mask],
-        peak_fit.fit_log_res[~peak_fit.alpha_mask],
-        ".",
-        color="silver",
-        markersize=5,
-        label="Outside search window",
-        zorder=1,
-    )
-    ax2.plot(
-        peak_fit.fit_speeds[peak_fit.alpha_mask],
-        peak_fit.fit_log_res[peak_fit.alpha_mask],
-        "o",
-        color="tab:blue",
-        markersize=7,
-        label=r"Log-residual $\ell_i$ in window",
-        zorder=3,
-    )
-    v_dense = np.linspace(alpha_min_speed * 0.97, alpha_max_speed * 1.03, 300)
-    gauss_curve = peak_fit.gauss_A * np.exp(
-        -((v_dense - peak_fit.bulk_speed) ** 2) / (2 * peak_fit.sigma_v**2)
-    )
-    ax2.plot(
-        v_dense,
-        gauss_curve,
-        color="tab:red",
-        lw=2.5,
-        label=(
-            rf"Gaussian fit: $\hat{{v}}_\alpha = {peak_fit.bulk_speed:.0f}$ km/s, "
-            rf"$\hat{{T}}_\alpha = {peak_fit.T_alpha:.0f}$ eV"
-        ),
-        zorder=4,
-    )
-    ax2.axvline(
-        true_alpha_speed,
-        color="black",
-        lw=2.0,
-        ls="--",
-        label=rf"Ground truth: $v_\alpha = {true_alpha_speed:.0f}$ km/s",
-        zorder=5,
-    )
-    ax2.axhline(
-        np.log(2.0),
-        color="gray",
-        lw=1.2,
-        ls=":",
-        label=r"Guard threshold: $\ln 2$",
-    )
-    ax2.axvspan(alpha_min_speed, alpha_max_speed, alpha=0.06, color="tab:green")
-    ax2.set_xlabel(r"Alpha central speed $v_0^\alpha$ (km/s)", fontsize=11)
-    ax2.set_ylabel(r"Log-residual $\ell_i = \ln C_i - \ln R_i^p$", fontsize=11)
-    ax2.set_title("(b) Log-residual and Gaussian fit")
-    ax2.legend(fontsize=9)
-    ax2.grid(True, which="both", alpha=0.25)
+    ax.set_xlabel("ESA Voltage ($|V|$) [V]", fontsize=12)
+    ax.set_ylabel("Count Rate [Hz]", fontsize=12)
+    ax.set_ylim(0, 1e5)
+    ax.legend(fontsize=10, loc="upper right")
+    ax.grid(True, which="both", alpha=0.25)
 
     fig.tight_layout()
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
