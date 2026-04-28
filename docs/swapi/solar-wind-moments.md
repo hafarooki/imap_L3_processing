@@ -17,7 +17,6 @@ Interim: `eps_p_lab` is pinned to the first row at/after 2025-11-01 because the 
 Replace with the proper `lab_time` lookup once the LUT format gains the field (see `EfficiencyCalibrationTable.eps_p_lab`).
 - [ ] Remove old SW model from pickup ion code (?)
 - [ ] Dynamic calculation of pickup ion geometric factor (?)
-- [ ] Fit to only FWHM for protons
 - [ ] Choose bad fit flags
 - [ ] Fix the integration edge cases 
 - [ ] finalize document
@@ -134,6 +133,7 @@ Each 12-second ESA sweep contains **72 bins** (indices 0–71). Their roles are:
 
 The fine-sweep bins are currently used in the moments fit (they overlap the peak and add resolution). The production processor and validation scripts use `SWAPI_SCIENCE_BINS = slice(1, 72)` (i.e., `SWAPI_COARSE_SWEEP_BINS + SWAPI_FINE_SWEEP_BINS`) and always exclude bin 0 explicitly.
 Occasionally, one or more fine sweep bins will have zero ESA voltage; we exclude these from the fit.
+For solar wind protons, we also restrict the fit to points that are within half of the maximum count rate to avoid including other populations.
 Named constants are defined in `imap_l3_processing/swapi/l3a/science/speed_calculation.py`:
 
 ```python
