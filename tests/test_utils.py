@@ -19,7 +19,7 @@ from imap_l3_processing.maps.map_models import GlowsL3eRectangularMapInputData, 
 from imap_l3_processing.models import InputMetadata
 from imap_l3_processing.swapi.l3a.models import SwapiL3AlphaSolarWindData
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
-from imap_l3_processing.utils import format_time, download_dependency, read_l1d_mag_data, save_data, \
+from imap_l3_processing.utils import format_time, download_dependency, read_mag_data, save_data, \
     download_external_dependency, download_dependency_with_repointing, \
     combine_glows_l3e_with_l1c_pointing, furnish_local_spice, get_spice_parent_file_names, furnish_spice_metakernel, \
     SpiceKernelTypes, FurnishMetakernelOutput, read_cdf_parents, get_dependency_paths_by_descriptor
@@ -481,7 +481,7 @@ class TestUtils(TestCase):
         ]
         for name, path in cases:
             with self.subTest(name):
-                results = read_l1d_mag_data(path)
+                results = read_mag_data(path)
 
                 np.testing.assert_array_equal(epoch, results.epoch)
                 np.testing.assert_array_equal(trimmed_vectors, results.mag_data)

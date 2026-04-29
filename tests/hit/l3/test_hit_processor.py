@@ -17,7 +17,7 @@ from imap_l3_processing.hit.l3.pha.science.calculate_pha import EventOutput
 from imap_l3_processing.hit.l3.pha.science.cosine_correction_lookup_table import DetectedRange, DetectorSide, \
     DetectorRange
 from imap_l3_processing.hit.l3.sectored_products.models import HitPitchAngleDataProduct
-from imap_l3_processing.models import MagL1dData, InputMetadata
+from imap_l3_processing.models import MagData, InputMetadata
 from imap_l3_processing.processor import Processor
 from tests.test_helpers import NumpyArrayMatcher, create_dataclass_mock
 
@@ -66,7 +66,7 @@ class TestHitProcessor(TestCase):
         averaged_mag_vectors = [sentinel.mag_vector1, sentinel.mag_vector2]
 
         mock_dependencies = Mock(spec=HITL3SectoredDependencies)
-        mock_mag_data = create_dataclass_mock(MagL1dData)
+        mock_mag_data = create_dataclass_mock(MagData)
         mock_mag_data.rebin_to = Mock()
         mock_mag_data.rebin_to.return_value = averaged_mag_vectors
         mock_dependencies.mag_l1d_data = mock_mag_data

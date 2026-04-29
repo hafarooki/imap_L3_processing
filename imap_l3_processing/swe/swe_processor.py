@@ -52,8 +52,8 @@ class SweProcessor(Processor):
         spacecraft_potential: np.ndarray[np.float64] = np.empty_like(swe_epoch, dtype=np.float64)
         halo_core: np.ndarray[np.float64] = np.empty_like(swe_epoch, dtype=np.float64)
         corrected_energy_bins = []
-        rebinned_mag_data = dependencies.mag_l1d_data.rebin_to(swe_epoch,
-                                                               [datetime.timedelta(seconds=delta / 1e9)
+        rebinned_mag_data = dependencies.mag_data.rebin_to(swe_epoch,
+                                                           [datetime.timedelta(seconds=delta / 1e9)
                                                                 for delta
                                                                 in epoch_delta])
 
@@ -495,8 +495,8 @@ class SweProcessor(Processor):
         config = dependencies.configuration
         mag_max_distance = np.timedelta64(int(config['max_mag_offset_in_minutes'] * 60e9), 'ns')
 
-        rebinned_mag_data, indices = find_closest_neighbor(from_epoch=dependencies.mag_l1d_data.epoch,
-                                                           from_data=dependencies.mag_l1d_data.mag_data,
+        rebinned_mag_data, indices = find_closest_neighbor(from_epoch=dependencies.mag_data.epoch,
+                                                           from_data=dependencies.mag_data.mag_data,
                                                            to_epoch=swe_l2_data.acquisition_time,
                                                            maximum_distance=mag_max_distance,
                                                            )

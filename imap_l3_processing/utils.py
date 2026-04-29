@@ -24,7 +24,7 @@ from imap_l3_processing.maps.map_models import GlowsL3eRectangularMapInputData, 
     HealPixIntensityMapData, HealPixSpectralIndexMapData, RectangularSpectralIndexDataProduct, \
     RectangularIntensityDataProduct, HealPixSpectralIndexDataProduct, HealPixIntensityDataProduct, MapDataProduct, \
     ISNBackgroundSubtractedDataProduct, ISNBackgroundSubtractedMapData
-from imap_l3_processing.models import UpstreamDataDependency, DataProduct, MagL1dData, InputMetadata
+from imap_l3_processing.models import UpstreamDataDependency, DataProduct, MagData, InputMetadata
 from imap_l3_processing.ultra.models import UltraL1CPSet, UltraGlowsL3eData
 from imap_l3_processing.version import VERSION
 
@@ -216,9 +216,9 @@ def download_external_dependency(dependency_url: str, file_path: Path) -> Option
     return None
 
 
-def read_l1d_mag_data(cdf_path: Union[str, Path]) -> MagL1dData:
+def read_mag_data(cdf_path: Union[str, Path]) -> MagData:
     with CDF(str(cdf_path)) as cdf:
-        return MagL1dData(
+        return MagData(
             epoch=cdf['epoch'][...],
             mag_data=read_numeric_variable(cdf["b_dsrf"])[:, :3])
 

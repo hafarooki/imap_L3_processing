@@ -41,7 +41,7 @@ class TestCodicePitchAngleDependencies(unittest.TestCase):
         mock_from_files.assert_called_with(expected_mag_science_file_path, expected_codice_science_file_path)
         self.assertEqual(mock_from_files.return_value, dependencies)
 
-    @patch('imap_l3_processing.codice.l3.hi.pitch_angle.codice_pitch_angle_dependencies.read_l1d_mag_data')
+    @patch('imap_l3_processing.codice.l3.hi.pitch_angle.codice_pitch_angle_dependencies.read_mag_data')
     @patch(
         'imap_l3_processing.codice.l3.hi.pitch_angle.codice_pitch_angle_dependencies.CodiceHiL2SectoredIntensitiesData.read_from_cdf')
     def test_from_file_paths(self, mock_codice_l2_data, mock_read_mag_data):

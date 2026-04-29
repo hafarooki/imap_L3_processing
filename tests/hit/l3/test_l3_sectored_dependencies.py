@@ -9,7 +9,7 @@ from imap_l3_processing.hit.l3.hit_l3_sectored_dependencies import HITL3Sectored
 
 
 class TestHITL3SectoredDependencies(TestCase):
-    @patch("imap_l3_processing.hit.l3.hit_l3_sectored_dependencies.read_l1d_mag_data")
+    @patch("imap_l3_processing.hit.l3.hit_l3_sectored_dependencies.read_mag_data")
     @patch("imap_l3_processing.hit.l3.hit_l3_sectored_dependencies.read_l2_hit_data")
     @patch('imap_l3_processing.hit.l3.hit_l3_sectored_dependencies.download')
     def test_fetch_dependencies(self, mock_download, mock_read_hit_data, mock_read_mag_data):

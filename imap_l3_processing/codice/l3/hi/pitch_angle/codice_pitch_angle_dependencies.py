@@ -4,13 +4,13 @@ from imap_data_access import download
 from imap_data_access.processing_input import ProcessingInputCollection
 
 from imap_l3_processing.codice.l3.hi.models import CodiceHiL2SectoredIntensitiesData
-from imap_l3_processing.models import MagL1dData
-from imap_l3_processing.utils import read_l1d_mag_data
+from imap_l3_processing.models import MagData
+from imap_l3_processing.utils import read_mag_data
 
 
 @dataclass
 class CodicePitchAngleDependencies:
-    mag_l1d_data: MagL1dData
+    mag_l1d_data: MagData
     codice_sectored_intensities_data: CodiceHiL2SectoredIntensitiesData
 
     @classmethod
@@ -25,7 +25,7 @@ class CodicePitchAngleDependencies:
 
     @classmethod
     def from_file_paths(cls, mag_file_path, codice_l2_sectored_intensities_path):
-        mag_data = read_l1d_mag_data(mag_file_path)
+        mag_data = read_mag_data(mag_file_path)
         sectored_intensities = CodiceHiL2SectoredIntensitiesData.read_from_cdf(codice_l2_sectored_intensities_path)
 
         return cls(mag_data, sectored_intensities)
