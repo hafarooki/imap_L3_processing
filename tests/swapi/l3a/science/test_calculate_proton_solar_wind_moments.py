@@ -499,7 +499,7 @@ class TestGetInitialGuess(unittest.TestCase):
 
     def test_bulk_velocity_initial_guess(self):
         result = self._run()
-        expected_vR = math.sqrt(max(self.true_speed ** 2 - 30.0 ** 2, 0.0))
+        expected_vR = math.sqrt(max(self.true_speed**2 - 30.0**2, 0.0))
         np.testing.assert_allclose(result.bulk_velocity_rtn[0], expected_vR, rtol=0.02)
         np.testing.assert_allclose(result.bulk_velocity_rtn[1], -30.0, atol=1.0)
         np.testing.assert_allclose(result.bulk_velocity_rtn[2], 0.0, atol=1e-6)
@@ -1132,13 +1132,12 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
         self.assertGreater(speed, 300.0)
         self.assertLess(speed, 700.0)
 
-    def test_low_count_bins_below_fwhm_dont_influence_fit(self):
-        # Bins below half the peak count rate (FWHM threshold) should be dropped.
+    def test_low_count_bins_below_tail_mask_dont_influence_fit(self):
+        # Bins below 10% of the peak count rate are masked out.
         # Perturbing them (without lifting them above the threshold) must not
         # change the recovered moments.
         sr = _load_swapi_response()
         true_speed = 450.0
-        # Wide voltage range so the tails fall well below half the peak.
         voltages = np.geomspace(
             _peak_voltage(true_speed) * 0.4, _peak_voltage(true_speed) * 2.5, 30
         )
@@ -1157,11 +1156,11 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
             rot,
             PROTON_MASS_KG,
         )
-        below = count_rate < 0.5 * float(np.max(count_rate))
+        below = count_rate < 0.1 * float(np.max(count_rate))
         self.assertGreater(int(below.sum()), 0)
 
         perturbed = count_rate.copy()
-        perturbed[below] = 0.0  # still below FWHM threshold, so still masked out
+        perturbed[below] = 0.0
 
         with patch(
             "imap_l3_processing.swapi.l3a.utils.get_swapi_geometry",
@@ -1185,10 +1184,14 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
 class TestPoissonUncertaintyCoverage(unittest.TestCase):
     """Verify that reported uncertainties match the empirical scatter across Poisson-noise realizations.
 
-    Runs 50 independent fits on synthetic data with Poisson noise drawn from the true
+    Runs 500 independent fits on synthetic data with Poisson noise drawn from the true
     model count rates. The mean reported sigma should agree with the empirical std dev
-    of the fit outputs to within 50% — loose enough to tolerate sampling noise from 50
-    trials (~10% CV on the std dev estimate) while still catching gross miscalibration.
+    of the fit outputs to within 10%.
+
+    Uses 5 sweeps × 8 bins with realistic sweep timing (12 s per sweep) so that
+    the 60 s total spans 4 full spin periods. This gives enough spin-phase diversity
+    to strongly break the mirror symmetry, preventing basin toggling across noise
+    realizations that would inflate the empirical variance.
     """
 
     N_REALIZATIONS = 500
@@ -1200,18 +1203,19 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
         cls.true_temperature = 10.0 * EV_TO_KELVIN  # K (10 eV)
         cls.true_velocity = np.array([450.0, 20.0, -10.0])
 
-        # Use a small grid (3 sweeps × 8 bins) to keep each _optimize call fast.
-        # The ratio mean_reported_sigma / empirical_std is independent of problem size,
-        # so coverage is equally well tested with fewer data points.
+        n_bins_per_sweep = 8
+        n_sweeps = 5
         voltages = np.geomspace(
-            _peak_voltage(450.0) * 0.75, _peak_voltage(450.0) * 1.35, 8
+            _peak_voltage(450.0) * 0.75, _peak_voltage(450.0) * 1.35, n_bins_per_sweep
         )
-        n_sweeps = 3
         all_voltages = np.tile(voltages, n_sweeps)
         cls.grids, cls.cs, cls.cea, cls.at, cls.ats = _build_proton_arrays(
             sr, all_voltages
         )
-        cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
+        cls.rot = _spin_rotation_matrices(
+            n_sweeps * n_bins_per_sweep,
+            dt_s=12.0 / n_bins_per_sweep,
+        )
 
         true_rate = _model_count_rates(
             cls.true_density,
@@ -1565,6 +1569,103 @@ class TestColdPlasmaTransverseRecovery(unittest.TestCase):
             seed=0,
         )
         self._assert_velocity_recovered(result, true_vel)
+
+
+class TestWrongBasinFlipCheck(unittest.TestCase):
+    """Regression tests for the spin-axis mirror flip check in _optimize.
+
+    The count-rate model is approximately invariant under (vT, vN) → (-vT, -vN)
+    (a 180° rotation about the spin axis), creating two chi² basins. Without
+    the dual-LM flip check, LM can converge to the wrong (higher-chi²) basin
+    depending on the initial guess sign. These tests verify that _optimize
+    always recovers the correct basin regardless of which side it starts from.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        cls.true_density = 8.0
+        cls.true_temperature = 10.0 * EV_TO_KELVIN
+        cls.true_velocity = np.array([450.0, -40.0, 35.0])
+
+        voltages = np.geomspace(
+            _peak_voltage(450.0) * 0.75, _peak_voltage(450.0) * 1.35, 20
+        )
+        n_sweeps = 5
+        all_voltages = np.tile(voltages, n_sweeps)
+        cls.grids, cls.cs, cls.cea, cls.at, cls.ats = _build_proton_arrays(
+            sr, all_voltages
+        )
+        cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
+        cls.spin_axis = cls.rot[0, 1, :].copy()
+
+        cls.count_rate = _model_count_rates(
+            cls.true_density,
+            cls.true_temperature,
+            cls.true_velocity,
+            cls.grids,
+            cls.cs,
+            cls.cea,
+            cls.at,
+            cls.ats,
+            cls.rot,
+            PROTON_MASS_KG,
+        )
+
+    def _make_ig(self, velocity):
+        return ProtonSolarWindMoments(
+            density=self.true_density,
+            temperature=self.true_temperature,
+            bulk_velocity_rtn=np.array(velocity, dtype=float),
+            bad_fit_flag=0,
+        )
+
+    def _run(self, ig):
+        return _optimize(
+            self.count_rate,
+            self.grids,
+            self.cs,
+            self.cea,
+            self.at,
+            self.ats,
+            self.rot,
+            ig,
+        )
+
+    def test_correct_basin_from_true_init(self):
+        result = self._run(self._make_ig([450.0, -40.0, 35.0]))
+        np.testing.assert_allclose(
+            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+        )
+
+    def test_correct_basin_from_mirror_init(self):
+        v_mirror = (
+            2.0 * np.dot(self.true_velocity, self.spin_axis) * self.spin_axis
+            - self.true_velocity
+        )
+        result = self._run(self._make_ig(v_mirror))
+        np.testing.assert_allclose(
+            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+        )
+
+    def test_correct_basin_from_zero_transverse_init(self):
+        result = self._run(self._make_ig([450.0, 0.0, 0.0]))
+        np.testing.assert_allclose(
+            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+        )
+
+    def test_both_inits_give_same_result(self):
+        r_true = self._run(self._make_ig([450.0, -40.0, 35.0]))
+        v_mirror = (
+            2.0 * np.dot(self.true_velocity, self.spin_axis) * self.spin_axis
+            - self.true_velocity
+        )
+        r_mirror = self._run(self._make_ig(v_mirror))
+        np.testing.assert_allclose(
+            r_true.bulk_velocity_rtn, r_mirror.bulk_velocity_rtn, atol=1e-6
+        )
+        np.testing.assert_allclose(r_true.density, r_mirror.density, rtol=1e-6)
+        np.testing.assert_allclose(r_true.temperature, r_mirror.temperature, rtol=1e-6)
 
 
 if __name__ == "__main__":

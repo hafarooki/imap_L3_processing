@@ -121,8 +121,15 @@ def fit_solar_wind_proton_moments(
     # producing divide-by-zero deep inside the JIT integrator.
     keep = (esa_voltage > 0) & np.isfinite(esa_voltage)
 
-    # TODO: adjacent ESA voltages only
-    keep = keep & (count_rate >= count_rate.max() * 0.1)
+    # 10%-of-peak mask: keep only bins above 10% of the peak count rate so the
+    # deep tails (PUI/alpha contamination in production data) can't bias the
+    # proton fit, but enough bins remain that the spin-axis-mirror basins are
+    # discriminable. Tighter masks (e.g. FWHM at 0.5×max) leave the cold-plasma
+    # chi² landscape too noise-degenerate to pick the right basin.
+    cr_max = float(np.nanmax(count_rate[keep])) if np.any(keep) else 0.0
+    tail_mask = count_rate >= 0.1 * cr_max
+    if int((keep & tail_mask).sum()) >= 5:
+        keep = keep & tail_mask
 
     if not np.all(keep):
         esa_voltage = esa_voltage[keep]
@@ -214,7 +221,10 @@ def _get_initial_guess(
         / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
     )
 
-    # Set vT = -30 km/s and solve for vR so that |v| = bulk_speed from the Gaussian fit.
+    # Nominal transverse seed. The mirror symmetry is in the instrument frame,
+    # not RTN, so this offset does not reliably break the basin degeneracy —
+    # the dual-LM flip check in `_optimize` handles that regardless of the
+    # initial transverse velocity.
     bulk_velocity_rtn = np.array(
         [math.sqrt(max(float(bulk_speed) ** 2 - 30.0**2, 0.0)), -30.0, 0.0]
     )
@@ -825,16 +835,23 @@ def _optimize(
     # Wrong-basin detection via spin-axis mirror flip; see docs/swapi/solar-wind-moments.md.
     # Spin axis in RTN = body-Y direction expressed in RTN coords = row 1 of R[i].
     # 180° rotation about that axis: v' = 2(v·s)s − v.
+    #
+    # Always re-run LM from the flipped seed so we land at the mirror basin's
+    # actual minimum and pick whichever converged result has lower chi². The
+    # flipped LM *point* alone is a poor proxy for the mirror basin's depth
+    # when the two basins have different (n, T) — e.g., cold-plasma wrong-
+    # basin local minima with inflated density.
     chi2 = float(np.sum(result.fun**2))
     v_rtn = result.x[2:5]
     v_flipped = 2.0 * float(np.dot(v_rtn, spin_axis_rtn)) * spin_axis_rtn - v_rtn
     x_flipped = result.x.copy()
     x_flipped[2:5] = v_flipped
-    chi2_flipped = float(np.sum(residuals(x_flipped) ** 2))
+    result_flipped = scipy.optimize.least_squares(
+        residuals, x_flipped, method="lm", diff_step=1e-4
+    )
+    chi2_flipped = float(np.sum(result_flipped.fun**2))
     if chi2_flipped < chi2:
-        result = scipy.optimize.least_squares(
-            residuals, x_flipped, method="lm", diff_step=1e-4
-        )
+        result = result_flipped
 
     density = float(np.exp(result.x[0]))
     temperature = float(np.exp(result.x[1]))

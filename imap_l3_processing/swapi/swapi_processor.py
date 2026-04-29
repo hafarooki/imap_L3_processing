@@ -67,8 +67,7 @@ logger = logging.getLogger(__name__)
 
 
 def _derive_proton_velocity_angles(
-    fitting_result: ProtonSolarWindMoments,
-    chunk_epoch_center_tt2000_ns
+    fitting_result: ProtonSolarWindMoments, chunk_epoch_center_tt2000_ns
 ) -> tuple:
     """Return (speed, clock_angle, deflection_angle) as ufloats from proton moments."""
     R = get_swapi_dsrf_to_rtn(np.array([chunk_epoch_center_tt2000_ns]))[0].T
@@ -97,7 +96,7 @@ def _derive_proton_velocity_angles(
 
     return (
         ufloat(speed, speed_sigma),
-        ufloat(np.degrees(np.arctan2(u[1], u[0])), clock_sigma),
+        ufloat(np.degrees(np.arctan2(u[1], u[0])) % 360, clock_sigma),
         ufloat(np.degrees(np.arccos(u[2] / speed)), defl_sigma),
     )
 
@@ -217,10 +216,10 @@ class SwapiProcessor(Processor):
                 fitting_result = self._fit_proton_moments_for_chunk(
                     data_chunk, dependencies, epoch, SWAPI_SCIENCE_BINS
                 )
+                quality_flag |= fitting_result.bad_fit_flag
                 speed, clock_angle, deflection_angle = _derive_proton_velocity_angles(
                     fitting_result, epoch
                 )
-                quality_flag |= fitting_result.bad_fit_flag
             except Exception:
                 logger.info(
                     f"Exception occurred at epoch {epoch}, continuing with fill value",
@@ -551,16 +550,18 @@ class SwapiProcessor(Processor):
                 fitting_result = self._fit_proton_moments_for_chunk(
                     data_chunk, dependencies, epoch, SWAPI_SCIENCE_BINS
                 )
+                quality_flag |= fitting_result.bad_fit_flag
                 speed, clock_angle, deflection_angle = _derive_proton_velocity_angles(
                     fitting_result, epoch
                 )
                 sc_velocity_rtn = get_spacecraft_velocity_rtn(epoch)
-                bulk_velocity_rtn_sun = fitting_result.bulk_velocity_rtn + sc_velocity_rtn
+                bulk_velocity_rtn_sun = (
+                    fitting_result.bulk_velocity_rtn + sc_velocity_rtn
+                )
                 density = ufloat(fitting_result.density, fitting_result.density_sigma)
                 temperature = ufloat(
                     fitting_result.temperature, fitting_result.temperature_sigma
                 )
-                quality_flag |= fitting_result.bad_fit_flag
             except Exception:
                 logger.info(
                     f"Exception occurred at epoch {epoch}, continuing with fill value",

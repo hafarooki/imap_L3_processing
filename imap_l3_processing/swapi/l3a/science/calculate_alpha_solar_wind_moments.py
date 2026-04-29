@@ -6,9 +6,8 @@ performed by the caller and passed in as `proton_moments`. Stage 2 here is a 3-D
 Levenberg–Marquardt over (n_α, T_α, Δv) where v_α = v_p* + Δv * B̂. The combined
 observed model is `deadtime(proton_true + alpha_true)` so deadtime acts on the sum.
 
-When magnetic data is unavailable, the fit assumes the alpha bulk velocity direction
-matches the proton direction and only the speed differs. This is flagged with the
-ALPHA_MAG_DATA_FALLBACK quality flag.
+When magnetic data is unavailable, the fit uses the nominal Parker spiral direction
+(45° from R toward −T in RTN) and flags the result with ALPHA_MAG_DATA_FALLBACK.
 
 See `docs/swapi/solar-wind-moments.md` § "Alpha Particle Moments".
 """
@@ -126,10 +125,10 @@ def fit_solar_wind_alpha_moments(
     even for alphas — see `solar-wind-moments.md` § "Alpha Particle Moments").
 
     ``b_hat_rtn`` is the unit MAG vector at the chunk center, rotated to RTN. If MAG data
-    is unavailable (NaN or near-zero), the fit assumes the alpha bulk velocity direction
-    matches the proton direction (v_α = v_α_speed · V̂_p / ||V_p||), and returns
-    ``bad_fit_flag |= ALPHA_MAG_DATA_FALLBACK``. If the proton speed is also near-zero,
-    returns ``bad_fit_flag = MAG_GAP`` with NaN moments.
+    is unavailable (NaN or near-zero), the fit uses the nominal Parker spiral direction
+    B̂ = (1/√2, −1/√2, 0) RTN and sets ``bad_fit_flag |= ALPHA_MAG_DATA_FALLBACK``.
+    If the proton speed is also near-zero, returns ``bad_fit_flag = MAG_GAP`` with NaN
+    moments.
 
     ``rotation_matrices`` may be precomputed and reused from the Stage 1 proton fit;
     if ``None``, computed internally from ``measurement_time``.
@@ -152,7 +151,7 @@ def fit_solar_wind_alpha_moments(
     if not is_valid_unit_vector:
         if proton_speed < 1e-12:
             return _nan_alpha_moments(SwapiL3Flags.MAG_GAP)
-        b_hat_rtn = proton_bulk_rtn / proton_speed
+        b_hat_rtn = np.array([1.0 / np.sqrt(2.0), -1.0 / np.sqrt(2.0), 0.0])
         mag_gap_fallback = True
     else:
         b_hat_rtn = b_hat_check
@@ -219,14 +218,58 @@ def fit_solar_wind_alpha_moments(
         rotation_matrices=rotation_matrices,
         proton_bulk_velocity_rtn=proton_bulk_rtn,
         b_hat_rtn=b_hat_rtn,
+        proton_temperature_k=float(proton_moments.temperature),
     )
     if initial_guess is None:
         return _nan_alpha_moments(SwapiL3Flags.HI_CHI_SQ)
 
     n0, T0, dv0 = initial_guess
+    proton_bulk = proton_bulk_rtn
+
+    # Alpha-bump mask: focus the LM on bins where alpha actually contributes,
+    # so non-Maxwellian contamination in the wings (PUI He+ shelf above the
+    # alpha peak; deep proton tail below) can't pull n_α down. Threshold is
+    # the ALPHA-attributable count rate, NOT raw count, so the proton-peak
+    # bins (huge counts but ~0 alpha) are correctly excluded.
+    proton_obs_rate = apply_deadtime_correction_array(proton_true_rate)
+    alpha_attr = np.maximum(count_rate - proton_obs_rate, 0.0)
+
+    proton_peak_voltage = (
+        PROTON_MASS_KG
+        * (proton_speed * METERS_PER_KILOMETER) ** 2
+        / (2.0 * PROTON_CHARGE_COULOMBS * SWAPI_K_FACTOR)
+    )
+    abs_voltage = np.abs(esa_voltage)
+    in_alpha_window = (abs_voltage >= 2.0 * proton_peak_voltage) & (
+        abs_voltage <= 4.0 * proton_peak_voltage
+    )
+    if np.any(in_alpha_window):
+        alpha_peak_attr = float(np.nanmax(alpha_attr[in_alpha_window]))
+        if alpha_peak_attr > 0:
+            keep = in_alpha_window & (alpha_attr >= 0.25 * alpha_peak_attr)
+            if int(keep.sum()) >= 5:
+                count_rate = count_rate[keep]
+                esa_voltage = esa_voltage[keep]
+                proton_true_rate = proton_true_rate[keep]
+                alpha_central_speeds = alpha_central_speeds[keep]
+                alpha_central_eff_areas = alpha_central_eff_areas[keep]
+                rotation_matrices = rotation_matrices[keep]
+                kept_indices = np.where(keep)[0]
+                passband_grids = numba.typed.List(
+                    [passband_grids[int(i)] for i in kept_indices]
+                )
+
     # Sigma is per-bin Poisson; with flatten-not-average there is no √5 normalization to apply.
     sigma = np.sqrt(np.maximum(count_rate * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
-    proton_bulk = proton_bulk_rtn
+
+    # Δv bounds: enforce |v_α| ≥ |v_p| (alpha at least as fast as proton).
+    # |v_p + Δv B̂|² ≥ |v_p|² ↔ Δv(Δv + 2(v_p·B̂)) ≥ 0.
+    # When v_p·B̂ > 0: physical solution is Δv ≥ 0.
+    # When v_p·B̂ < 0: physical solution is Δv ≤ 0.
+    # When v_p·B̂ ≈ 0: always satisfied → unconstrained.
+    vp_dot_bhat = float(np.dot(proton_bulk, b_hat_rtn))
+    dv_lower = 0.0 if vp_dot_bhat > 0 else -np.inf
+    dv_upper = 0.0 if vp_dot_bhat < 0 else np.inf
 
     def residuals(x):
         return _alpha_residuals_njit(
@@ -244,18 +287,15 @@ def fit_solar_wind_alpha_moments(
             rotation_matrices,
         )
 
-    x0 = np.array([np.log(max(n0, 1e-3)), np.log(max(T0, 1e-3)), dv0])
-    result = scipy.optimize.least_squares(residuals, x0, method="lm", diff_step=1e-4)
-
-    # Wrong-basin: signed-Δv flip (1-DOF basin ambiguity along B̂; not the proton 3D rotation).
-    chi2 = float(np.sum(result.fun**2))
-    x_flipped = result.x.copy()
-    x_flipped[2] = -x_flipped[2]
-    chi2_flipped = float(np.sum(residuals(x_flipped) ** 2))
-    if chi2_flipped < chi2:
-        result = scipy.optimize.least_squares(
-            residuals, x_flipped, method="lm", diff_step=1e-4
-        )
+    dv0_bounded = float(np.clip(dv0, dv_lower, dv_upper))
+    x0 = np.array([np.log(max(n0, 1e-3)), np.log(max(T0, 1e-3)), dv0_bounded])
+    result = scipy.optimize.least_squares(
+        residuals,
+        x0,
+        method="trf",
+        bounds=([-np.inf, -np.inf, dv_lower], [np.inf, np.inf, dv_upper]),
+        diff_step=1e-4,
+    )
 
     n_a_fit = float(np.exp(result.x[0]))
     T_a_fit = float(np.exp(result.x[1]))
@@ -311,6 +351,7 @@ def _alpha_peak_fit(
     voltage_per_sweep: ndarray,
     n_sweeps: int,
     v_p_speed: float,
+    proton_temperature_k: float,
 ) -> Optional["_AlphaPeakFit"]:
     """Locate the alpha bump in the log-space residual and fit a Gaussian.
 
@@ -319,6 +360,12 @@ def _alpha_peak_fit(
     the proton peak voltage. The Gaussian fit uses all velocity data (not just
     the alpha window) with the peak location constrained to [alpha_min_speed,
     alpha_max_speed]. This gives sigma better conditioning than a narrow window.
+
+    ``proton_temperature_k`` seeds the initial sigma assuming T_α = 4 T_p
+    (mass-proportional thermalization → equal thermal speed) and bounds it to
+    T_α ≤ 9 T_p. Without these bounds, non-Maxwellian background in the wings
+    (PUI He+ shelf above the alpha peak) drives the curve_fit to a pathologically
+    wide sigma — see solar-wind-moments.md § "Alpha Particle Moments".
 
     Returns an :class:`_AlphaPeakFit` with the fit parameters and all
     intermediate arrays needed for diagnostics, or ``None`` when no alpha
@@ -363,23 +410,48 @@ def _alpha_peak_fit(
         combined = proton_obs_clipped[idx] + alpha_contrib
         return apply_deadtime_correction_array(combined)
 
-    bin_indices = np.arange(len(voltage_per_sweep))
-    fit_sigma_counts = np.sqrt(np.maximum(count_avg, 1.0))
+    # Fit over the alpha window extended by ±3σ_seed in speed space so the
+    # Gaussian tails are constrained even when the peak is near a window edge.
+    # The peak location is still bounded to [alpha_min_speed, alpha_max_speed].
+    fit_mask = np.abs(alpha_speeds - peak_speed) <= 3.0 * sigma_v_alpha_seed
+    # Always include the alpha window itself.
+    fit_mask |= alpha_mask
+    fit_indices = np.where(fit_mask)[0].astype(float)
+    fit_counts = count_avg[fit_mask]
+    fit_sigma_counts = np.sqrt(np.maximum(fit_counts, 1.0))
+
+    # Seed sigma assuming T_α = 4 T_p (mass-proportional thermalization → equal
+    # thermal speed for proton and alpha). Bound to T_α ≤ 16 T_p so the fit
+    # can't run away to T_α ~ 10⁷ K trying to fit non-Maxwellian wing
+    # contamination (PUI He+).
+    sigma_v_alpha_seed = float(
+        np.sqrt(
+            BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
+            * 4.0
+            * proton_temperature_k
+            / ALPHA_PARTICLE_MASS_KG
+        )
+        / METERS_PER_KILOMETER
+    )
+    sigma_v_alpha_max = 1.5 * sigma_v_alpha_seed  # ≡ T_α ≤ 9 T_p
 
     try:
         (gauss_A, bulk_speed, sigma_v), _ = scipy.optimize.curve_fit(
             count_rate_forward_model,
-            bin_indices,
-            count_avg,
-            p0=[count_avg[peak_idx_in_window] * 0.1, peak_speed, 50.0],
-            bounds=([0, alpha_min_speed, 0], [np.inf, alpha_max_speed, np.inf]),
+            alpha_window_indices,
+            alpha_window_counts,
+            p0=[count_avg[peak_idx_in_window] * 0.1, peak_speed, sigma_v_alpha_seed],
+            bounds=(
+                [0, alpha_min_speed, 0],
+                [np.inf, alpha_max_speed, sigma_v_alpha_max],
+            ),
             sigma=fit_sigma_counts,
             absolute_sigma=True,
             maxfev=2000,
         )
     except RuntimeError:
         bulk_speed = peak_speed
-        sigma_v = 50.0
+        sigma_v = sigma_v_alpha_seed
         gauss_A = count_avg[peak_idx_in_window] * 0.1
 
     sigma_floor_v = float(
@@ -422,6 +494,7 @@ def _alpha_initial_guess(
     rotation_matrices: ndarray,
     proton_bulk_velocity_rtn: ndarray,
     b_hat_rtn: ndarray,
+    proton_temperature_k: float,
 ) -> Optional[tuple]:
     """Return (n_α, T_α, Δv₀) as a starting point for LM, or None if no alpha signal found.
 
@@ -450,7 +523,12 @@ def _alpha_initial_guess(
         return None
 
     peak_fit = _alpha_peak_fit(
-        count_avg, proton_obs_avg, voltage_per_sweep, n_sweeps, v_p_speed
+        count_avg,
+        proton_obs_avg,
+        voltage_per_sweep,
+        n_sweeps,
+        v_p_speed,
+        proton_temperature_k,
     )
     if peak_fit is None:
         return None
@@ -481,8 +559,9 @@ def _alpha_initial_guess(
         - proton_obs_avg
     )
 
-    numerator = float(max(np.sum(count_avg - proton_obs_avg), 0.0))
-    denominator = float(np.sum(delta_alpha_obs_avg))
+    alpha_mask = peak_fit.alpha_mask
+    numerator = float(max(np.sum((count_avg - proton_obs_avg)[alpha_mask]), 0.0))
+    denominator = float(np.sum(delta_alpha_obs_avg[alpha_mask]))
     if denominator <= 0 or not np.isfinite(denominator):
         return None
     n_alpha = max(numerator / denominator, 1e-3)

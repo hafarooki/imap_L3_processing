@@ -58,8 +58,6 @@ from imap_l3_processing.maps.hilo_l3_survival_dependencies import HiLoL3Survival
 from imap_l3_processing.maps.map_models import RectangularSpectralIndexDataProduct, RectangularIntensityDataProduct, \
     RectangularIntensityMapData
 from imap_l3_processing.models import InputMetadata
-from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_temperature_and_density import \
-    AlphaTemperatureDensityCalibrationTable
 from imap_l3_processing.swapi.l3a.science.calculate_pickup_ion import DensityOfNeutralHeliumLookupTable
 from imap_l3_processing.swapi.l3a.swapi_l3a_dependencies import SwapiL3ADependencies
 from imap_l3_processing.swapi.l3a.utils import read_l2_swapi_data
@@ -239,8 +237,7 @@ def create_swapi_l3b_cdf(geometric_calibration_file, efficiency_calibration_file
 
 
 @patch("imap_l3_processing.swapi.l3a.science.calculate_pickup_ion.spiceypy")
-def create_swapi_l3a_cdf(alpha_temperature_density_calibration_file,
-                         geometric_factor_calibration_file,
+def create_swapi_l3a_cdf(geometric_factor_calibration_file,
                          instrument_response_calibration_file, density_of_neutral_helium_calibration_file,
                          imap_swapi_efficiency_lut_file, cdf_file, mock_spice):
     ephemeris_time_for_epoch = int(100000 * 1e9)
@@ -264,8 +261,6 @@ def create_swapi_l3a_cdf(alpha_temperature_density_calibration_file,
 
     mock_spice.sxform.side_effect = mock_sxform
 
-    alpha_temperature_density_calibration_table = AlphaTemperatureDensityCalibrationTable.from_file(
-        alpha_temperature_density_calibration_file)
     efficiency_calibration_table = EfficiencyCalibrationTable(imap_swapi_efficiency_lut_file)
     geometric_factor_calibration_table = GeometricFactorCalibrationTable.from_file(geometric_factor_calibration_file)
     instrument_response_calibration_table = InstrumentResponseLookupTableCollection.from_file(
@@ -276,7 +271,6 @@ def create_swapi_l3a_cdf(alpha_temperature_density_calibration_file,
     swapi_data = read_l2_swapi_data(swapi_cdf_data)
     swapi_l3_dependencies = SwapiL3ADependencies(
         data=swapi_data,
-        alpha_temperature_density_calibration_table=alpha_temperature_density_calibration_table,
         efficiency_calibration_table=efficiency_calibration_table,
         geometric_factor_calibration_table=geometric_factor_calibration_table,
         instrument_response_calibration_table=instrument_response_calibration_table,
@@ -1025,7 +1019,6 @@ if __name__ == "__main__":
     if "swapi" in sys.argv:
         if "l3a" in sys.argv:
             paths = create_swapi_l3a_cdf(
-                str(get_test_data_path("swapi/imap_swapi_alpha-density-temperature-lut_20240920_v000.dat")),
                 str(get_test_data_path("swapi/imap_swapi_energy-gf-pui-lut_20100101_v001.csv")),
                 str(get_test_data_path("swapi/imap_swapi_instrument-response-lut_20241023_v000.zip")),
                 str(get_test_data_path(
