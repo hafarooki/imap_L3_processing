@@ -476,6 +476,17 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
         self.assertGreater(result.temperature, 1e4)
         self.assertLess(result.temperature, 1e7)
 
+    @unittest.expectedFailure
+    def test_weak_alpha_density_ratio(self):
+        """Chunk 58: weak alpha signal (T_p ~161K K). Density must not collapse.
+        Currently fails — LM still finds the n↓/T↑ ridge for weak signals."""
+        f = _load_fixture("weak_alpha")
+        result = self._run_alpha_fit("weak_alpha")
+        self.assertEqual(result.bad_fit_flag, 0)
+        ratio = result.density / float(f["proton_density"])
+        self.assertGreater(ratio, 0.01)
+        self.assertLess(ratio, 0.10)
+
 
 if __name__ == "__main__":
     unittest.main()
