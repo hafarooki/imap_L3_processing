@@ -126,13 +126,111 @@ class SwapiProcessorIntegration(unittest.TestCase):
         # check that at least one chunk produced a finite, physical solar-wind speed.
         with CDF(str(expected_file_path)) as cdf:
             speeds = np.asarray(cdf["proton_sw_speed"][...], dtype=float)
+            temperatures = np.asarray(cdf["proton_sw_temperature"][...], dtype=float)
+            densities = np.asarray(cdf["proton_sw_density"][...], dtype=float)
+            clock_angles = np.asarray(cdf["proton_sw_clock_angle"][...], dtype=float)
+            deflection_angles = np.asarray(
+                cdf["proton_sw_deflection_angle"][...], dtype=float
+            )
+            bulk_vel_sun = np.asarray(
+                cdf["proton_sw_bulk_velocity_rtn_sun"][...], dtype=float
+            )
+            bulk_vel_sc = np.asarray(
+                cdf["proton_sw_bulk_velocity_rtn_sc"][...], dtype=float
+            )
+            speed_uncerts = np.asarray(
+                cdf["proton_sw_speed_uncert"][...], dtype=float
+            )
+            temp_uncerts = np.asarray(
+                cdf["proton_sw_temperature_uncert"][...], dtype=float
+            )
+            density_uncerts = np.asarray(
+                cdf["proton_sw_density_uncert"][...], dtype=float
+            )
+            flags = np.asarray(cdf["swp_flags"][...])
+
         finite = speeds[np.isfinite(speeds)]
-        self.assertGreater(
-            len(finite), 0, "no chunk produced a finite proton_sw_speed"
-        )
+        self.assertGreater(len(finite), 0, "no chunk produced a finite proton_sw_speed")
         self.assertTrue(
             np.all((finite > 200.0) & (finite < 1500.0)),
             f"finite speeds outside plausible heliospheric range: {finite}",
+        )
+
+        # Regression check: spot-check 3 time indices against hardcoded values
+        # from a known-good run. Tolerances are 1% relative.
+        chk = [0, 4, -1]
+        np.testing.assert_allclose(
+            speeds[chk],
+            [474.635, 475.007, 515.447],
+            rtol=0.01,
+            err_msg="proton_sw_speed regression",
+        )
+        np.testing.assert_allclose(
+            temperatures[chk],
+            [55962.0, 68086.8, 185338.6],
+            rtol=0.01,
+            err_msg="proton_sw_temperature regression",
+        )
+        np.testing.assert_allclose(
+            densities[chk],
+            [2.6931, 3.2717, 4.4771],
+            rtol=0.01,
+            err_msg="proton_sw_density regression",
+        )
+        np.testing.assert_allclose(
+            clock_angles[chk],
+            [56.872, 76.194, 144.707],
+            rtol=0.01,
+            err_msg="proton_sw_clock_angle regression",
+        )
+        np.testing.assert_allclose(
+            deflection_angles[chk],
+            [175.348, 174.780, 173.174],
+            rtol=0.01,
+            err_msg="proton_sw_deflection_angle regression",
+        )
+        np.testing.assert_allclose(
+            bulk_vel_sun[chk],
+            [
+                [474.122, 30.273, 17.336],
+                [474.777, 38.661, 5.568],
+                [512.929, 22.772, -53.293],
+            ],
+            rtol=0.01,
+            err_msg="proton_sw_bulk_velocity_rtn_sun regression",
+        )
+        np.testing.assert_allclose(
+            bulk_vel_sc[chk],
+            [
+                [474.181, 0.720, 20.762],
+                [474.835, 9.108, 8.993],
+                [512.981, -6.781, -49.897],
+            ],
+            rtol=0.01,
+            err_msg="proton_sw_bulk_velocity_rtn_sc regression",
+        )
+        np.testing.assert_allclose(
+            speed_uncerts[chk],
+            [0.16161, 0.16623, 0.28344],
+            rtol=0.01,
+            err_msg="proton_sw_speed_uncert regression",
+        )
+        np.testing.assert_allclose(
+            temp_uncerts[chk],
+            [796.40, 935.87, 2468.61],
+            rtol=0.01,
+            err_msg="proton_sw_temperature_uncert regression",
+        )
+        np.testing.assert_allclose(
+            density_uncerts[chk],
+            [0.022213, 0.028766, 0.047723],
+            rtol=0.01,
+            err_msg="proton_sw_density_uncert regression",
+        )
+        np.testing.assert_array_equal(
+            flags,
+            np.zeros(len(flags), dtype=np.uint16),
+            err_msg="swp_flags should all be 0",
         )
 
     def test_swapi_processor_with_synthetic_data(self):
@@ -210,6 +308,33 @@ class SwapiProcessorIntegration(unittest.TestCase):
                 # check that at least one chunk produced a finite, physical solar-wind speed.
                 with CDF(str(expected_file_path)) as cdf:
                     speeds = np.asarray(cdf["proton_sw_speed"][...], dtype=float)
+                    temperatures = np.asarray(
+                        cdf["proton_sw_temperature"][...], dtype=float
+                    )
+                    densities = np.asarray(cdf["proton_sw_density"][...], dtype=float)
+                    clock_angles = np.asarray(
+                        cdf["proton_sw_clock_angle"][...], dtype=float
+                    )
+                    deflection_angles = np.asarray(
+                        cdf["proton_sw_deflection_angle"][...], dtype=float
+                    )
+                    bulk_vel_sun = np.asarray(
+                        cdf["proton_sw_bulk_velocity_rtn_sun"][...], dtype=float
+                    )
+                    bulk_vel_sc = np.asarray(
+                        cdf["proton_sw_bulk_velocity_rtn_sc"][...], dtype=float
+                    )
+                    speed_uncerts = np.asarray(
+                        cdf["proton_sw_speed_uncert"][...], dtype=float
+                    )
+                    temp_uncerts = np.asarray(
+                        cdf["proton_sw_temperature_uncert"][...], dtype=float
+                    )
+                    density_uncerts = np.asarray(
+                        cdf["proton_sw_density_uncert"][...], dtype=float
+                    )
+                    flags = np.asarray(cdf["swp_flags"][...])
+
                 finite = speeds[np.isfinite(speeds)]
                 self.assertGreater(
                     len(finite), 0, "no chunk produced a finite proton_sw_speed"
@@ -217,6 +342,83 @@ class SwapiProcessorIntegration(unittest.TestCase):
                 self.assertTrue(
                     np.all((finite > 200.0) & (finite < 1500.0)),
                     f"finite speeds outside plausible heliospheric range: {finite}",
+                )
+
+                # Regression check: spot-check 3 time indices against hardcoded values
+                # from a known-good run. Tolerances are 1% relative.
+                chk = [0, 4, 9]
+                np.testing.assert_allclose(
+                    speeds[chk],
+                    [492.264, 492.264, 492.264],
+                    rtol=0.01,
+                    err_msg="proton_sw_speed regression",
+                )
+                np.testing.assert_allclose(
+                    temperatures[chk],
+                    [87690.3, 87690.2, 87690.2],
+                    rtol=0.01,
+                    err_msg="proton_sw_temperature regression",
+                )
+                np.testing.assert_allclose(
+                    densities[chk],
+                    [0.30525, 0.30525, 0.30525],
+                    rtol=0.01,
+                    err_msg="proton_sw_density regression",
+                )
+                np.testing.assert_allclose(
+                    clock_angles[chk],
+                    [320.43, 322.47, 320.21],
+                    rtol=0.01,
+                    err_msg="proton_sw_clock_angle regression",
+                )
+                np.testing.assert_allclose(
+                    deflection_angles[chk],
+                    [180.0, 180.0, 180.0],
+                    rtol=0.01,
+                    err_msg="proton_sw_deflection_angle regression",
+                )
+                np.testing.assert_allclose(
+                    bulk_vel_sun[chk],
+                    [
+                        [490.866, -8.775, 0.5805],
+                        [490.864, -8.799, 0.5827],
+                        [490.862, -8.829, 0.5854],
+                    ],
+                    rtol=0.01,
+                    err_msg="proton_sw_bulk_velocity_rtn_sun regression",
+                )
+                np.testing.assert_allclose(
+                    bulk_vel_sc[chk],
+                    [
+                        [490.741, -38.548, 3.327],
+                        [490.739, -38.572, 3.329],
+                        [490.737, -38.602, 3.331],
+                    ],
+                    rtol=0.01,
+                    err_msg="proton_sw_bulk_velocity_rtn_sc regression",
+                )
+                np.testing.assert_allclose(
+                    speed_uncerts[chk],
+                    [0.5277, 0.5277, 0.5277],
+                    rtol=0.01,
+                    err_msg="proton_sw_speed_uncert regression",
+                )
+                np.testing.assert_allclose(
+                    temp_uncerts[chk],
+                    [3218.9, 3218.9, 3218.9],
+                    rtol=0.01,
+                    err_msg="proton_sw_temperature_uncert regression",
+                )
+                np.testing.assert_allclose(
+                    density_uncerts[chk],
+                    [0.005735, 0.005735, 0.005735],
+                    rtol=0.01,
+                    err_msg="proton_sw_density_uncert regression",
+                )
+                np.testing.assert_array_equal(
+                    flags,
+                    np.zeros(10, dtype=np.uint16),
+                    err_msg="swp_flags should all be 0",
                 )
 
 

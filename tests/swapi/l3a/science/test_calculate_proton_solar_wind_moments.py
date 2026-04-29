@@ -1119,11 +1119,7 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
             PROTON_MASS_KG,
         )
 
-        with patch(
-            "imap_l3_processing.swapi.l3a.utils.get_swapi_geometry",
-            return_value=rot,
-        ):
-            result = self.fit(count_rate, voltages, times, sr)
+        result = self.fit(count_rate, voltages, sr, 1.0, rot)
 
         self.assertIsInstance(result, ProtonSolarWindMoments)
         self.assertGreater(result.density, 0)
@@ -1162,12 +1158,8 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
         perturbed = count_rate.copy()
         perturbed[below] = 0.0
 
-        with patch(
-            "imap_l3_processing.swapi.l3a.utils.get_swapi_geometry",
-            return_value=rot,
-        ):
-            baseline = self.fit(count_rate, voltages, times, sr)
-            with_perturb = self.fit(perturbed, voltages, times, sr)
+        baseline = self.fit(count_rate, voltages, sr, 1.0, rot)
+        with_perturb = self.fit(perturbed, voltages, sr, 1.0, rot)
 
         np.testing.assert_allclose(with_perturb.density, baseline.density, rtol=1e-3)
         np.testing.assert_allclose(

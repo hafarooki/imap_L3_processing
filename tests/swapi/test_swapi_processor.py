@@ -55,10 +55,12 @@ class TestSwapiProcessor(TestCase):
     @patch("imap_l3_processing.swapi.swapi_processor.calculate_helium_pui_density")
     @patch("imap_l3_processing.swapi.swapi_processor.calculate_helium_pui_temperature")
     @patch("imap_l3_processing.swapi.swapi_processor.get_swapi_dsrf_to_rtn")
+    @patch("imap_l3_processing.swapi.swapi_processor.get_swapi_geometry")
     @patch("imap_l3_processing.processor.spiceypy")
     def test_process_l3a_pui(
         self,
         mock_spicepy,
+        mock_get_swapi_geometry,
         mock_get_swapi_dsrf_to_rtn,
         mock_calculate_helium_pui_temperature,
         mock_calculate_helium_pui_density,
@@ -87,6 +89,7 @@ class TestSwapiProcessor(TestCase):
         start_date_as_str = datetime.strftime(start_date, "%Y%m%d")
 
         mock_spicepy.ktotal.return_value = 0
+        mock_get_swapi_geometry.return_value = np.tile(np.eye(3), (100, 1, 1))
         mock_get_swapi_dsrf_to_rtn.return_value = np.eye(3).reshape(1, 3, 3)
 
         returned_bulk_velocity_rtn = np.array([400.0, 10.0, 5.0])
@@ -364,10 +367,12 @@ class TestSwapiProcessor(TestCase):
     @patch("imap_l3_processing.swapi.swapi_processor.calculate_helium_pui_density")
     @patch("imap_l3_processing.swapi.swapi_processor.calculate_helium_pui_temperature")
     @patch("imap_l3_processing.swapi.swapi_processor.get_swapi_dsrf_to_rtn")
+    @patch("imap_l3_processing.swapi.swapi_processor.get_swapi_geometry")
     @patch("imap_l3_processing.processor.spiceypy")
     def test_process_l3a_pui_bad_fit_flag_propagated_to_quality_flags(
         self,
         mock_spicepy,
+        mock_get_swapi_geometry,
         mock_get_swapi_dsrf_to_rtn,
         mock_calculate_helium_pui_temperature,
         mock_calculate_helium_pui_density,
@@ -396,6 +401,7 @@ class TestSwapiProcessor(TestCase):
         start_date_as_str = datetime.strftime(start_date, "%Y%m%d")
 
         mock_spicepy.ktotal.return_value = 0
+        mock_get_swapi_geometry.return_value = np.tile(np.eye(3), (100, 1, 1))
         mock_get_swapi_dsrf_to_rtn.return_value = np.eye(3).reshape(1, 3, 3)
 
         mock_fit_solar_wind_proton_moments.return_value = ProtonSolarWindMoments(
@@ -510,10 +516,12 @@ class TestSwapiProcessor(TestCase):
     @patch("imap_l3_processing.swapi.swapi_processor.SwapiL3ADependencies")
     @patch("imap_l3_processing.swapi.swapi_processor.get_spacecraft_velocity_rtn")
     @patch("imap_l3_processing.swapi.swapi_processor.get_swapi_dsrf_to_rtn")
+    @patch("imap_l3_processing.swapi.swapi_processor.get_swapi_geometry")
     @patch("imap_l3_processing.processor.spiceypy")
     def test_process_l3a_proton(
         self,
         mock_spicepy,
+        mock_get_swapi_geometry,
         mock_get_swapi_dsrf_to_rtn,
         mock_get_spacecraft_velocity_rtn,
         mock_swapi_l3_dependencies_class,
@@ -539,6 +547,7 @@ class TestSwapiProcessor(TestCase):
         start_date_as_str = datetime.strftime(start_date, "%Y%m%d")
 
         mock_spicepy.ktotal.return_value = 0
+        mock_get_swapi_geometry.return_value = np.tile(np.eye(3), (100, 1, 1))
         mock_get_swapi_dsrf_to_rtn.return_value = np.eye(3).reshape(1, 3, 3)
         mock_get_spacecraft_velocity_rtn.return_value = np.zeros(3)
 
@@ -643,15 +652,6 @@ class TestSwapiProcessor(TestCase):
         )
         mock_chunk_l2_data.assert_has_calls([call(swapi_l3a_dependencies.data, 5)])
 
-        fit_call_args = mock_fit_solar_wind_proton_moments.call_args
-        np.testing.assert_array_equal(
-            coincidence_count_rate[:, 1:].flatten(), fit_call_args.args[0]
-        )
-        np.testing.assert_array_equal(
-            energy[:, 1:].flatten() / SWAPI_L2_K_FACTOR, fit_call_args.args[1]
-        )
-        self.assertIs(swapi_l3a_dependencies.swapi_response, fit_call_args.args[3])
-
         (
             actual_proton_metadata,
             actual_proton_epoch,
@@ -662,6 +662,7 @@ class TestSwapiProcessor(TestCase):
             actual_proton_sw_deflection_angle,
             actual_quality_flags,
             actual_proton_sw_bulk_velocity_rtn_sun,
+            actual_proton_sw_bulk_velocity_rtn_sc,
         ) = mock_proton_solar_wind_data_constructor.call_args.args
 
         self.assertEqual(expected_proton_metadata, actual_proton_metadata)
@@ -729,10 +730,12 @@ class TestSwapiProcessor(TestCase):
     @patch("imap_l3_processing.swapi.swapi_processor.SwapiL3ADependencies")
     @patch("imap_l3_processing.swapi.swapi_processor.get_spacecraft_velocity_rtn")
     @patch("imap_l3_processing.swapi.swapi_processor.get_swapi_dsrf_to_rtn")
+    @patch("imap_l3_processing.swapi.swapi_processor.get_swapi_geometry")
     @patch("imap_l3_processing.processor.spiceypy")
     def test_process_l3a_proton_propagates_bad_fit_flag(
         self,
         mock_spicepy,
+        mock_get_swapi_geometry,
         mock_get_swapi_dsrf_to_rtn,
         mock_get_spacecraft_velocity_rtn,
         mock_swapi_l3_dependencies_class,
@@ -756,6 +759,7 @@ class TestSwapiProcessor(TestCase):
         input_version = "v123"
 
         mock_spicepy.ktotal.return_value = 0
+        mock_get_swapi_geometry.return_value = np.tile(np.eye(3), (100, 1, 1))
         mock_get_swapi_dsrf_to_rtn.return_value = np.eye(3).reshape(1, 3, 3)
         mock_get_spacecraft_velocity_rtn.return_value = np.zeros(3)
 
@@ -1024,22 +1028,33 @@ class TestSwapiProcessor(TestCase):
     @patch("imap_l3_processing.utils.ImapAttributeManager")
     @patch("imap_l3_processing.swapi.swapi_processor.SwapiL3AlphaSolarWindData")
     @patch("imap_l3_processing.utils.write_cdf")
-    @patch(
-        "imap_l3_processing.swapi.swapi_processor.SwapiProcessor._fit_alpha_moments_for_chunk"
-    )
+    @patch("imap_l3_processing.swapi.swapi_processor.fit_solar_wind_alpha_moments")
+    @patch("imap_l3_processing.swapi.swapi_processor.fit_solar_wind_proton_moments")
     @patch("imap_l3_processing.swapi.swapi_processor.chunk_l2_data")
     @patch("imap_l3_processing.swapi.swapi_processor.SwapiL3ADependencies")
+    @patch("imap_l3_processing.swapi.swapi_processor.get_swapi_dsrf_to_rtn")
+    @patch("imap_l3_processing.swapi.swapi_processor.get_swapi_geometry")
     @patch("imap_l3_processing.processor.spiceypy")
     def test_process_l3a_alpha(
         self,
         mock_spicepy,
+        mock_get_swapi_geometry,
+        mock_get_swapi_dsrf_to_rtn,
         mock_swapi_l3_dependencies_class,
         mock_chunk_l2_data,
-        mock_fit_alpha_moments_for_chunk,
+        mock_fit_solar_wind_proton_moments,
+        mock_fit_solar_wind_alpha_moments,
         mock_write_cdf,
         mock_alpha_solar_wind_data_constructor,
         mock_imap_attribute_manager,
     ):
+        from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_moments import (
+            AlphaSolarWindMoments,
+        )
+        from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
+            ProtonSolarWindMoments,
+        )
+
         instrument = "swapi"
         incoming_data_level = "l2"
         dependency_start_date = datetime.strftime(datetime(2025, 1, 1), "%Y%m%d")
@@ -1052,11 +1067,14 @@ class TestSwapiProcessor(TestCase):
         start_date_as_str = datetime.strftime(start_date, "%Y%m%d")
 
         mock_spicepy.ktotal.return_value = 0
+        mock_get_swapi_geometry.return_value = np.tile(np.eye(3), (100, 1, 1))
+        mock_get_swapi_dsrf_to_rtn.return_value = np.eye(3).reshape(1, 3, 3)
+        mock_swapi_l3_dependencies_class.fetch_dependencies.return_value.mag_l1d_data = None
 
         initial_epoch = 10
 
         epoch = np.array([initial_epoch, 11, 12, 13])
-        energy = np.array([15000, 16000, 17000, 18000, 19000])
+        energy = np.tile([15000, 16000, 17000, 18000, 19000], (4, 1))
         coincidence_count_rate = np.array(
             [
                 [4, 5, 6, 7, 8],
@@ -1094,22 +1112,30 @@ class TestSwapiProcessor(TestCase):
             instrument, outgoing_data_level, start_date, end_date, input_version
         )
 
-        # Set up a mock AlphaSolarWindMoments returned by the moments fitter.
-        mock_moments = Mock()
-        mock_moments.density = 0.05
-        mock_moments.density_sigma = 0.01
-        mock_moments.temperature = 1000.0
-        mock_moments.temperature_sigma = 50.0
-        mock_moments.bulk_velocity_rtn = np.array([450.0, 0.0, 0.0])
-        mock_moments.velocity_covariance_rtn = np.zeros((3, 3))
-        mock_moments.delta_v = 10.0
-        mock_moments.delta_v_sigma = 1.0
-        mock_moments._b_hat_rtn = np.array([1.0, 0.0, 0.0])
-        mock_moments._ref_proton_density = 5.0
-        mock_moments._ref_proton_temperature = 10.0
-        mock_moments._ref_proton_velocity_rtn = np.array([440.0, 0.0, 0.0])
-        mock_moments.bad_fit_flag = SwapiL3Flags.NONE
-        mock_fit_alpha_moments_for_chunk.return_value = mock_moments
+        mock_fit_solar_wind_proton_moments.return_value = ProtonSolarWindMoments(
+            density=5.0,
+            temperature=10000.0,
+            bulk_velocity_rtn=np.array([440.0, 0.0, 0.0]),
+            bad_fit_flag=SwapiL3Flags.NONE,
+            density_sigma=0.5,
+            temperature_sigma=100.0,
+            velocity_covariance=np.eye(3),
+        )
+
+        # AlphaSolarWindMoments must be a real (picklable) dataclass, not a Mock,
+        # because it is returned from a forked worker process via the result queue.
+        alpha_moments = AlphaSolarWindMoments(
+            density=0.05,
+            density_sigma=0.01,
+            temperature=1000.0,
+            temperature_sigma=50.0,
+            bulk_velocity_rtn=np.array([450.0, 0.0, 0.0]),
+            velocity_covariance_rtn=np.zeros((3, 3)),
+            delta_v=10.0,
+            delta_v_sigma=1.0,
+            bad_fit_flag=SwapiL3Flags.NONE,
+        )
+        mock_fit_solar_wind_alpha_moments.return_value = alpha_moments
 
         alpha_solar_wind_data = mock_alpha_solar_wind_data_constructor.return_value
         expected_alpha_metadata = replace(input_metadata, descriptor="alpha-sw")
@@ -1156,7 +1182,6 @@ class TestSwapiProcessor(TestCase):
         )
 
         mock_chunk_l2_data.assert_has_calls([call(sentinel.swapi_l2_data, 5)])
-        mock_fit_alpha_moments_for_chunk.assert_called_once()
 
         mock_manager.add_global_attribute.assert_has_calls(
             [
@@ -1196,10 +1221,10 @@ class TestSwapiProcessor(TestCase):
             actual_bad_fit_flag, np.array([SwapiL3Flags.NONE])
         )
 
-        # Moments kwargs are populated from _fit_alpha_moments_for_chunk.
+        # Moments kwargs are populated from fit_solar_wind_alpha_moments.
         kwargs = mock_alpha_solar_wind_data_constructor.call_args.kwargs
         np.testing.assert_array_equal(
-            kwargs["alpha_sw_moments_density"], np.array([mock_moments.density])
+            kwargs["alpha_sw_moments_density"], np.array([alpha_moments.density])
         )
         np.testing.assert_array_equal(
             kwargs["alpha_sw_moments_bad_fit_flag"], np.array([int(SwapiL3Flags.NONE)])
