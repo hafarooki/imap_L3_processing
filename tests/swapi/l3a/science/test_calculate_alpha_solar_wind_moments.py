@@ -36,7 +36,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
 )
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
-from tests.test_helpers import get_test_instrument_team_data_path
+from tests.test_helpers import get_test_data_path, get_test_instrument_team_data_path
 
 
 _AZIMUTHAL_TRANSMISSION_PATH = get_test_instrument_team_data_path(
@@ -383,6 +383,94 @@ class TestVelocityCovarianceComposition(unittest.TestCase):
         # Synthesize what the fitter would build.
         actual = sigma_p + sigma_dv**2 * np.outer(b_hat, b_hat)
         np.testing.assert_allclose(actual, expected)
+
+
+# -------------------------------------------------------------------------
+# Regression tests on real L2 spectra
+# -------------------------------------------------------------------------
+
+_FIXTURE_PATH = get_test_data_path("swapi/alpha_fit_test_spectra.npz")
+
+
+def _load_fixture(name: str) -> dict:
+    """Load a named fixture from the .npz file."""
+    data = np.load(_FIXTURE_PATH)
+    prefix = f"{name}__"
+    return {k[len(prefix):]: data[k] for k in data.files if k.startswith(prefix)}
+
+
+class TestAlphaFitRealSpectra(unittest.TestCase):
+    """End-to-end alpha fits on real L2 spectra extracted from
+    imap_swapi_l2_sci_20260101_v001.cdf.
+
+    Each fixture contains pre-computed rotation matrices and Stage 1
+    proton results so SPICE is not required.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sr = _swapi_response()
+
+    def _run_alpha_fit(self, fixture_name: str) -> AlphaSolarWindMoments:
+        f = _load_fixture(fixture_name)
+        proton = ProtonSolarWindMoments(
+            density=float(f["proton_density"]),
+            temperature=float(f["proton_temperature"]),
+            bulk_velocity_rtn=f["proton_velocity_rtn"],
+            bad_fit_flag=0,
+            velocity_covariance=f["proton_velocity_covariance"],
+        )
+        return fit_solar_wind_alpha_moments(
+            count_rate=f["cr_flat"],
+            esa_voltage=f["esa_flat"],
+            measurement_time=np.zeros(len(f["cr_flat"]), dtype="int64"),
+            swapi_response=self.sr,
+            proton_moments=proton,
+            b_hat_rtn=f["b_hat_rtn"],
+            alpha_effective_area_scale=float(f["alpha_eff_scale"]),
+            proton_effective_area_scale=float(f["proton_eff_scale"]),
+            rotation_matrices=f["rotation_matrices"],
+        )
+
+    def test_strong_alpha_density_not_collapsed(self):
+        """Chunk 384: clear alpha peak at ~700 Hz. Old code gave n_α=0.009;
+        must now produce a physically reasonable density."""
+        result = self._run_alpha_fit("strong_alpha")
+        self.assertEqual(result.bad_fit_flag, 0)
+        self.assertGreater(result.density, 0.1)
+        self.assertLess(result.density, 1.0)
+
+    def test_strong_alpha_temperature_reasonable(self):
+        """Temperature should be order 1e5-1e6 K, not 1e7 K."""
+        result = self._run_alpha_fit("strong_alpha")
+        self.assertGreater(result.temperature, 5e4)
+        self.assertLess(result.temperature, 3e6)
+
+    def test_strong_alpha_ratio(self):
+        """n_α/n_p should be in the 1-10% range for typical solar wind."""
+        f = _load_fixture("strong_alpha")
+        result = self._run_alpha_fit("strong_alpha")
+        ratio = result.density / float(f["proton_density"])
+        self.assertGreater(ratio, 0.01)
+        self.assertLess(ratio, 0.10)
+
+    def test_hot_plasma_produces_valid_fit(self):
+        """Chunk 250: hot plasma (T_p ~407K K). Alpha fit should succeed."""
+        result = self._run_alpha_fit("hot_plasma")
+        self.assertEqual(result.bad_fit_flag, 0)
+        self.assertGreater(result.density, 0.01)
+        self.assertLess(result.density, 2.0)
+        self.assertGreater(result.temperature, 1e4)
+        self.assertLess(result.temperature, 1e7)
+
+    def test_cold_plasma_produces_valid_fit(self):
+        """Chunk 550: cold plasma (T_p ~62K K). Alpha fit should succeed."""
+        result = self._run_alpha_fit("cold_plasma")
+        self.assertEqual(result.bad_fit_flag, 0)
+        self.assertGreater(result.density, 0.01)
+        self.assertLess(result.density, 2.0)
+        self.assertGreater(result.temperature, 1e4)
+        self.assertLess(result.temperature, 1e7)
 
 
 if __name__ == "__main__":

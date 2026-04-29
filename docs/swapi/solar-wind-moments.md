@@ -295,41 +295,26 @@ When the LUT contains only the lab row, `proton_eff_scale = 1.0` exactly and pro
 
 ### Initial guess
 
-Stage 2's initial guess locates the alpha bump via log-space subtraction of the frozen proton model:
+Stage 2's initial guess locates the alpha bump by subtracting the deadtime-applied proton background from the sweep-averaged count rate:
 
-1. Average the 5 sweeps: `count_avg`, `proton_true_avg`, `proton_obs_avg = deadtime(proton_true_avg)`.
-2. Compute the alpha voltage search range from the proton fit speed $v_p^*$:
-   $$V_p^\text{peak} = \frac{m_p (v_p^*)^2}{2 e k^*}, \qquad V_\alpha \in [2 V_p^\text{peak},\; 4 V_p^\text{peak}]$$
-   This spans $\approx [1\times,\, \sqrt{2}\times]$ the proton speed for alphas.
-3. Form the log-space residual (both terms floored at 0.1 Hz to avoid log blow-up):
-   $$\ell_i = \log\!\max(C_i, 0.1) - \log\!\max(R_i^p, 0.1)$$
-   Guard: if $\max_i \ell_i < \log 2$ (observed rate never 2× the proton model in the alpha range), return no-guess.
-4. Gaussian fit on $\ell_i$ vs. $v_i^\alpha = \sqrt{2 k^* q_\alpha |V_i| / m_\alpha}$ within the voltage range, with $\mu$ bounded to $[v_\alpha^\text{min}, v_\alpha^\text{max}]$. Yields bulk speed $v_b^\alpha$ and thermal width $\sigma_v$. Floor $\sigma_v$ by the $\approx 11{,}600$ K temperature floor.
-5. Initial $\Delta v$: project the inferred radial speed difference onto $\hat{\mathbf{B}}$:
-   $$\Delta v_0 = (v_b^\alpha - v_p^*)\;(\hat{\mathbf{v}}_p \cdot \hat{\mathbf{B}})$$
-   This correctly handles reversed-field ($\hat{\mathbf{B}}$ sunward) and perpendicular-field geometries. The initial $\Delta v_0$ is clipped to the optimizer bounds (see "Speed constraint" below) before being passed to the optimizer.
-6. Density via sum-based estimate at FWHM bins only. Define the FWHM mask as bins within $\sqrt{2\ln 2}\,\sigma_v$ of $v_b^\alpha$. The marginal deadtime response per unit alpha density is
-   $$\delta_i = \text{deadtime}(R_i^p + R_i^{\alpha,\text{unit}}) - R_i^p$$
-   where $R_i^{\alpha,\text{unit}}$ is the unit-density alpha model at $v_p^* + \Delta v_0 \hat{\mathbf{B}}$. Then:
-   $$n_{\alpha,0} = \max\!\left(\frac{\sum_\text{FWHM}(C_i - R_i^p)}{\sum_\text{FWHM} \delta_i},\; 10^{-3}\right)$$
-   Summing (not averaging) gives the Poisson-correct estimator; clipping the numerator to $\geq 0$ after summing lets positive and negative residuals cancel before the floor.
+1. Average the 5 sweeps: `count_avg`, `proton_bg_avg` (deadtime-corrected proton model per sweep, then averaged).
+2. Convert voltages to energies: $E_i = k^* |V_i|$.
+3. Call `get_alpha_peak_indices(count_avg, energies)` to locate the alpha peak. This function finds the proton peak first, then walks backward to where counts start increasing again (start of the alpha bump), masks bins above this start and below $4\times$ the proton peak energy, and returns the alpha peak slice.
+4. Guard: require $\geq 3$ bins in the peak and at least one bin with positive residual $C_i - R_i^p > 0$.
+5. Gaussian fit on the residual $\max(C_i - R_i^p, 0)$ vs. alpha speed $v_i^\alpha$ at peak bins. Yields bulk speed $v_b^\alpha$ and thermal width $\sigma_v$. Floor $\sigma_v$ by the temperature floor ($\approx 11{,}600$ K equivalent).
+6. Density: scale a unit-density alpha model (at $\Delta v = 0$) to match the mean residual at the peak:
+   $$n_{\alpha,0} = \max\!\left(\frac{\overline{(C_i - R_i^p)_\text{peak}}}{\overline{R_i^{\alpha,\text{unit}}}},\; 10^{-3}\right)$$
+7. Return $(n_{\alpha,0}, T_\alpha, \Delta v = 0)$. The optimizer starts with $\Delta v = 0$ and the wrong-basin flip (below) handles sign ambiguity.
 
-The figure below shows these steps on a synthetic spectrum ($n_p = 5\,\text{cm}^{-3}$, $T_p = 116{,}045\,\text{K}$, $v_p = 450\,\text{km/s}$; $n_\alpha = 0.20\,\text{cm}^{-3}$, $T_\alpha = 464{,}181\,\text{K}$, $\Delta v = +30\,\text{km/s}$; 5 sweeps × 62 coarse bins, Poisson noise). Panel (a) shows the 5-sweep-averaged observed rate vs the frozen proton model, with the voltage search window shaded. The alpha bump is visible as a shoulder on the high-voltage flank. Panel (b) shows the log-space residual inside the window and the Gaussian fit that locates the bump. The initial-guess speed (495 km/s) is within 15 km/s of the ground truth (480 km/s), giving LM a basin-correct starting point; the initial $T_\alpha$ estimate from the Gaussian width is deliberately loose and is tightened by LM.
+The figure below shows these steps on three real L2 spectra from `imap_swapi_l2_sci_20260101`. Top row: 5-sweep-averaged observed count rate (blue dots) vs the frozen proton model (orange), with the detected alpha peak region shaded green. Bottom row: residual (observed − proton model) at all bins (grey) and the peak bins (green circles), with the Gaussian fit (red) that yields the initial $v_b^\alpha$.
 
-![Alpha peak-finding on the validation spectrum](figures/alpha_peak_finding.png)
+![Alpha peak-finding on real L2 spectra](figures/alpha_peak_finding.png)
 
 *Generated by `docs/swapi/figure_src/plot_alpha_peak_finding.py`.*
 
-### Speed constraint on $\Delta v$
+### Wrong-basin detection ($\Delta v$ flip)
 
-The physical requirement is $|\mathbf{v}_\alpha| \geq |\mathbf{v}_p|$ (alphas at least as fast as protons). Expanding:
-$$|\mathbf{v}_p + \Delta v\,\hat{\mathbf{B}}|^2 \geq |\mathbf{v}_p|^2 \;\Longleftrightarrow\; \Delta v\bigl(\Delta v + 2\,\mathbf{v}_p \cdot \hat{\mathbf{B}}\bigr) \geq 0.$$
-The physically relevant branch is:
-- $\mathbf{v}_p \cdot \hat{\mathbf{B}} > 0$: $\Delta v \geq 0$ (alpha drifts along $+\hat{\mathbf{B}}$, away from sun).
-- $\mathbf{v}_p \cdot \hat{\mathbf{B}} < 0$: $\Delta v \leq 0$ (alpha drifts along $-\hat{\mathbf{B}}$, still away from sun).
-- $\mathbf{v}_p \cdot \hat{\mathbf{B}} \approx 0$: unconstrained ($|\mathbf{v}_\alpha| \geq |\mathbf{v}_p|$ for any $\Delta v$).
-
-This constraint is enforced during optimization by switching from unconstrained Levenberg–Marquardt to Trust Region Reflective (`method='trf'`) with a lower bound $\Delta v \geq 0$ (when $\mathbf{v}_p \cdot \hat{\mathbf{B}} > 0$) or upper bound $\Delta v \leq 0$ (when $\mathbf{v}_p \cdot \hat{\mathbf{B}} < 0$). TRF prevents the optimizer from ever entering the proton-shoulder basin ($\Delta v < 0$ when $\mathbf{v}_p \cdot \hat{\mathbf{B}} > 0$), which can have lower $\chi^2$ than the true alpha basin but corresponds to fitting the proton thermal tail rather than an alpha population. No post-fit basin flip is needed.
+The 1-DOF $\Delta v$ parameterization creates a basin ambiguity along $\hat{\mathbf{B}}$: flipping $\Delta v \to -\Delta v$ can yield a comparable $\chi^2$ when the alpha bump sits near the proton thermal tail. After LM converges, the fit checks the flipped point $(\log n_\alpha, \log T_\alpha, -\Delta v)$. If $\chi^2_{\text{flipped}} < \chi^2_{\text{LM}}$, LM re-runs from the flipped point. This costs one extra residual evaluation typically, plus one extra LM run for the ~1% of cases that need it.
 
 ### Uncertainty propagation
 

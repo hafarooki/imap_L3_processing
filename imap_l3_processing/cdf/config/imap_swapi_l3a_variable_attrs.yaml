@@ -436,6 +436,23 @@ proton_sw_bulk_velocity_rtn_sun:
   VALIDMIN: -2000
   VALIDMAX: 2000
   FILLVAL: -1.000000e+31
+proton_sw_bulk_velocity_rtn_sc:
+  NAME: proton_sw_bulk_velocity_rtn_sc
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Proton solar wind bulk velocity in RTN (spacecraft rest frame)
+  DEPEND_0: epoch
+  DEPEND_1: rtn_label
+  VAR_TYPE: data
+  RECORD_VARYING: RV
+  DISPLAY_TYPE: time_series
+  VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
+  FIELDNAM: Proton SW Bulk Velocity RTN SC
+  FORMAT: F19.3
+  LABLAXIS: H+ SW bulk velocity RTN SC
+  UNITS: km/s
+  VALIDMIN: -2000
+  VALIDMAX: 2000
+  FILLVAL: -1.000000e+31
 alpha_sw_speed:
   NAME: alpha_sw_speed
   DATA_TYPE: CDF_REAL4

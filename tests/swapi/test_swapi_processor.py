@@ -824,7 +824,7 @@ class TestSwapiProcessor(TestCase):
         swapi_processor = SwapiProcessor(dependencies, input_metadata)
         swapi_processor.process()
 
-        (_, _, _, _, _, _, _, actual_quality_flags, _) = (
+        (_, _, _, _, _, _, _, actual_quality_flags, _, _) = (
             mock_proton_solar_wind_data_constructor.call_args.args
         )
         np.testing.assert_array_equal(
@@ -1024,7 +1024,9 @@ class TestSwapiProcessor(TestCase):
     @patch("imap_l3_processing.utils.ImapAttributeManager")
     @patch("imap_l3_processing.swapi.swapi_processor.SwapiL3AlphaSolarWindData")
     @patch("imap_l3_processing.utils.write_cdf")
-    @patch("imap_l3_processing.swapi.swapi_processor.SwapiProcessor._fit_alpha_moments_for_chunk")
+    @patch(
+        "imap_l3_processing.swapi.swapi_processor.SwapiProcessor._fit_alpha_moments_for_chunk"
+    )
     @patch("imap_l3_processing.swapi.swapi_processor.chunk_l2_data")
     @patch("imap_l3_processing.swapi.swapi_processor.SwapiL3ADependencies")
     @patch("imap_l3_processing.processor.spiceypy")
@@ -1063,7 +1065,9 @@ class TestSwapiProcessor(TestCase):
                 [19, 20, 21, 22, 23],
             ]
         )
-        coincidence_count_rate_uncertainty = np.zeros_like(coincidence_count_rate, dtype=float)
+        coincidence_count_rate_uncertainty = np.zeros_like(
+            coincidence_count_rate, dtype=float
+        )
 
         chunk_of_five = SwapiL2Data(
             epoch, energy, coincidence_count_rate, coincidence_count_rate_uncertainty
