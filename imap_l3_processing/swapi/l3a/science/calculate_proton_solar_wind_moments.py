@@ -92,25 +92,18 @@ class ProtonSolarWindMoments:
 def fit_solar_wind_proton_moments(
     count_rate: ndarray,
     esa_voltage: ndarray,
-    measurement_time: ndarray,
     swapi_response: SWAPIResponse,
-    central_effective_area_scale: float = 1.0,
-    rotation_matrices: ndarray | None = None,
+    central_effective_area_scale: float,
+    rotation_matrices: ndarray,
 ) -> ProtonSolarWindMoments:
     """Fit proton solar wind moments. ``central_effective_area_scale`` should be
     ``ε_p(t)/ε_p(t_lab)`` from the efficiency LUT — it's applied to each measurement's
     lab-derived central effective area before integration.
 
-    ``rotation_matrices`` may be precomputed and reused
-    across stage 1/stage 2 fits to avoid duplicate SPICE calls; if ``None``, the function
-    computes them internally from ``measurement_time``."""
+    ``rotation_matrices`` must be precomputed and reused
+    across stage 1/stage 2 fits to avoid duplicate SPICE calls."""
     from imap_l3_processing.constants import PROTON_MASS_PER_CHARGE_M_P_PER_E
     from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
-
-    # Algorithm described in docs/swapi/solar-wind-moments.md
-    # Step 1: Get RTN-to-SWAPI rotation matrices from SPICE
-    if rotation_matrices is None:
-        rotation_matrices = get_swapi_geometry(measurement_time)
 
     # Spin axis (body +Y in RTN) for the wrong-basin flip check in _optimize.
     # Captured here, before the half-mean mask below may drop the bin at index 0.
@@ -135,8 +128,6 @@ def fit_solar_wind_proton_moments(
         esa_voltage = esa_voltage[keep]
         count_rate = count_rate[keep]
         rotation_matrices = rotation_matrices[keep]
-        if measurement_time is not None:
-            measurement_time = np.asarray(measurement_time)[keep]
 
     # V-only passband grids (cached by V across calls), plus per-measurement species/V-
     # dependent scalars for v_0 and lab-derived central effective area times the time scale.

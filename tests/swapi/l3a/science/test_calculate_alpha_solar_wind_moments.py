@@ -456,19 +456,23 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
 
     def test_hot_plasma_produces_valid_fit(self):
         """Chunk 250: hot plasma (T_p ~407K K). Alpha fit should succeed."""
+        f = _load_fixture("hot_plasma")
         result = self._run_alpha_fit("hot_plasma")
         self.assertEqual(result.bad_fit_flag, 0)
-        self.assertGreater(result.density, 0.01)
-        self.assertLess(result.density, 2.0)
+        ratio = result.density / float(f["proton_density"])
+        self.assertGreater(ratio, 0.01)
+        self.assertLess(ratio, 0.10)
         self.assertGreater(result.temperature, 1e4)
         self.assertLess(result.temperature, 1e7)
 
     def test_cold_plasma_produces_valid_fit(self):
         """Chunk 550: cold plasma (T_p ~62K K). Alpha fit should succeed."""
+        f = _load_fixture("cold_plasma")
         result = self._run_alpha_fit("cold_plasma")
         self.assertEqual(result.bad_fit_flag, 0)
-        self.assertGreater(result.density, 0.01)
-        self.assertLess(result.density, 2.0)
+        ratio = result.density / float(f["proton_density"])
+        self.assertGreater(ratio, 0.01)
+        self.assertLess(ratio, 0.10)
         self.assertGreater(result.temperature, 1e4)
         self.assertLess(result.temperature, 1e7)
 

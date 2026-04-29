@@ -12,6 +12,7 @@ The L2 science CDF is generated on the fly by retiming an existing synthetic
 spectrum into the SPICE coverage window — keeping a date-shifted copy on disk
 would just be duplicate data.
 """
+
 import os
 import shutil
 import subprocess
@@ -26,7 +27,27 @@ from spacepy.pycdf import CDF
 
 import imap_l3_processing
 from tests.integration.integration_test_helpers import mock_imap_data_access
-from tests.test_helpers import get_run_local_data_path, get_test_data_path, get_test_instrument_team_data_path
+from tests.test_helpers import (
+    get_run_local_data_path,
+    get_test_data_path,
+    get_test_instrument_team_data_path,
+)
+
+import os
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+from unittest import skipUnless
+
+import imap_data_access
+from imap_data_access import (
+    ScienceFilePath,
+)
+
+import imap_l3_processing
+from tests.integration.integration_test_helpers import mock_imap_data_access
+from tests.test_helpers import get_test_data_path, get_run_local_data_path
 
 _L2_SOURCE = "swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf"
 _L2_SDC_NAME = "imap_swapi_l2_sci_20260120_v001.cdf"
@@ -43,19 +64,84 @@ def _materialize_retimed_l2(dest_dir: Path) -> Path:
         cdf.readonly(False)
         n = len(cdf["sci_start_time"])
         cdf["sci_start_time"][:] = [
-            (_L2_START + timedelta(seconds=12 * i)).isoformat(timespec="seconds") for i in range(n)
+            (_L2_START + timedelta(seconds=12 * i)).isoformat(timespec="seconds")
+            for i in range(n)
         ]
         cdf["epoch"][:] = [_L2_START + timedelta(seconds=12 * i) for i in range(n)]
     return dest
 
 
 class SwapiProcessorIntegration(unittest.TestCase):
+    @skipUnless(os.environ.get("IMAP_API_KEY"), "requires production API key")
+    def test_swapi_processor_with_production_data(self):
+        root_dir = Path(imap_l3_processing.__file__).parent.parent
+        os.chdir(root_dir)
+        imap_data_access.config["DATA_DIR"] = root_dir / "data"
+
+        anc_dir = root_dir / "data" / "imap" / "ancillary" / "swapi"
+        anc_dir.mkdir(parents=True, exist_ok=True)
+        for name in [
+            "imap_swapi_azimuthal-transmission_20260425_v001.csv",
+            "imap_swapi_central-effective-area_20260425_v001.csv",
+            "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
+        ]:
+            dest = anc_dir / name
+            if not dest.exists():
+                shutil.copy(root_dir / "instrument_team_data" / "swapi" / name, dest)
+
+        expected_file_path = ScienceFilePath(
+            "imap_swapi_l3a_proton-sw_20260101_v001.cdf"
+        ).construct_path()
+        if expected_file_path.parent.exists():
+            expected_file_path.unlink(missing_ok=True)
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "imap_l3_data_processor.py",
+                "--instrument",
+                "swapi",
+                "--data-level",
+                "l3a",
+                "--descriptor",
+                "proton-sw",
+                "--start-date",
+                "20260101",
+                "--version",
+                "v001",
+                "--dependency",
+                # TODO switch to dependency file
+                """
+                [{"type":"science","files":["imap_swapi_l2_sci_20260101_v001.cdf"]},{"type":"science","files":["imap_mag_l1d_norm-dsrf_20260101_v010.cdf"]},{"type":"ancillary","files":["imap_swapi_alpha-density-temperature-lut_20250125_v001.dat"]},{"type":"ancillary","files":["imap_swapi_efficiency-lut_20241020_v001.dat"]},{"type":"ancillary","files":["imap_swapi_energy-gf-pui-lut_20100101_v003.csv"]},{"type":"ancillary","files":["imap_swapi_instrument-response-lut_20241023_v001.zip"]},{"type":"ancillary","files":["imap_swapi_density-of-neutral-helium-lut_20241023_v002.dat"]},{"type":"ancillary","files":["imap_swapi_hydrogen-inflow-vector_20100101_v001.dat"]},{"type":"ancillary","files":["imap_swapi_helium-inflow-vector_20100101_v001.dat"]},{"type":"ancillary","files":["imap_swapi_azimuthal-transmission_20260425_v001.csv"]},{"type":"ancillary","files":["imap_swapi_central-effective-area_20260425_v001.csv"]},{"type":"ancillary","files":["imap_swapi_passband-fit-coefficients_20260425_v001.csv"]},{"type":"spice","files":["naif0012.tls","pck00011.tpc","imap_130.tf","imap_science_120.tf","imap_sclk_0161.tsc","de440.bsp","imap_recon_20250925_20260420_v01.bsp","imap_2025_358_2026_085_004.ah.bc","imap_dps_2025_363_2025_365_001.ah.bc","imap_dps_2025_359_2026_115_002.ah.bc"]}]
+                """,
+                # "imap_swapi_l3a_proton-sw_20260425_v001.json",
+            ]
+        )
+
+        self.assertEqual(0, result.returncode)
+        self.assertTrue(expected_file_path.exists())
+
+        # process_l3a_proton swallows per-chunk exceptions and writes fill values,
+        # so returncode==0 alone doesn't prove the fitter ran. Open the CDF and
+        # check that at least one chunk produced a finite, physical solar-wind speed.
+        with CDF(str(expected_file_path)) as cdf:
+            speeds = np.asarray(cdf["proton_sw_speed"][...], dtype=float)
+        finite = speeds[np.isfinite(speeds)]
+        self.assertGreater(
+            len(finite), 0, "no chunk produced a finite proton_sw_speed"
+        )
+        self.assertTrue(
+            np.all((finite > 200.0) & (finite < 1500.0)),
+            f"finite speeds outside plausible heliospheric range: {finite}",
+        )
+
     def test_swapi_processor_with_synthetic_data(self):
         root_dir = Path(imap_l3_processing.__file__).parent.parent
         os.chdir(root_dir)
         output_data_dir = get_run_local_data_path("swapi_integration")
         expected_file_path = (
-            output_data_dir / "imap/swapi/l3a/2026/01/imap_swapi_l3a_proton-sw_20260120_v001.cdf"
+            output_data_dir
+            / "imap/swapi/l3a/2026/01/imap_swapi_l3a_proton-sw_20260120_v001.cdf"
         )
         if expected_file_path.parent.exists():
             expected_file_path.unlink(missing_ok=True)
@@ -72,11 +158,21 @@ class SwapiProcessorIntegration(unittest.TestCase):
             spice_dir / "imap_2025_105_2026_105_01.ah.bc",
             spice_dir / "imap_dps_2025_105_2026_105_009.ah.bc",
         ]
-        swapi_inputs = [f for f in Path("tests/integration/test_data/swapi").iterdir() if f.is_file()]
+        swapi_inputs = [
+            f
+            for f in Path("tests/integration/test_data/swapi").iterdir()
+            if f.is_file()
+        ]
         swapi_inputs += [
-            get_test_instrument_team_data_path("swapi/imap_swapi_azimuthal-transmission_20260425_v001.csv"),
-            get_test_instrument_team_data_path("swapi/imap_swapi_central-effective-area_20260425_v001.csv"),
-            get_test_instrument_team_data_path("swapi/imap_swapi_passband-fit-coefficients_20260425_v001.csv"),
+            get_test_instrument_team_data_path(
+                "swapi/imap_swapi_azimuthal-transmission_20260425_v001.csv"
+            ),
+            get_test_instrument_team_data_path(
+                "swapi/imap_swapi_central-effective-area_20260425_v001.csv"
+            ),
+            get_test_instrument_team_data_path(
+                "swapi/imap_swapi_passband-fit-coefficients_20260425_v001.csv"
+            ),
         ]
 
         os.environ["IMAP_DATA_DIR"] = str(output_data_dir)
@@ -84,19 +180,30 @@ class SwapiProcessorIntegration(unittest.TestCase):
             l2_cdf = _materialize_retimed_l2(Path(tmp))
             input_files = spice_files + swapi_inputs + [l2_cdf]
             with mock_imap_data_access(output_data_dir, input_files):
-                result = subprocess.run([
-                    sys.executable, "imap_l3_data_processor.py",
-                    "--instrument", "swapi",
-                    "--data-level", "l3a",
-                    "--descriptor", "proton-sw",
-                    "--start-date", "20260120",
-                    "--version", "v001",
-                    "--dependency", "imap_swapi_l3a_proton-sw_20260425_v001.json",
-                ])
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "imap_l3_data_processor.py",
+                        "--instrument",
+                        "swapi",
+                        "--data-level",
+                        "l3a",
+                        "--descriptor",
+                        "proton-sw",
+                        "--start-date",
+                        "20260120",
+                        "--version",
+                        "v001",
+                        "--dependency",
+                        "imap_swapi_l3a_proton-sw_20260425_v001.json",
+                    ]
+                )
 
                 self.assertEqual(0, result.returncode)
-                self.assertTrue(expected_file_path.exists(),
-                                f"expected output CDF not found at {expected_file_path}")
+                self.assertTrue(
+                    expected_file_path.exists(),
+                    f"expected output CDF not found at {expected_file_path}",
+                )
 
                 # process_l3a_proton swallows per-chunk exceptions and writes fill values,
                 # so returncode==0 alone doesn't prove the fitter ran. Open the CDF and
@@ -104,9 +211,13 @@ class SwapiProcessorIntegration(unittest.TestCase):
                 with CDF(str(expected_file_path)) as cdf:
                     speeds = np.asarray(cdf["proton_sw_speed"][...], dtype=float)
                 finite = speeds[np.isfinite(speeds)]
-                self.assertGreater(len(finite), 0, "no chunk produced a finite proton_sw_speed")
-                self.assertTrue(np.all((finite > 200.0) & (finite < 1500.0)),
-                                f"finite speeds outside plausible heliospheric range: {finite}")
+                self.assertGreater(
+                    len(finite), 0, "no chunk produced a finite proton_sw_speed"
+                )
+                self.assertTrue(
+                    np.all((finite > 200.0) & (finite < 1500.0)),
+                    f"finite speeds outside plausible heliospheric range: {finite}",
+                )
 
 
 if __name__ == "__main__":

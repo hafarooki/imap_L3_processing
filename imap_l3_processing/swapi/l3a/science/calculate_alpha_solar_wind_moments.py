@@ -222,26 +222,41 @@ def fit_solar_wind_alpha_moments(
     if initial_guess is None:
         return _nan_alpha_moments(SwapiL3Flags.HI_CHI_SQ)
 
-    n0, T0, dv0 = initial_guess
+    n0, T0, dv0, peak_bin_idx = initial_guess
     proton_bulk = proton_bulk_rtn
 
-    # Sigma is per-bin Poisson; with flatten-not-average there is no √5 normalization to apply.
-    sigma = np.sqrt(np.maximum(count_rate * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
+    # Subset all per-measurement arrays to only the alpha peak bins across
+    # all sweeps, so LM fits the alpha bump rather than the proton-dominated
+    # tails (which create an n↓/T↑ degeneracy).
+    n_sweeps, n_bins = _infer_sweep_layout(esa_voltage)
+    peak_flat_idx = np.concatenate(
+        [peak_bin_idx + s * n_bins for s in range(n_sweeps)]
+    )
+    count_rate_peak = count_rate[peak_flat_idx]
+    proton_true_rate_peak = proton_true_rate[peak_flat_idx]
+    alpha_central_speeds_peak = alpha_central_speeds[peak_flat_idx]
+    alpha_central_eff_areas_peak = alpha_central_eff_areas[peak_flat_idx]
+    rotation_matrices_peak = rotation_matrices[peak_flat_idx]
+    passband_grids_peak = numba.typed.List(
+        [passband_grids[i] for i in peak_flat_idx]
+    )
+
+    sigma = np.sqrt(np.maximum(count_rate_peak * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
 
     def residuals(x):
         return _alpha_residuals_njit(
             x,
             proton_bulk,
             b_hat_rtn,
-            proton_true_rate,
-            count_rate,
+            proton_true_rate_peak,
+            count_rate_peak,
             sigma,
-            passband_grids,
-            alpha_central_speeds,
-            alpha_central_eff_areas,
+            passband_grids_peak,
+            alpha_central_speeds_peak,
+            alpha_central_eff_areas_peak,
             az_trans,
             az_trans_spacing,
-            rotation_matrices,
+            rotation_matrices_peak,
         )
 
     x0 = np.array([np.log(max(n0, 1e-3)), np.log(max(T0, 1e-3)), dv0])
@@ -303,7 +318,7 @@ def _alpha_initial_guess(
     proton_bulk_velocity_rtn: ndarray,
     b_hat_rtn: ndarray,
 ) -> Optional[tuple]:
-    """Return (n_α, T_α, Δv=0) as a starting point for LM, or None if peak-finding fails."""
+    """Return (n_α, T_α, Δv=0, peak_bin_indices) as a starting point for LM, or None if peak-finding fails."""
 
     n_meas = len(esa_voltage)
     if n_meas == 0:
@@ -383,7 +398,7 @@ def _alpha_initial_guess(
     n_alpha = float(np.nanmean(residual_peak)) / denom
     n_alpha = max(n_alpha, 1e-3)
 
-    return (n_alpha, T_alpha, 0.0)
+    return (n_alpha, T_alpha, 0.0, peak_idx)
 
 
 def _infer_sweep_layout(esa_voltage: ndarray) -> tuple:

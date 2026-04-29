@@ -1,5 +1,6 @@
 import logging
 import os
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 
@@ -76,14 +77,10 @@ def _mp_init_worker(swapi_response, efficiency_table, mag_l1d_data):
 
 def _derive_proton_velocity_angles(
     fitting_result: ProtonSolarWindMoments,
-    chunk_epoch_center_tt2000_ns,
-    dsrf_to_rtn=None,
+    dsrf_to_rtn,
 ) -> tuple:
     """Return (speed, clock_angle, deflection_angle) as ufloats from proton moments."""
-    if dsrf_to_rtn is None:
-        R = get_swapi_dsrf_to_rtn(np.array([chunk_epoch_center_tt2000_ns]))[0].T
-    else:
-        R = dsrf_to_rtn.T
+    R = dsrf_to_rtn.T
     u = R @ (fitting_result.bulk_velocity_rtn)
 
     speed = float(np.linalg.norm(u))
@@ -118,7 +115,7 @@ def _compute_b_hat_rtn(
     mag_l1d_data,
     chunk_epoch_center_tt2000_ns: int,
     chunk_epoch_delta_ns: int,
-    dsrf_to_rtn=None,
+    dsrf_to_rtn,
 ) -> np.ndarray:
     """Return the unit MAG vector at the chunk center, expressed in RTN. Returns NaN
     when MAG data is missing, the rebin produces non-finite values, or |B| is too small
@@ -131,13 +128,7 @@ def _compute_b_hat_rtn(
     )[0]
     if not np.all(np.isfinite(b_dsrf)) or np.linalg.norm(b_dsrf) < 1e-12:
         return np.full(3, np.nan)
-    if dsrf_to_rtn is None:
-        try:
-            R = get_swapi_dsrf_to_rtn(np.array([chunk_epoch_center_tt2000_ns]))[0]
-        except Exception:
-            return np.full(3, np.nan)
-    else:
-        R = dsrf_to_rtn
+    R = dsrf_to_rtn
     b_rtn = R @ b_dsrf
     return b_rtn / np.linalg.norm(b_rtn)
 
@@ -194,18 +185,16 @@ def _fit_proton_moments(
     efficiency_table,
     epoch,
     bin_slice,
-    rotation_matrices=None,
+    rotation_matrices,
 ) -> ProtonSolarWindMoments:
     count_rates = data_chunk.coincidence_count_rate[:, bin_slice].flatten()
     voltages = data_chunk.energy[:, bin_slice].flatten() / SWAPI_L2_K_FACTOR
-    measurement_times = _measurement_times_for_chunk(data_chunk, bin_slice)
     proton_eff_scale = float(efficiency_table.get_proton_efficiency_for(epoch)) / float(
         efficiency_table.eps_p_lab
     )
     return fit_solar_wind_proton_moments(
         count_rates,
         voltages,
-        measurement_times,
         swapi_response,
         central_effective_area_scale=proton_eff_scale,
         rotation_matrices=rotation_matrices,
@@ -239,7 +228,7 @@ def _proton_chunk_worker(
         )
         quality_flag |= fitting_result.bad_fit_flag
         speed, clock_angle, deflection_angle = _derive_proton_velocity_angles(
-            fitting_result, epoch, dsrf_to_rtn=dsrf_to_rtn
+            fitting_result, dsrf_to_rtn
         )
         bulk_velocity_rtn_sc = fitting_result.bulk_velocity_rtn
         bulk_velocity_rtn_sun = fitting_result.bulk_velocity_rtn + sc_velocity_rtn
@@ -286,7 +275,7 @@ def _pui_proton_chunk_worker(data_chunk, epoch, rotation_matrices, dsrf_to_rtn):
         )
         quality_flag |= fitting_result.bad_fit_flag
         speed, clock_angle, deflection_angle = _derive_proton_velocity_angles(
-            fitting_result, epoch, dsrf_to_rtn=dsrf_to_rtn
+            fitting_result, dsrf_to_rtn
         )
     except Exception:
         logger.info(
@@ -563,10 +552,7 @@ class SwapiProcessor(Processor):
                 dsrf = get_swapi_dsrf_to_rtn(np.array([epoch]))[0]
                 precomputed.append((epoch, rm, dsrf))
             except Exception:
-                logger.info(
-                    f"SPICE gap at epoch {epoch}, NaN-filling chunk",
-                    exc_info=True,
-                )
+                logger.warning(f"SPICE gap at epoch {epoch}, NaN-filling chunk")
                 precomputed.append((epoch, None, None))
 
         submittable = [
@@ -577,6 +563,7 @@ class SwapiProcessor(Processor):
 
         with ProcessPoolExecutor(
             max_workers=os.cpu_count(),
+            mp_context=multiprocessing.get_context("fork"),
             initializer=_mp_init_worker,
             initargs=(
                 dependencies.swapi_response,
@@ -741,10 +728,7 @@ class SwapiProcessor(Processor):
                 )
                 precomputed.append((epoch, rm, b_hat))
             except Exception:
-                logger.info(
-                    f"SPICE gap at epoch {epoch}, NaN-filling chunk",
-                    exc_info=True,
-                )
+                logger.warning(f"SPICE gap at epoch {epoch}, NaN-filling chunk")
                 precomputed.append((epoch, None, None))
 
         submittable = [
@@ -755,6 +739,7 @@ class SwapiProcessor(Processor):
 
         with ProcessPoolExecutor(
             max_workers=os.cpu_count(),
+            mp_context=multiprocessing.get_context("fork"),
             initializer=_mp_init_worker,
             initargs=(
                 dependencies.swapi_response,
@@ -857,10 +842,7 @@ class SwapiProcessor(Processor):
                 sc_vel = get_spacecraft_velocity_rtn(epoch)
                 precomputed.append((epoch, rm, dsrf, sc_vel))
             except Exception:
-                logger.info(
-                    f"SPICE gap at epoch {epoch}, NaN-filling chunk",
-                    exc_info=True,
-                )
+                logger.warning(f"SPICE gap at epoch {epoch}, NaN-filling chunk")
                 precomputed.append((epoch, None, None, None))
 
         results = []
@@ -872,6 +854,7 @@ class SwapiProcessor(Processor):
 
         with ProcessPoolExecutor(
             max_workers=os.cpu_count(),
+            mp_context=multiprocessing.get_context("fork"),
             initializer=_mp_init_worker,
             initargs=(
                 dependencies.swapi_response,

@@ -186,8 +186,8 @@ def _process_chunk(idx_range):
         result = fit_solar_wind_proton_moments(
             cr,
             _W_ESA,
-            measurement_time=None,
             swapi_response=_W_SR,
+            central_effective_area_scale=1,
             rotation_matrices=_W_ROT
         )
 
@@ -324,8 +324,8 @@ def main():
     fit_solar_wind_proton_moments(
         _cr0,
         _esa0,
-        measurement_time=None,
         swapi_response=sr,
+        central_effective_area_scale=1,
         rotation_matrices=_rot0,
     )
     print("JIT ready.")
