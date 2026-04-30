@@ -380,9 +380,8 @@ def _alpha_initial_guess(
         * (sigma_thermal_v * METERS_PER_KILOMETER) ** 2
         / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
     )
-
     # Extend the peak window toward higher speeds (lower bin indices) up to
-    # bulk_speed + 3σ.  This captures the rising edge of the alpha bump so
+    # bulk_speed + 2σ.  This captures the rising edge of the alpha bump so
     # that LM has enough width information to reject the n↓/T↑ ridge.
     all_speeds = esa_voltage_to_alpha_speed(voltage_per_sweep)
     upper_speed = bulk_speed + 2.0 * sigma_thermal_v
