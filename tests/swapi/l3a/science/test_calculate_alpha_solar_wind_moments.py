@@ -514,7 +514,7 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
         self.assertEqual(result.bad_fit_flag, 0)
         ratio = result.density / float(f["proton_density"])
         self.assertGreater(ratio, 0.008)
-        self.assertLess(ratio, 0.0012)
+        self.assertLess(ratio, 0.012)
 
 
 if __name__ == "__main__":

@@ -4,28 +4,27 @@
 
 - `imap_l3_processing/swapi/l3a/science/swapi_response.py` — Instrument response model. Loads calibration tables (azimuthal transmission, central effective area, passband polynomial fits) and builds a `PassbandGrid` per ESA voltage step via `SWAPIResponse.create_passband_grid`.
 - `imap_l3_processing/swapi/l3a/science/calculate_proton_solar_wind_moments.py` — Core proton fitting algorithm. `fit_solar_wind_proton_moments` implements the three-step procedure (SPICE → initial guess → Levenberg–Marquardt); `calculate_integral` is the Numba-JIT count-rate integral over elevation, azimuth, and speed.
-- `imap_l3_processing/swapi/l3a/science/calculate_alpha_solar_wind_moments.py` — Alpha particle moments fitter (Stage 2 of the two-stage proton-frozen scheme). `fit_solar_wind_alpha_moments` fits $(n_\alpha, T_\alpha, \Delta v)$ with proton parameters held fixed.
+- `imap_l3_processing/swapi/l3a/science/calcxwulate_alpha_solar_wind_moments.py` — Alpha particle moments fitter (Stage 2 of the two-stage proton-frozen scheme). `fit_solar_wind_alpha_moments` fits $(n_\alpha, T_\alpha, \Delta v)$ with proton parameters held fixed.
 - `imap_l3_processing/swapi/l3a/science/speed_calculation.py` — ESA bin layout constants (`SWAPI_SCIENCE_BINS`, `SWAPI_COARSE_SWEEP_BINS`, `SWAPI_FINE_SWEEP_BINS`), k-factor constants, `esa_voltage_to_proton_speed`/`esa_voltage_to_alpha_speed` conversions, and `get_alpha_peak_indices` for locating the alpha bump in the count-rate spectrum.
 - `imap_l3_processing/swapi/swapi_processor.py` — Production pipeline entry point. Dispatches on descriptor (`proton-sw`, `alpha-sw`, `pui-he`). Each product's processing method precomputes SPICE geometry, then distributes 5-sweep chunks across a `ProcessPoolExecutor` (fork-based multiprocessing). Module-level worker functions (`_proton_chunk_worker`, `_alpha_chunk_worker`, `_pui_proton_chunk_worker`) receive shared state (`SWAPIResponse`, `EfficiencyCalibrationTable`, MAG data) via an initializer. `_derive_proton_velocity_angles` converts fitted RTN velocity to speed, clock angle, and deflection angle in the DPS frame with delta-method uncertainty propagation.
 
 ## TODO
 
-- [x] Clock angle, deflection angle fix
 - [ ] Validate uncertainty
+- [ ] Clock angle, deflection angle fix
 - [ ] Validate alphas
-- [ ] Empirically validate alpha-species correction $\mathcal{A}_0^\alpha/\mathcal{A}_0^p = \varepsilon_\alpha/\varepsilon_p$ against OMNI alpha density (the paper does not prove this; alpha ABM measurements weren't taken)
+- [ ] Determine alpha efficiency. Maybe empirically validate alpha-species correction $\mathcal{A}_0^\alpha/\mathcal{A}_0^p = \varepsilon_\alpha/\varepsilon_p$ against OMNI alpha density (the paper does not prove this; alpha ABM measurements weren't taken)
 - [ ] Coordinate with cal-file format owner to add a `lab_time` field to the efficiency LUT.
 Interim: `eps_p_lab` is pinned to the first row at/after 2025-11-01 because the pre-2025-11 rows in the current LUT are placeholder values (0.02348 repeated) and using them as the lab denominator drove proton density 6× too low.
 Replace with the proper `lab_time` lookup once the LUT format gains the field (see `EfficiencyCalibrationTable.eps_p_lab`).
-- [ ] Remove old SW model from pickup ion code (?)
 - [ ] Dynamic calculation of pickup ion geometric factor (?)
 - [ ] Choose bad fit flags
 - [ ] Handle the padded SWAPI vs unpadded MAG data temporal mismatch
 - [ ] Human review: run integration test output through a CDF reader and sanity-check variable names, units, and fill values (test passes automatically)
 - [ ] Human review: read through unit tests top-to-bottom and verify coverage is meaningful, not just passing
-- [ ] Try Poisson MLE instead of least squares
-- [ ] Compare with WIND with production-like testing
 - [ ] Clarify behavior of partial last chunk from `chunk_l2_data` — if the day's sweep count isn't a multiple of 5, the final group has fewer sweeps and its epoch (`sci_start_time[0] + 30s`) is off-center; decide whether to drop it, pad it, or accept the timestamp offset
+- [ ] Handle daily repointing data gaps
+- [ ] Use L2 or L1D depending on what's available https://github.com/IMAP-Science-Operations-Center/imap_L3_processing/issues/13
 
 ## Model
 
