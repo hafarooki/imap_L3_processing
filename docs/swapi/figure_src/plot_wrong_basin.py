@@ -41,7 +41,6 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     _model_count_rates,
     apply_deadtime_correction_array,
     _residuals_njit,
-    SWAPI_LIVETIME_S,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -123,7 +122,7 @@ def main():
         .poisson(np.maximum(cr_clean, 0.0))
         .astype(float)
     )
-    sigma = np.sqrt(np.maximum(cr * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
+    log_cr = np.log(np.maximum(cr, 1e-30))
 
     print("Computing χ² grid (n, T, v_R held at truth)...")
     grid_vT = np.linspace(-80, 80, 51)
@@ -134,15 +133,13 @@ def main():
             x = np.array([np.log(CASE_DENSITY), np.log(CASE_T_EV), CASE_V_R, vT_, vN_])
             r = _residuals_njit(
                 x,
-                cr,
-                sigma,
+                log_cr,
                 tiled,
                 tiled_cs,
                 tiled_cea,
                 at,
                 ats,
                 rot,
-                sc_vel,
                 PROTON_MASS_KG,
             )
             chi2[i, j] = float(np.sum(r * r))

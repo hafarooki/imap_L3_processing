@@ -112,7 +112,7 @@ def fit_solar_wind_proton_moments(
     # Drop any 0V (or non-finite) ESA steps. Some sweeps include a zero-energy
     # step that carries no useful information and would make central_speed = 0,
     # producing divide-by-zero deep inside the JIT integrator.
-    keep = (esa_voltage > 0) & np.isfinite(esa_voltage)
+    keep = (esa_voltage > 0) & np.isfinite(esa_voltage) & (count_rate > 0)
 
     # 10%-of-peak mask: keep only bins above 10% of the peak count rate so the
     # deep tails (PUI/alpha contamination in production data) can't bias the
@@ -746,8 +746,7 @@ def interpolate_passband(
 @numba.njit
 def _residuals_njit(
     x,
-    count_rate,
-    sigma,
+    log_count_rate,
     passband_grids,
     central_speeds,
     central_effective_areas,
@@ -771,9 +770,11 @@ def _residuals_njit(
         rotation_matrices,
         mass_kg,
     )
-    # Deadtime acts on the observed true rate (here, proton-only). For two-species
-    # joint observation, the alpha fitter applies it to (proton+alpha) true.
-    return (apply_deadtime_correction_array(model_true) - count_rate) / sigma
+    model_obs = apply_deadtime_correction_array(model_true)
+    log_model = np.empty_like(model_obs)
+    for i in range(len(model_obs)):
+        log_model[i] = np.log(max(model_obs[i], 1e-30))
+    return log_model - log_count_rate
 
 
 def _optimize(
@@ -791,7 +792,7 @@ def _optimize(
 
     vr0, vt0, vn0 = initial_guess.bulk_velocity_rtn
 
-    sigma = np.sqrt(np.maximum(count_rate * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
+    log_count_rate = np.log(np.maximum(count_rate, 1e-30))
 
     if spin_axis_rtn is None:
         spin_axis_rtn = rotation_matrices[0, 1, :].copy()
@@ -809,8 +810,7 @@ def _optimize(
     def residuals(x):
         return _residuals_njit(
             x,
-            count_rate,
-            sigma,
+            log_count_rate,
             passband_grids,
             central_speeds,
             central_effective_areas,
