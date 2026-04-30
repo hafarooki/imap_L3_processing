@@ -1202,7 +1202,7 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
     realizations that would inflate the empirical variance.
     """
 
-    N_REALIZATIONS = 500
+    N_REALIZATIONS = 2000
 
     @classmethod
     def setUpClass(cls):
@@ -1264,7 +1264,7 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
 
         ctx = multiprocessing.get_context("fork")
         with ProcessPoolExecutor(max_workers=os.cpu_count(), mp_context=ctx) as pool:
-            results = list(pool.map(_coverage_worker, all_noisy_rates, chunksize=25))
+            results = list(pool.map(_coverage_worker, all_noisy_rates, chunksize=50))
 
         cls.densities = np.array([r.density for r in results])
         cls.temperatures = np.array([r.temperature for r in results])
@@ -1281,18 +1281,114 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
 
     def test_density_sigma_matches_empirical_std(self):
         np.testing.assert_allclose(
-            self.mean_density_sigma, np.std(self.densities), rtol=0.1
+            self.mean_density_sigma, np.std(self.densities), rtol=0.05
         )
 
     def test_temperature_sigma_matches_empirical_std(self):
         np.testing.assert_allclose(
-            self.mean_temperature_sigma, np.std(self.temperatures), rtol=0.1
+            self.mean_temperature_sigma, np.std(self.temperatures), rtol=0.05
         )
 
     def test_velocity_covariance_diagonal_matches_empirical_variance(self):
         empirical_var = np.var(self.velocities, axis=0)
         np.testing.assert_allclose(
-            np.diag(self.mean_velocity_cov), empirical_var, rtol=0.1
+            np.diag(self.mean_velocity_cov), empirical_var, rtol=0.05
+        )
+
+
+class TestLogNormalUncertaintyCoverage(unittest.TestCase):
+    """Verify that s²-scaled fitting uncertainties track empirical scatter under log-normal noise.
+
+    Same setup as TestPoissonUncertaintyCoverage but with 5% multiplicative log-normal
+    noise instead of Poisson. Because the noise model no longer matches the Poisson weights
+    used internally, s² ≠ 1 in general — the s² scaling is what makes the reported
+    uncertainties track the actual scatter despite the weight mis-specification.
+    """
+
+    N_REALIZATIONS = 2000
+
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        cls.true_density = 5.0
+        cls.true_temperature = 10.0 * EV_TO_KELVIN
+        cls.true_velocity = np.array([450.0, 20.0, -10.0])
+
+        n_bins_per_sweep = 8
+        n_sweeps = 5
+        voltages = np.geomspace(
+            _peak_voltage(450.0) * 0.75, _peak_voltage(450.0) * 1.35, n_bins_per_sweep
+        )
+        all_voltages = np.tile(voltages, n_sweeps)
+        cls.sr = sr
+        cls.all_voltages = all_voltages
+        grids, cs, cea, at, ats = _build_proton_arrays(sr, all_voltages)
+        cls.rot = _spin_rotation_matrices(
+            n_sweeps * n_bins_per_sweep,
+            dt_s=12.0 / n_bins_per_sweep,
+        )
+
+        true_rate = _model_count_rates(
+            cls.true_density,
+            cls.true_temperature,
+            cls.true_velocity,
+            grids,
+            cs,
+            cea,
+            at,
+            ats,
+            cls.rot,
+            PROTON_MASS_KG,
+        )
+        observed_rate = apply_deadtime_correction_array(true_rate)
+
+        from concurrent.futures import ProcessPoolExecutor
+        import multiprocessing
+        import os
+
+        rng = np.random.default_rng(99)
+        log_sigma = np.log1p(0.05)
+        all_noisy_rates = observed_rate[None, :] * rng.lognormal(
+            mean=-(log_sigma**2) / 2,
+            sigma=log_sigma,
+            size=(cls.N_REALIZATIONS, len(observed_rate)),
+        )
+
+        _coverage_shared["sr"] = cls.sr
+        _coverage_shared["voltages"] = cls.all_voltages
+        _coverage_shared["rot"] = cls.rot
+
+        import imap_l3_processing.swapi.l3a.utils  # noqa: F401
+
+        ctx = multiprocessing.get_context("fork")
+        with ProcessPoolExecutor(max_workers=os.cpu_count(), mp_context=ctx) as pool:
+            results = list(pool.map(_coverage_worker, all_noisy_rates, chunksize=50))
+
+        cls.densities = np.array([r.density for r in results])
+        cls.temperatures = np.array([r.temperature for r in results])
+        cls.velocities = np.array([r.bulk_velocity_rtn for r in results])
+        cls.mean_density_sigma = float(np.mean([r.density_sigma for r in results]))
+        cls.mean_temperature_sigma = float(
+            np.mean([r.temperature_sigma for r in results])
+        )
+        cls.mean_velocity_cov = np.mean(
+            [r.velocity_covariance for r in results], axis=0
+        )
+
+    def test_density_sigma_matches_empirical_std(self):
+        np.testing.assert_allclose(
+            self.mean_density_sigma, np.std(self.densities), rtol=0.10
+        )
+
+    def test_temperature_sigma_matches_empirical_std(self):
+        np.testing.assert_allclose(
+            self.mean_temperature_sigma, np.std(self.temperatures), rtol=0.20
+        )
+
+    def test_velocity_covariance_diagonal_matches_empirical_variance(self):
+        empirical_var = np.var(self.velocities, axis=0)
+        np.testing.assert_allclose(
+            np.diag(self.mean_velocity_cov), empirical_var, rtol=0.35
         )
 
 
