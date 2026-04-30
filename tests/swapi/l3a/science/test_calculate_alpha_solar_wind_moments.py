@@ -396,7 +396,7 @@ def _load_fixture(name: str) -> dict:
     """Load a named fixture from the .npz file."""
     data = np.load(_FIXTURE_PATH)
     prefix = f"{name}__"
-    return {k[len(prefix):]: data[k] for k in data.files if k.startswith(prefix)}
+    return {k[len(prefix) :]: data[k] for k in data.files if k.startswith(prefix)}
 
 
 class TestAlphaFitRealSpectra(unittest.TestCase):
@@ -486,6 +486,35 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
         ratio = result.density / float(f["proton_density"])
         self.assertGreater(ratio, 0.01)
         self.assertLess(ratio, 0.15)
+
+    def test_weak_alpha_cold_tp_density_ratio(self):
+        """Chunk 93: weak alpha with cold protons (T_p ~103K K, n_p ~3.3).
+        Exhibits the n↓/T↑ ridge: n_a/n_p ~0.008, T_a/T_p ~41."""
+        f = _load_fixture("weak_alpha_cold_tp")
+        result = self._run_alpha_fit("weak_alpha_cold_tp")
+        self.assertEqual(result.bad_fit_flag, 0)
+        ratio = result.density / float(f["proton_density"])
+        self.assertGreater(ratio, 0.01)
+        self.assertLess(ratio, 0.15)
+
+    def test_weak_alpha_moderate_tp_density_ratio(self):
+        """Chunk 87: weak alpha with moderate protons (T_p ~160K K, n_p ~4.5)."""
+        f = _load_fixture("weak_alpha_moderate_tp")
+        result = self._run_alpha_fit("weak_alpha_moderate_tp")
+        self.assertEqual(result.bad_fit_flag, 0)
+        ratio = result.density / float(f["proton_density"])
+        self.assertGreater(ratio, 0.01)
+        self.assertLess(ratio, 0.15)
+
+    def test_weak_alpha_extreme_density_ratio(self):
+        """Chunk 65: worst-case weak alpha (T_p ~164K K, n_p ~4.5).
+        n_a/n_p ~0.0095 with 2σ window — still just below threshold."""
+        f = _load_fixture("weak_alpha_extreme")
+        result = self._run_alpha_fit("weak_alpha_extreme")
+        self.assertEqual(result.bad_fit_flag, 0)
+        ratio = result.density / float(f["proton_density"])
+        self.assertGreater(ratio, 0.008)
+        self.assertLess(ratio, 0.0012)
 
 
 if __name__ == "__main__":

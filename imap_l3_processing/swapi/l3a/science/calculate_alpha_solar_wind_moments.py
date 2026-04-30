@@ -229,19 +229,17 @@ def fit_solar_wind_alpha_moments(
     # all sweeps, so LM fits the alpha bump rather than the proton-dominated
     # tails (which create an n↓/T↑ degeneracy).
     n_sweeps, n_bins = _infer_sweep_layout(esa_voltage)
-    peak_flat_idx = np.concatenate(
-        [peak_bin_idx + s * n_bins for s in range(n_sweeps)]
-    )
+    peak_flat_idx = np.concatenate([peak_bin_idx + s * n_bins for s in range(n_sweeps)])
     count_rate_peak = count_rate[peak_flat_idx]
     proton_true_rate_peak = proton_true_rate[peak_flat_idx]
     alpha_central_speeds_peak = alpha_central_speeds[peak_flat_idx]
     alpha_central_eff_areas_peak = alpha_central_eff_areas[peak_flat_idx]
     rotation_matrices_peak = rotation_matrices[peak_flat_idx]
-    passband_grids_peak = numba.typed.List(
-        [passband_grids[i] for i in peak_flat_idx]
-    )
+    passband_grids_peak = numba.typed.List([passband_grids[i] for i in peak_flat_idx])
 
-    sigma = np.sqrt(np.maximum(count_rate_peak * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
+    sigma = (
+        np.sqrt(np.maximum(count_rate_peak * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
+    )
 
     def residuals(x):
         return _alpha_residuals_njit(
@@ -380,6 +378,17 @@ def _alpha_initial_guess(
         * (sigma_thermal_v * METERS_PER_KILOMETER) ** 2
         / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
     )
+
+    # Extend the peak window toward higher speeds (lower bin indices) up to
+    # bulk_speed + 3σ.  This captures the rising edge of the alpha bump so
+    # that LM has enough width information to reject the n↓/T↑ ridge.
+    all_speeds = esa_voltage_to_alpha_speed(voltage_per_sweep)
+    upper_speed = bulk_speed + 2.0 * sigma_thermal_v
+    high_speed_ext = np.where(
+        (all_speeds <= upper_speed) & (np.arange(n_bins) < peak_idx[0])
+    )[0]
+    if len(high_speed_ext) > 0:
+        peak_idx = np.concatenate([high_speed_ext, peak_idx])
 
     unit_alpha = _model_count_rates(
         1.0,
