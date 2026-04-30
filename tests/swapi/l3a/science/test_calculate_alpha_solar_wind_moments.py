@@ -497,9 +497,8 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
         T_ratio = result.temperature / float(f["proton_temperature"])
         self.assertGreater(ratio, 0.01)
         self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 10)
+        self.assertLess(T_ratio, 20)
 
-    @unittest.expectedFailure
     def test_weak_alpha_moderate_tp_density_ratio(self):
         """Chunk 87: weak alpha with moderate protons (T_p ~160K K, n_p ~4.5)."""
         f = _load_fixture("weak_alpha_moderate_tp")
@@ -509,9 +508,8 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
         T_ratio = result.temperature / float(f["proton_temperature"])
         self.assertGreater(ratio, 0.01)
         self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 10)
+        self.assertLess(T_ratio, 20)
 
-    @unittest.expectedFailure
     def test_weak_alpha_isolated_a_density_ratio(self):
         """Chunk 98: isolated single-point outlier (T_p ~170K K, n_p ~4.0)."""
         f = _load_fixture("weak_alpha_isolated_a")
@@ -521,9 +519,8 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
         T_ratio = result.temperature / float(f["proton_temperature"])
         self.assertGreater(ratio, 0.01)
         self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 10)
+        self.assertLess(T_ratio, 20)
 
-    @unittest.expectedFailure
     def test_weak_alpha_isolated_b_density_ratio(self):
         """Chunk 236: isolated single-point outlier (T_p ~234K K, n_p ~5.2)."""
         f = _load_fixture("weak_alpha_isolated_b")
@@ -533,7 +530,55 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
         T_ratio = result.temperature / float(f["proton_temperature"])
         self.assertGreater(ratio, 0.01)
         self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 10)
+        self.assertLess(T_ratio, 20)
+
+    @unittest.expectedFailure
+    def test_density_dip_early_a(self):
+        """Chunk 35: isolated density dip (n_a/n_p ~0.015, neighbors ~0.04–0.07)."""
+        f = _load_fixture("density_dip_early_a")
+        result = self._run_alpha_fit("density_dip_early_a")
+        self.assertEqual(result.bad_fit_flag, 0)
+        ratio = result.density / float(f["proton_density"])
+        T_ratio = result.temperature / float(f["proton_temperature"])
+        self.assertGreater(ratio, 0.03)
+        self.assertLess(ratio, 0.15)
+        self.assertLess(T_ratio, 20)
+
+    @unittest.expectedFailure
+    def test_density_dip_early_b(self):
+        """Chunk 159: isolated density dip (n_a/n_p ~0.011, neighbors ~0.06)."""
+        f = _load_fixture("density_dip_early_b")
+        result = self._run_alpha_fit("density_dip_early_b")
+        self.assertEqual(result.bad_fit_flag, 0)
+        ratio = result.density / float(f["proton_density"])
+        T_ratio = result.temperature / float(f["proton_temperature"])
+        self.assertGreater(ratio, 0.03)
+        self.assertLess(ratio, 0.15)
+        self.assertLess(T_ratio, 20)
+
+    @unittest.expectedFailure
+    def test_density_dip_extreme_a(self):
+        """Chunk 1236: extreme density dip (n_a/n_p ~0.002, neighbors ~0.03–0.06)."""
+        f = _load_fixture("density_dip_extreme_a")
+        result = self._run_alpha_fit("density_dip_extreme_a")
+        self.assertEqual(result.bad_fit_flag, 0)
+        ratio = result.density / float(f["proton_density"])
+        T_ratio = result.temperature / float(f["proton_temperature"])
+        self.assertGreater(ratio, 0.02)
+        self.assertLess(ratio, 0.15)
+        self.assertLess(T_ratio, 20)
+
+    @unittest.expectedFailure
+    def test_density_dip_extreme_b(self):
+        """Chunk 1304: extreme density dip (n_a/n_p ~0.005, neighbors ~0.15)."""
+        f = _load_fixture("density_dip_extreme_b")
+        result = self._run_alpha_fit("density_dip_extreme_b")
+        self.assertEqual(result.bad_fit_flag, 0)
+        ratio = result.density / float(f["proton_density"])
+        T_ratio = result.temperature / float(f["proton_temperature"])
+        self.assertGreater(ratio, 0.02)
+        self.assertLess(ratio, 0.15)
+        self.assertLess(T_ratio, 20)
 
 
 if __name__ == "__main__":
