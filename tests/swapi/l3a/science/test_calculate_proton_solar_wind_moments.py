@@ -22,6 +22,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     _optimize,
     apply_deadtime_correction,
     calculate_integral,
+    fit_solar_wind_proton_moments,
     interpolate_passband,
     _interpolate_transmission,
     _get_angular_limits,
@@ -54,6 +55,19 @@ def _load_swapi_response():
         _AZIMUTHAL_TRANSMISSION_PATH,
         _CENTRAL_EFFECTIVE_AREA_PATH,
         _PASSBAND_FIT_COEFFICIENTS_PATH,
+    )
+
+
+_coverage_shared = {}
+
+
+def _coverage_worker(noisy_rate):
+    return fit_solar_wind_proton_moments(
+        noisy_rate,
+        _coverage_shared["voltages"],
+        _coverage_shared["sr"],
+        1.0,
+        _coverage_shared["rot"],
     )
 
 
@@ -1210,6 +1224,8 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
             n_sweeps * n_bins_per_sweep,
             dt_s=12.0 / n_bins_per_sweep,
         )
+        cls.sr = sr
+        cls.all_voltages = all_voltages
 
         true_rate = _model_count_rates(
             cls.true_density,
@@ -1226,7 +1242,9 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
         # Deadtime is applied at the residual stage; synthesize "observed" data accordingly.
         observed_rate = apply_deadtime_correction_array(true_rate)
 
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ProcessPoolExecutor
+        import multiprocessing
+        import os
 
         rng = np.random.default_rng(42)
         all_noisy_rates = (
@@ -1237,26 +1255,16 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
             / SWAPI_LIVETIME_S
         )
 
-        def run_one(noisy_rate):
-            ig = ProtonSolarWindMoments(
-                density=cls.true_density,
-                temperature=cls.true_temperature,
-                bulk_velocity_rtn=cls.true_velocity.copy(),
-                bad_fit_flag=0,
-            )
-            return _optimize(
-                noisy_rate,
-                cls.grids,
-                cls.cs,
-                cls.cea,
-                cls.at,
-                cls.ats,
-                cls.rot,
-                ig,
-            )
+        _coverage_shared["sr"] = cls.sr
+        _coverage_shared["voltages"] = cls.all_voltages
+        _coverage_shared["rot"] = cls.rot
 
-        with ThreadPoolExecutor() as pool:
-            results = list(pool.map(run_one, all_noisy_rates))
+        # Force lazy imports in the parent so forked children inherit them.
+        import imap_l3_processing.swapi.l3a.utils  # noqa: F401
+
+        ctx = multiprocessing.get_context("fork")
+        with ProcessPoolExecutor(max_workers=os.cpu_count(), mp_context=ctx) as pool:
+            results = list(pool.map(_coverage_worker, all_noisy_rates, chunksize=25))
 
         cls.densities = np.array([r.density for r in results])
         cls.temperatures = np.array([r.temperature for r in results])
