@@ -1377,18 +1377,18 @@ class TestLogNormalUncertaintyCoverage(unittest.TestCase):
 
     def test_density_sigma_matches_empirical_std(self):
         np.testing.assert_allclose(
-            self.mean_density_sigma, np.std(self.densities), rtol=0.10
+            self.mean_density_sigma, np.std(self.densities), rtol=0.05
         )
 
     def test_temperature_sigma_matches_empirical_std(self):
         np.testing.assert_allclose(
-            self.mean_temperature_sigma, np.std(self.temperatures), rtol=0.20
+            self.mean_temperature_sigma, np.std(self.temperatures), rtol=0.05
         )
 
     def test_velocity_covariance_diagonal_matches_empirical_variance(self):
         empirical_var = np.var(self.velocities, axis=0)
         np.testing.assert_allclose(
-            np.diag(self.mean_velocity_cov), empirical_var, rtol=0.35
+            np.diag(self.mean_velocity_cov), empirical_var, rtol=0.05
         )
 
 
