@@ -849,12 +849,13 @@ def _optimize(
     bulk_velocity_rtn = result.x[2:5]
     bad_fit_flag = SwapiL3Flags.NONE if result.success else SwapiL3Flags.HI_CHI_SQ
 
-    # Covariance in (log n, log T, vR, vT, vN) space via Moore-Penrose pseudoinverse
-    # Assumes normalized residuals r_i = (model_i - data_i) / sigma_i are i.i.d. N(0,1)
-    # pinv→svd can fail when the Jacobian is degenerate (all-zero rows, ill-conditioned
-    # fit); fall back to NaN uncertainties rather than crashing.
+    # Covariance in (log n, log T, vR, vT, vN) space via Moore-Penrose pseudoinverse,
+    # scaled by reduced chi² so uncertainties reflect actual residual scatter rather
+    # than assumed Poisson noise (equivalent to curve_fit with absolute_sigma=False).
     try:
-        cov_x = np.linalg.pinv(result.jac.T @ result.jac)
+        n_data, n_params = len(result.fun), len(result.x)
+        s_sq = float(np.sum(result.fun**2)) / max(n_data - n_params, 1)
+        cov_x = s_sq * np.linalg.pinv(result.jac.T @ result.jac)
         density_sigma = float(density * np.sqrt(max(cov_x[0, 0], 0.0)))
         temperature_sigma = float(temperature * np.sqrt(max(cov_x[1, 1], 0.0)))
         velocity_covariance = cov_x[2:5, 2:5]

@@ -278,8 +278,10 @@ def fit_solar_wind_alpha_moments(
     if mag_gap_fallback:
         bad_fit_flag |= SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK
 
-    # Covariance in (log n, log T, Δv) space; propagate to physical units.
-    cov_x = np.linalg.pinv(result.jac.T @ result.jac)
+    # Covariance in (log n, log T, Δv) space, scaled by reduced chi² (fitting error).
+    n_data, n_params = len(result.fun), len(result.x)
+    s_sq = float(np.sum(result.fun**2)) / max(n_data - n_params, 1)
+    cov_x = s_sq * np.linalg.pinv(result.jac.T @ result.jac)
     density_sigma = float(n_a_fit * np.sqrt(max(cov_x[0, 0], 0.0)))
     temperature_sigma = float(T_a_fit * np.sqrt(max(cov_x[1, 1], 0.0)))
     delta_v_sigma = float(np.sqrt(max(cov_x[2, 2], 0.0)))

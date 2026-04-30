@@ -217,8 +217,8 @@ Not accounting for this would result in an overestimate of the model count rate 
 #### Parameter uncertainties
 
 The Jacobian $J$ of the normalized residuals $r_i$ with respect to $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ at the solution is returned by the optimizer. The covariance matrix in parameter space is estimated as
-$$\Sigma_x = (J^\top J)^+,$$
-where ${}^+$ denotes the Moore–Penrose pseudoinverse. Uncertainty in $n$ and $T$ follows directly:
+$$\Sigma_x = s^2\,(J^\top J)^+, \qquad s^2 = \frac{\sum_i r_i^2}{N - p},$$
+where ${}^+$ denotes the Moore–Penrose pseudoinverse, $N$ is the number of residuals, and $p$ is the number of fitted parameters. The reduced chi-squared $s^2$ rescales the covariance so that uncertainties reflect the actual residual scatter (fitting error) rather than the assumed Poisson weights alone — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`. Uncertainty in $n$ and $T$ follows directly:
 $$\sigma_n = n\,\sqrt{\Sigma_{x,00}}, \qquad \sigma_T = T\,\sqrt{\Sigma_{x,11}}.$$
 
 **Speed, clock angle, and deflection angle** are computed in the IMAP DPS (despun spacecraft) frame rather than RTN so that the angles reflect the plasma flow direction relative to the spacecraft attitude. Let $R_\text{RTN\to DPS}$ be the rotation from RTN to DPS at the chunk center epoch (obtained via `get_swapi_dsrf_to_rtn(...)[0].T`), and let
@@ -234,7 +234,7 @@ $$\sigma_{|\mathbf{v}|} = \sqrt{\mathbf{g}_s^\top \Sigma_\text{DPS}\, \mathbf{g}
 $$\sigma_{\phi_c} = \sqrt{\mathbf{g}_c^\top \Sigma_\text{DPS}\, \mathbf{g}_c}, \quad \mathbf{g}_c = \frac{1}{u_{xy}^2}\begin{pmatrix}-u_1\\u_0\\0\end{pmatrix},$$
 $$\sigma_{\phi_d} = \sqrt{\mathbf{g}_d^\top \Sigma_\text{DPS}\, \mathbf{g}_d}, \quad \mathbf{g}_d = \frac{1}{|\mathbf{u}|^2}\begin{pmatrix}-\dfrac{u_0 u_2}{u_{xy}}\\-\dfrac{u_1 u_2}{u_{xy}}\\u_{xy}\end{pmatrix}.$$
 
-These uncertainties reflect Poisson shot noise only; model imperfection (non-Maxwellian features, alpha contamination, temporal variability within the fit window) is not captured.
+These uncertainties incorporate both Poisson shot noise and residual model–data mismatch through the $s^2$ scaling. When the model is a good fit ($s^2 \approx 1$), the result coincides with pure Poisson propagation; when systematic residuals inflate $s^2 > 1$ (non-Maxwellian features, alpha contamination, temporal variability within the fit window), the reported uncertainties grow accordingly.
 
 When $u_{xy} = 0$ exactly, $\mathbf{g}_c$ and $\mathbf{g}_d$ are undefined; the processor sets both $\sigma_{\phi_c}$ and $\sigma_{\phi_d}$ to NaN in that case.
 
@@ -312,7 +312,7 @@ Unlike the proton wrong-basin check (which always re-runs LM from the flipped se
 
 ### Uncertainty propagation
 
-$$\Sigma_\text{stage 2} = (J^\top J)^+\quad\text{(3×3, in $(\log n_\alpha, \log T_\alpha, \Delta v)$ space)}$$
+$$\Sigma_\text{stage 2} = s^2\,(J^\top J)^+\quad\text{(3×3, in $(\log n_\alpha, \log T_\alpha, \Delta v)$ space)}, \qquad s^2 = \frac{\sum_i r_i^2}{N - p}$$
 $$\sigma_{n_\alpha} = n_\alpha \sqrt{\Sigma_\text{stage 2}[0,0]}, \qquad \sigma_{T_\alpha} = T_\alpha \sqrt{\Sigma_\text{stage 2}[1,1]}, \qquad \sigma_{\Delta v} = \sqrt{\Sigma_\text{stage 2}[2,2]}$$
 $$\Sigma_{\mathbf{v}_\alpha} = \Sigma_{\mathbf{v}_p} + \sigma_{\Delta v}^2 \, \hat{\mathbf{B}}\hat{\mathbf{B}}^\top$$
 This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so $\sigma_{n_\alpha}, \sigma_{T_\alpha}$ are lower bounds.

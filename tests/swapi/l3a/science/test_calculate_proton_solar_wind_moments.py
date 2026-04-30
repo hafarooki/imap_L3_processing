@@ -1174,11 +1174,13 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
 
 
 class TestPoissonUncertaintyCoverage(unittest.TestCase):
-    """Verify that reported uncertainties match the empirical scatter across Poisson-noise realizations.
+    """Verify that reported fitting uncertainties match empirical scatter across Poisson-noise realizations.
 
     Runs 500 independent fits on synthetic data with Poisson noise drawn from the true
-    model count rates. The mean reported sigma should agree with the empirical std dev
-    of the fit outputs to within 10%.
+    model count rates. The mean reported sigma (from s²-scaled covariance, i.e. fitting
+    error derived from residuals) should agree with the empirical std dev of the fit
+    outputs to within 10%. When the model is correct and noise is purely Poisson, s² ≈ 1
+    and the fitting error coincides with the propagated Poisson error.
 
     Uses 5 sweeps × 8 bins with realistic sweep timing (12 s per sweep) so that
     the 60 s total spans 4 full spin periods. This gives enough spin-phase diversity

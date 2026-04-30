@@ -161,7 +161,7 @@ def _plot_case(axes_top, axes_bot, sr, f, title):
 
     # Run peak finder
     energies = SWAPI_K_FACTOR * np.abs(voltage_per_sweep)
-    peak = get_alpha_peak_indices(count_avg, energies)
+    peak = get_alpha_peak_indices(count_avg - proton_bg_avg, energies, count_avg.argmax())
     peak_idx = np.arange(peak.start, peak.stop)
     residual_peak = np.maximum(count_avg[peak_idx] - proton_bg_avg[peak_idx], 0.0)
 

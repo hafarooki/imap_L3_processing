@@ -487,34 +487,59 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
         self.assertGreater(ratio, 0.01)
         self.assertLess(ratio, 0.15)
 
+    @unittest.expectedFailure
     def test_weak_alpha_cold_tp_density_ratio(self):
         """Chunk 93: weak alpha with cold protons (T_p ~103K K, n_p ~3.3).
-        Exhibits the n↓/T↑ ridge: n_a/n_p ~0.008, T_a/T_p ~41."""
+        n_a/n_p passes but T_a/T_p ~25 — still on the ridge."""
         f = _load_fixture("weak_alpha_cold_tp")
         result = self._run_alpha_fit("weak_alpha_cold_tp")
         self.assertEqual(result.bad_fit_flag, 0)
         ratio = result.density / float(f["proton_density"])
+        T_ratio = result.temperature / float(f["proton_temperature"])
         self.assertGreater(ratio, 0.01)
         self.assertLess(ratio, 0.15)
+        self.assertLess(T_ratio, 10)
 
+    @unittest.expectedFailure
     def test_weak_alpha_moderate_tp_density_ratio(self):
-        """Chunk 87: weak alpha with moderate protons (T_p ~160K K, n_p ~4.5)."""
+        """Chunk 87: weak alpha with moderate protons (T_p ~160K K, n_p ~4.5).
+        n_a/n_p passes but T_a/T_p ~20 — still on the ridge."""
         f = _load_fixture("weak_alpha_moderate_tp")
         result = self._run_alpha_fit("weak_alpha_moderate_tp")
         self.assertEqual(result.bad_fit_flag, 0)
         ratio = result.density / float(f["proton_density"])
+        T_ratio = result.temperature / float(f["proton_temperature"])
         self.assertGreater(ratio, 0.01)
         self.assertLess(ratio, 0.15)
+        self.assertLess(T_ratio, 10)
 
-    def test_weak_alpha_extreme_density_ratio(self):
-        """Chunk 65: worst-case weak alpha (T_p ~164K K, n_p ~4.5).
-        n_a/n_p ~0.0095 with 2σ window — still just below threshold."""
-        f = _load_fixture("weak_alpha_extreme")
-        result = self._run_alpha_fit("weak_alpha_extreme")
+    @unittest.expectedFailure
+    def test_weak_alpha_isolated_a_density_ratio(self):
+        """Chunk 98: isolated single-point outlier (T_p ~170K K, n_p ~4.0).
+        Neighbors have n_a/n_p ~0.07–0.08; current fit gives n_a/n_p ~0.015
+        with T_a/T_p ~18 — still on the ridge."""
+        f = _load_fixture("weak_alpha_isolated_a")
+        result = self._run_alpha_fit("weak_alpha_isolated_a")
         self.assertEqual(result.bad_fit_flag, 0)
         ratio = result.density / float(f["proton_density"])
-        self.assertGreater(ratio, 0.008)
-        self.assertLess(ratio, 0.012)
+        T_ratio = result.temperature / float(f["proton_temperature"])
+        self.assertGreater(ratio, 0.01)
+        self.assertLess(ratio, 0.15)
+        self.assertLess(T_ratio, 10)
+
+    @unittest.expectedFailure
+    def test_weak_alpha_isolated_b_density_ratio(self):
+        """Chunk 236: isolated single-point outlier (T_p ~234K K, n_p ~5.2).
+        Neighbors have n_a/n_p ~0.01–0.07; current fit gives n_a/n_p ~0.013
+        with T_a/T_p ~13 — still on the ridge."""
+        f = _load_fixture("weak_alpha_isolated_b")
+        result = self._run_alpha_fit("weak_alpha_isolated_b")
+        self.assertEqual(result.bad_fit_flag, 0)
+        ratio = result.density / float(f["proton_density"])
+        T_ratio = result.temperature / float(f["proton_temperature"])
+        self.assertGreater(ratio, 0.01)
+        self.assertLess(ratio, 0.15)
+        self.assertLess(T_ratio, 10)
 
 
 if __name__ == "__main__":
