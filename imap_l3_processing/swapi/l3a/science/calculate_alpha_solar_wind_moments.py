@@ -337,16 +337,18 @@ def _alpha_initial_guess(
     count_avg = counts_per_sweep.mean(axis=0)
     proton_bg_avg = proton_obs_per_sweep.mean(axis=0)
     energies_per_sweep = SWAPI_K_FACTOR * np.abs(voltage_per_sweep)
+    proton_peak_index = np.argmax(proton_bg_avg)
+    residual = np.maximum(0, count_avg - proton_bg_avg * 2)
 
     try:
-        peak = get_alpha_peak_indices(count_avg, energies_per_sweep)
+        peak = get_alpha_peak_indices(residual, energies_per_sweep, proton_peak_index)
     except Exception:
         return None
 
     peak_idx = np.arange(peak.start, peak.stop)
     if len(peak_idx) < 3:
         return None
-    residual_peak = np.maximum(count_avg[peak_idx] - proton_bg_avg[peak_idx], 0.0)
+    residual_peak = np.maximum(residual[peak_idx], 0.0)
     if not np.any(residual_peak > 0):
         return None
 

@@ -3,18 +3,15 @@
 ## Code Files
 
 - `imap_l3_processing/swapi/l3a/science/swapi_response.py` — Instrument response model. Loads calibration tables (azimuthal transmission, central effective area, passband polynomial fits) and builds a `PassbandGrid` per ESA voltage step via `SWAPIResponse.create_passband_grid`.
-- `imap_l3_processing/swapi/l3a/science/calculate_proton_solar_wind_moments.py` — Core fitting algorithm. `fit_solar_wind_proton_moments` implements the three-step procedure (SPICE → initial guess → Levenberg–Marquardt); `calculate_integral` is the Numba-JIT count-rate integral over elevation, azimuth, and speed. 
-- `imap_l3_processing/swapi/l3a/science/speed_calculation.py` — ESA bin layout constants (`SWAPI_SCIENCE_BINS`, `SWAPI_COARSE_SWEEP_BINS`, `SWAPI_FINE_SWEEP_BINS`) and the `esa_voltage_to_proton_speed` conversion.
-- `imap_l3_processing/swapi/swapi_processor.py` — Production pipeline entry point. `SwapiProcessor.process_l3a_proton` slices science bins, computes per-bin measurement times, calls `fit_solar_wind_proton_moments`, and propagates uncertainties to scalar speed, clock angle, and deflection angle before writing the CDF.
-- `scripts/swapi/validate_proton_moments.py` — Offline validation script. Runs the fitter over a full day of real L2 data and produces a six-panel figure comparing fitted moments against OMNI reference data.
+- `imap_l3_processing/swapi/l3a/science/calculate_proton_solar_wind_moments.py` — Core proton fitting algorithm. `fit_solar_wind_proton_moments` implements the three-step procedure (SPICE → initial guess → Levenberg–Marquardt); `calculate_integral` is the Numba-JIT count-rate integral over elevation, azimuth, and speed.
+- `imap_l3_processing/swapi/l3a/science/calculate_alpha_solar_wind_moments.py` — Alpha particle moments fitter (Stage 2 of the two-stage proton-frozen scheme). `fit_solar_wind_alpha_moments` fits $(n_\alpha, T_\alpha, \Delta v)$ with proton parameters held fixed.
+- `imap_l3_processing/swapi/l3a/science/speed_calculation.py` — ESA bin layout constants (`SWAPI_SCIENCE_BINS`, `SWAPI_COARSE_SWEEP_BINS`, `SWAPI_FINE_SWEEP_BINS`), k-factor constants, `esa_voltage_to_proton_speed`/`esa_voltage_to_alpha_speed` conversions, and `get_alpha_peak_indices` for locating the alpha bump in the count-rate spectrum.
+- `imap_l3_processing/swapi/swapi_processor.py` — Production pipeline entry point. Dispatches on descriptor (`proton-sw`, `alpha-sw`, `pui-he`). Each product's processing method precomputes SPICE geometry, then distributes 5-sweep chunks across a `ProcessPoolExecutor` (fork-based multiprocessing). Module-level worker functions (`_proton_chunk_worker`, `_alpha_chunk_worker`, `_pui_proton_chunk_worker`) receive shared state (`SWAPIResponse`, `EfficiencyCalibrationTable`, MAG data) via an initializer. `_derive_proton_velocity_angles` converts fitted RTN velocity to speed, clock angle, and deflection angle in the DPS frame with delta-method uncertainty propagation.
 
 ## TODO
 
-- [x] update docs to reflect that the moments are now provided in spacecraft frame
-- [x] fix protons. there was some sort of regression that made it no longer work for the basin problem. probably related to the open aperutre handling
-- [x] when we dont have mag field, use nominal mag field (45 degrees from radial) for alpha bulk velocity estimation and add a flag
-- [x] Constrain the speed of the alphas in the fit, not just in the initial guess
-- [ ] thread pool vs multi processing... thread pool seems to be using too little resources
+- [ ] Clock angle, deflection angle fix
+- [ ] Validate uncertainty
 - [ ] Validate alphas
 - [ ] Empirically validate alpha-species correction $\mathcal{A}_0^\alpha/\mathcal{A}_0^p = \varepsilon_\alpha/\varepsilon_p$ against OMNI alpha density (the paper does not prove this; alpha ABM measurements weren't taken)
 - [ ] Coordinate with cal-file format owner to add a `lab_time` field to the efficiency LUT.
@@ -23,17 +20,12 @@ Replace with the proper `lab_time` lookup once the LUT format gains the field (s
 - [ ] Remove old SW model from pickup ion code (?)
 - [ ] Dynamic calculation of pickup ion geometric factor (?)
 - [ ] Choose bad fit flags
-- [ ] Fix the integration edge cases 
-- [ ] handle the padded swapi vs unpadded mag data temporal mismatch
-- [ ] finalize document
-- [ ] **clean up/refactor code**
+- [ ] Handle the padded SWAPI vs unpadded MAG data temporal mismatch
 - [ ] Human review: run integration test output through a CDF reader and sanity-check variable names, units, and fill values (test passes automatically)
-- [ ] Human review: read through unit tests top-to-bottom and verify coverage is meaningful, not just passing (all 167 pass automatically)
+- [ ] Human review: read through unit tests top-to-bottom and verify coverage is meaningful, not just passing
 - [ ] Try Poisson MLE instead of least squares
-- [ ] Compare with WIND with production-like testing (unlike current validation script)
+- [ ] Compare with WIND with production-like testing
 - [ ] Clarify behavior of partial last chunk from `chunk_l2_data` — if the day's sweep count isn't a multiple of 5, the final group has fewer sweeps and its epoch (`sci_start_time[0] + 30s`) is off-center; decide whether to drop it, pad it, or accept the timestamp offset
-- [ ] validate more cases
-- [x] Confirm output format for bulk velocity — scalar speed + clock angle + deflection angle (with uncertainties) plus `proton_sw_bulk_velocity_rtn_sun` (N×3 inertial RTN, km/s)
 
 ## Model
 
@@ -137,9 +129,9 @@ Each 12-second ESA sweep contains **72 bins** (indices 0–71). Their roles are:
 | 1–62    | 62    | **Coarse sweep.** Uniform logarithmic energy steps covering the full proton solar wind range. |
 | 63–71   | 9     | **Fine sweep.** Higher-resolution scan of the proton peak, using smaller voltage steps for better moment accuracy. |
 
-The fine-sweep bins are currently used in the moments fit (they overlap the peak and add resolution). The production processor and validation scripts use `SWAPI_SCIENCE_BINS = slice(1, 72)` (i.e., `SWAPI_COARSE_SWEEP_BINS + SWAPI_FINE_SWEEP_BINS`) and always exclude bin 0 explicitly.
-Occasionally, one or more fine sweep bins will have zero ESA voltage; we exclude these from the fit.
-For solar wind protons, we also restrict the fit to points that are within half of the maximum count rate to avoid including other populations.
+The fine-sweep bins are currently used in the proton moments fit (they overlap the peak and add resolution). The proton processor uses `SWAPI_SCIENCE_BINS = slice(1, 72)` (i.e., `SWAPI_COARSE_SWEEP_BINS + SWAPI_FINE_SWEEP_BINS`) and always excludes bin 0 explicitly. The alpha processor uses `SWAPI_COARSE_SWEEP_BINS = slice(1, 63)` only, since the fine-sweep bins near the proton peak carry no alpha information.
+Occasionally, one or more fine sweep bins will have zero ESA voltage; these are excluded from the fit.
+For solar wind protons, the fit is further restricted to bins at or above 10% of the peak count rate (see Step 3: Optimization) to exclude deep tails where PUI/alpha contamination can bias the proton moments.
 Named constants are defined in `imap_l3_processing/swapi/l3a/science/speed_calculation.py`:
 
 ```python
@@ -159,7 +151,8 @@ Given $N$ measurements $(C_i, V_i, t_i)$, the solar wind moments $(n, T, \mathbf
 1. Obtain RTN $\rightarrow$ SWAPI rotation matrices $R_i$ from SPICE.
 2. Compute an initial guess: temperature and bulk speed from a Gaussian fit to $C_i$ vs. $v_i$, with bulk velocity assumed anti-sunward with a nominal transverse offset.
 3. Refine by nonlinear least squares.
-> **TODO** alphas
+
+The alpha particle moments are fit in a separate two-stage procedure described in [Alpha Particle Moments](#alpha-particle-moments).
 
 ### Step 1: SPICE
 
@@ -264,10 +257,10 @@ This encodes the observed solar-wind fact that non-field-aligned differential dr
 
 ### Two-stage strategy
 
-The pipeline processes 5-sweep chunks (matching the existing alpha LUT cadence). Each chunk is sliced to the **62 coarse-sweep bins** (`SWAPI_COARSE_SWEEP_BINS`) and flattened over (sweep, bin) to a 310-residual axis. The 9 fine-sweep bins (63–71) are dropped because they cluster near the proton peak and inform proton thermal width only — useless when protons are held fixed.
+The pipeline processes 5-sweep chunks (matching the existing alpha LUT cadence). Each chunk is sliced to the **62 coarse-sweep bins** (`SWAPI_COARSE_SWEEP_BINS`) and flattened over (sweep, bin) to a 310-element axis. The 9 fine-sweep bins (63–71) are dropped because they cluster near the proton peak and inform proton thermal width only — useless when protons are held fixed.
 
-- **Stage 1**: Re-run `fit_solar_wind_proton_moments` on the 310-residual axis to get $(n_p^*, T_p^*, \mathbf{v}_p^{*\,\text{RTN}})$. This is independent of the per-sweep proton L3A product (which uses 71 bins) and is persisted as `reference_proton_*` fields in the alpha CDF.
-- **Stage 2**: Fit $(n_\alpha, T_\alpha, \Delta v)$ on the same 310-residual axis with proton parameters held fixed. The combined observed model is
+- **Stage 1**: Re-run `fit_solar_wind_proton_moments` on the 310-element axis to get $(n_p^*, T_p^*, \mathbf{v}_p^{*\,\text{RTN}})$. This is independent of the per-sweep proton L3A product (which uses 71 bins) and is persisted as `reference_proton_*` fields in the alpha CDF.
+- **Stage 2**: The initial guess (`_alpha_initial_guess`) identifies the alpha peak bins via `get_alpha_peak_indices`. All per-measurement arrays are then subset to only those peak bins across all sweeps, so the Levenberg–Marquardt fit targets the alpha bump rather than the proton-dominated tails (which create an $n_\alpha{\downarrow}/T_\alpha{\uparrow}$ degeneracy). The residual axis for Stage 2 is therefore `n_sweeps × len(peak_bins)`, not the full 310. The combined observed model is
   $$C_\text{obs}(V) = \text{deadtime}\!\left(C_p^\text{true}(V; \theta_p^*) + C_\alpha^\text{true}(V; \theta_\alpha)\right),$$
   so deadtime acts on the sum (important in proton-peak bins where alphas are negligible but deadtime is at its largest). Stage 2 reuses the SPICE rotation matrices computed for Stage 1.
 
@@ -275,7 +268,7 @@ Joint refit of both species is deferred (Stage 2 does not resolve alpha contamin
 
 ### Species-dependent pieces
 
-The same `PassbandGrid` infrastructure works for both species — only $v_0^s = \sqrt{2 k^* (q/m)^s |V|}$ changes. `SWAPIResponse.create_passband_grid(V, m, q)` is keyed by $(V, m, q)$ in `_grid_cache`, so proton and alpha grids cache independently. At the same $V$,
+The same `PassbandGrid` infrastructure works for both species — the grid is V-only (passband shape depends only on voltage, not species), so `SWAPIResponse.create_passband_grid(V)` is cached by `float(V)` and shared between proton and alpha fits at the same ESA voltage. Species-dependent quantities — central speed $v_0^s$ and scaled central effective area — are computed separately and passed alongside the grid to `calculate_integral`. At the same $V$,
 $$\frac{v_0^\alpha}{v_0^p} = \sqrt{\frac{q_\alpha m_p}{q_p m_\alpha}} = \sqrt{\frac{2 m_p}{4 m_p}} = \frac{1}{\sqrt 2}.$$
 Thermal speed uses Boltzmann's constant with temperature in Kelvin:
 $$v_{th}^\alpha = \sqrt{\frac{k_B T_\alpha}{m_\alpha}}.$$
@@ -295,16 +288,16 @@ When the LUT contains only the lab row, `proton_eff_scale = 1.0` exactly and pro
 
 ### Initial guess
 
-Stage 2's initial guess locates the alpha bump by subtracting the deadtime-applied proton background from the sweep-averaged count rate:
+Stage 2's initial guess (`_alpha_initial_guess`) locates the alpha bump by subtracting the deadtime-applied proton background from the sweep-averaged count rate:
 
-1. Average the 5 sweeps: `count_avg`, `proton_bg_avg` (deadtime-corrected proton model per sweep, then averaged).
+1. Reshape data into `(n_sweeps, n_bins)` via `_infer_sweep_layout`. Average the 5 sweeps: `count_avg`, `proton_bg_avg` (deadtime-corrected proton model per sweep, then averaged).
 2. Convert voltages to energies: $E_i = k^* |V_i|$.
-3. Call `get_alpha_peak_indices(count_avg, energies)` to locate the alpha peak. This function finds the proton peak first, then walks backward to where counts start increasing again (start of the alpha bump), masks bins above this start and below $4\times$ the proton peak energy, and returns the alpha peak slice.
+3. Call `get_alpha_peak_indices(count_avg, energies)` to locate the alpha peak. This function finds the proton peak first, then walks backward (toward higher energies / lower indices) to where counts start increasing again (start of the alpha bump), masks bins above this start and below $4\times$ the proton peak energy, and returns the alpha peak slice.
 4. Guard: require $\geq 3$ bins in the peak and at least one bin with positive residual $C_i - R_i^p > 0$.
-5. Gaussian fit on the residual $\max(C_i - R_i^p, 0)$ vs. alpha speed $v_i^\alpha$ at peak bins. Yields bulk speed $v_b^\alpha$ and thermal width $\sigma_v$. Floor $\sigma_v$ by the temperature floor ($\approx 11{,}600$ K equivalent).
-6. Density: scale a unit-density alpha model (at $\Delta v = 0$) to match the mean residual at the peak:
+5. Gaussian fit on the residual $\max(C_i - R_i^p, 0)$ vs. alpha speed $v_i^\alpha = \sqrt{2 k^* (q_\alpha/m_\alpha) |V_i|}$ at peak bins. Yields bulk speed $v_b^\alpha$ and thermal width $\sigma_v$. Floor $\sigma_v$ by the temperature floor ($\approx 11{,}600$ K equivalent for alpha mass).
+6. Density: compute a unit-density alpha forward model at $\Delta v = 0$ (using the proton bulk velocity as the alpha velocity seed), average across sweeps, and scale to match the mean residual at the peak:
    $$n_{\alpha,0} = \max\!\left(\frac{\overline{(C_i - R_i^p)_\text{peak}}}{\overline{R_i^{\alpha,\text{unit}}}},\; 10^{-3}\right)$$
-7. Return $(n_{\alpha,0}, T_\alpha, \Delta v = 0)$. The optimizer starts with $\Delta v = 0$ and the wrong-basin flip (below) handles sign ambiguity.
+7. Return $(n_{\alpha,0}, T_\alpha, \Delta v = 0, \text{peak\_bin\_indices})$. The optimizer starts with $\Delta v = 0$ and the wrong-basin flip (below) handles sign ambiguity. The returned `peak_bin_indices` are used to subset the residual axis for Stage 2 (see above).
 
 The figure below shows these steps on three real L2 spectra from `imap_swapi_l2_sci_20260101`. Top row: 5-sweep-averaged observed count rate (blue dots) vs the frozen proton model (orange), with the detected alpha peak region shaded green. Bottom row: residual (observed − proton model) at all bins (grey) and the peak bins (green circles), with the Gaussian fit (red) that yields the initial $v_b^\alpha$.
 
@@ -314,7 +307,9 @@ The figure below shows these steps on three real L2 spectra from `imap_swapi_l2_
 
 ### Wrong-basin detection ($\Delta v$ flip)
 
-The 1-DOF $\Delta v$ parameterization creates a basin ambiguity along $\hat{\mathbf{B}}$: flipping $\Delta v \to -\Delta v$ can yield a comparable $\chi^2$ when the alpha bump sits near the proton thermal tail. After LM converges, the fit checks the flipped point $(\log n_\alpha, \log T_\alpha, -\Delta v)$. If $\chi^2_{\text{flipped}} < \chi^2_{\text{LM}}$, LM re-runs from the flipped point. This costs one extra residual evaluation typically, plus one extra LM run for the ~1% of cases that need it.
+The 1-DOF $\Delta v$ parameterization creates a basin ambiguity along $\hat{\mathbf{B}}$: flipping $\Delta v \to -\Delta v$ can yield a comparable $\chi^2$ when the alpha bump sits near the proton thermal tail. After LM converges to $(\log n_\alpha, \log T_\alpha, \Delta v)$, the fit evaluates $\chi^2$ at the flipped point $(\log n_\alpha, \log T_\alpha, -\Delta v)$. If $\chi^2_{\text{flipped}} < \chi^2_{\text{LM}}$, LM re-runs from the flipped point. This costs one extra residual evaluation typically, plus one extra LM run for the cases that need it.
+
+Unlike the proton wrong-basin check (which always re-runs LM from the flipped seed), the alpha flip uses a cheaper evaluate-then-rerun strategy because the 1-DOF flip preserves $(n_\alpha, T_\alpha)$ — unlike the proton case, where the 3-DOF velocity flip changes the $(n, T)$ landscape significantly enough that a single-point $\chi^2$ is a poor proxy.
 
 ### Uncertainty propagation
 
@@ -332,7 +327,7 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 
 ### Magnetic-field rotation
 
-$\hat{\mathbf{B}}^\text{RTN}$ is computed per-chunk from MAG L1D's `b_dsrf` (despun spacecraft frame) using `MagL1dData.rebin_to(chunk_center, 30s)` and `get_swapi_dsrf_to_rtn` (SPICE: `IMAP_DPS → IMAP_RTN`). NaN propagation: rebin returning non-finite or near-zero magnitude → `MAG_GAP`. When proton speed is finite but MAG is unavailable, the fitter falls back to the nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ in RTN and sets `ALPHA_MAG_DATA_FALLBACK`.
+$\hat{\mathbf{B}}^\text{RTN}$ is computed per-chunk by `_compute_b_hat_rtn` from MAG L1D's `b_dsrf` (despun spacecraft frame) using `MagL1dData.rebin_to(chunk_center, 30s)` and a precomputed `dsrf_to_rtn` rotation matrix (from `get_swapi_dsrf_to_rtn`, SPICE: `IMAP_DPS → IMAP_RTN`). Both the rotation matrix and the MAG rebin are computed once per chunk during SPICE precomputation, before multiprocessing dispatch. NaN propagation: rebin returning non-finite or near-zero magnitude → `MAG_GAP`. When proton speed is finite but MAG is unavailable (or the rebinned $\hat{\mathbf{B}}$ fails the unit-vector check $0.99 < \|\hat{\mathbf{B}}\| < 1.01$), the fitter falls back to the nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ in RTN and sets `ALPHA_MAG_DATA_FALLBACK`.
 
 ### Known limitations
 

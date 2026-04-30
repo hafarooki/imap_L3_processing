@@ -118,10 +118,9 @@ def calculate_combined_sweeps(coincidence_count_rates, energies):
     return average_coin_rates, energies
 
 
-def get_alpha_peak_indices(count_rates, energies) -> slice:
+def get_alpha_peak_indices(count_rates, energies, proton_peak_index) -> slice:
     energies = np.asarray(energies)
     assert np.all(energies[:-1] >= energies[1:]), "Energies must be decreasing"
-    proton_peak_index = get_peak_indices(count_rates, 0).start
 
     def find_start_of_alpha_particle_peak():
         last_count_rate = count_rates[proton_peak_index]
