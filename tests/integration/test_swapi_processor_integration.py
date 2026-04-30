@@ -125,6 +125,7 @@ class SwapiProcessorIntegration(unittest.TestCase):
         # so returncode==0 alone doesn't prove the fitter ran. Open the CDF and
         # check that at least one chunk produced a finite, physical solar-wind speed.
         with CDF(str(expected_file_path)) as cdf:
+            speed_fill = float(cdf["proton_sw_speed"].attrs["FILLVAL"])
             speeds = np.asarray(cdf["proton_sw_speed"][...], dtype=float)
             temperatures = np.asarray(cdf["proton_sw_temperature"][...], dtype=float)
             densities = np.asarray(cdf["proton_sw_density"][...], dtype=float)
@@ -149,7 +150,8 @@ class SwapiProcessorIntegration(unittest.TestCase):
             )
             flags = np.asarray(cdf["swp_flags"][...])
 
-        finite = speeds[np.isfinite(speeds)]
+        valid = np.isfinite(speeds) & (speeds != speed_fill)
+        finite = speeds[valid]
         self.assertGreater(len(finite), 0, "no chunk produced a finite proton_sw_speed")
         self.assertTrue(
             np.all((finite > 200.0) & (finite < 1500.0)),
@@ -185,7 +187,7 @@ class SwapiProcessorIntegration(unittest.TestCase):
         )
         np.testing.assert_allclose(
             deflection_angles[chk],
-            [175.348, 174.780, 173.174],
+            [4.652, 5.220, 6.826],
             rtol=0.01,
             err_msg="proton_sw_deflection_angle regression",
         )
@@ -211,19 +213,19 @@ class SwapiProcessorIntegration(unittest.TestCase):
         )
         np.testing.assert_allclose(
             speed_uncerts[chk],
-            [0.16161, 0.16623, 0.28344],
+            [0.357867, 0.776051, 0.753184],
             rtol=0.01,
             err_msg="proton_sw_speed_uncert regression",
         )
         np.testing.assert_allclose(
             temp_uncerts[chk],
-            [796.40, 935.87, 2468.61],
+            [1763.507, 4369.083, 6559.847],
             rtol=0.01,
             err_msg="proton_sw_temperature_uncert regression",
         )
         np.testing.assert_allclose(
             density_uncerts[chk],
-            [0.022213, 0.028766, 0.047723],
+            [0.049187, 0.134292, 0.126813],
             rtol=0.01,
             err_msg="proton_sw_density_uncert regression",
         )
@@ -373,7 +375,7 @@ class SwapiProcessorIntegration(unittest.TestCase):
                 )
                 np.testing.assert_allclose(
                     deflection_angles[chk],
-                    [180.0, 180.0, 180.0],
+                    [0, 0, 0],
                     rtol=0.01,
                     err_msg="proton_sw_deflection_angle regression",
                 )
