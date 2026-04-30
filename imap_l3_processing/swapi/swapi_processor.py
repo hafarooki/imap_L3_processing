@@ -107,7 +107,7 @@ def _derive_proton_velocity_angles(
     return (
         ufloat(speed, speed_sigma),
         ufloat(np.degrees(np.arctan2(u[1], u[0])) % 360, clock_sigma),
-        ufloat(np.degrees(np.arccos(u[2] / speed)), defl_sigma),
+        ufloat(np.degrees(np.arccos(-u[2] / speed)), defl_sigma),
     )
 
 

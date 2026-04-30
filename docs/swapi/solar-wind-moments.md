@@ -10,7 +10,7 @@
 
 ## TODO
 
-- [ ] Clock angle, deflection angle fix
+- [x] Clock angle, deflection angle fix
 - [ ] Validate uncertainty
 - [ ] Validate alphas
 - [ ] Empirically validate alpha-species correction $\mathcal{A}_0^\alpha/\mathcal{A}_0^p = \varepsilon_\alpha/\varepsilon_p$ against OMNI alpha density (the paper does not prove this; alpha ABM measurements weren't taken)
@@ -225,7 +225,7 @@ $$\sigma_n = n\,\sqrt{\Sigma_{x,00}}, \qquad \sigma_T = T\,\sqrt{\Sigma_{x,11}}.
 **Speed, clock angle, and deflection angle** are computed in the IMAP DPS (despun spacecraft) frame rather than RTN so that the angles reflect the plasma flow direction relative to the spacecraft attitude. Let $R_\text{RTN\to DPS}$ be the rotation from RTN to DPS at the chunk center epoch (obtained via `get_swapi_dsrf_to_rtn(...)[0].T`), and let
 $$\mathbf{u} = R_\text{RTN\to DPS}\,\mathbf{v}_b^\text{SC}, \qquad u_{xy} = \sqrt{u_0^2 + u_1^2}.$$
 The derived quantities and their angle definitions are:
-$$|\mathbf{v}| = |\mathbf{u}|, \qquad \phi_c = \arctan2(u_1,\, u_0) \bmod 360°, \qquad \phi_d = \arccos\!\left(\frac{u_2}{|\mathbf{u}|}\right).$$
+$$|\mathbf{v}| = |\mathbf{u}|, \qquad \phi_c = \arctan2(u_1,\, u_0) \bmod 360°, \qquad \phi_d = \arccos\!\left(\frac{-u_2}{|\mathbf{u}|}\right).$$
 
 The velocity covariance is rotated into DPS:
 $$\Sigma_\text{DPS} = R_\text{RTN\to DPS}\,\Sigma_v\,R_\text{RTN\to DPS}^\top, \qquad \Sigma_v = \Sigma_x[2\!:\!5,\,2\!:\!5].$$
@@ -233,7 +233,7 @@ $$\Sigma_\text{DPS} = R_\text{RTN\to DPS}\,\Sigma_v\,R_\text{RTN\to DPS}^\top, \
 Gaussian propagation then gives:
 $$\sigma_{|\mathbf{v}|} = \sqrt{\mathbf{g}_s^\top \Sigma_\text{DPS}\, \mathbf{g}_s}, \quad \mathbf{g}_s = \frac{\mathbf{u}}{|\mathbf{u}|},$$
 $$\sigma_{\phi_c} = \sqrt{\mathbf{g}_c^\top \Sigma_\text{DPS}\, \mathbf{g}_c}, \quad \mathbf{g}_c = \frac{1}{u_{xy}^2}\begin{pmatrix}-u_1\\u_0\\0\end{pmatrix},$$
-$$\sigma_{\phi_d} = \sqrt{\mathbf{g}_d^\top \Sigma_\text{DPS}\, \mathbf{g}_d}, \quad \mathbf{g}_d = \frac{1}{|\mathbf{u}|^2}\begin{pmatrix}\dfrac{u_0 u_2}{u_{xy}}\\\dfrac{u_1 u_2}{u_{xy}}\\-u_{xy}\end{pmatrix}.$$
+$$\sigma_{\phi_d} = \sqrt{\mathbf{g}_d^\top \Sigma_\text{DPS}\, \mathbf{g}_d}, \quad \mathbf{g}_d = \frac{1}{|\mathbf{u}|^2}\begin{pmatrix}-\dfrac{u_0 u_2}{u_{xy}}\\-\dfrac{u_1 u_2}{u_{xy}}\\u_{xy}\end{pmatrix}.$$
 
 These uncertainties reflect Poisson shot noise only; model imperfection (non-Maxwellian features, alpha contamination, temporal variability within the fit window) is not captured.
 

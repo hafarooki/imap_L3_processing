@@ -301,9 +301,9 @@ class TestSwapiProcessor(TestCase):
 
         vr, vt, vn = returned_bulk_velocity_rtn
         expected_speed = np.linalg.norm(returned_bulk_velocity_rtn)
-        # R=identity so u=velocity_rtn; clock=arctan2(u[1],u[0])%360, defl=arccos(u[2]/|u|)
+        # R=identity so u=velocity_rtn; clock=arctan2(u[1],u[0])%360, defl=arccos(-u[2]/|u|)
         expected_clock_angle = np.degrees(np.arctan2(vt, vr)) % 360
-        expected_deflection_angle = np.degrees(np.arccos(vn / expected_speed))
+        expected_deflection_angle = np.degrees(np.arccos(-vn / expected_speed))
         ten_min_speeds, ten_min_deflections, ten_min_clocks, ten_min_flags = (
             mock_calculate_ten_minute_velocities.call_args.args
         )
@@ -682,9 +682,9 @@ class TestSwapiProcessor(TestCase):
         )
 
         vr, vt, vn = returned_bulk_velocity_rtn
-        # R=identity so u=velocity_rtn; clock=arctan2(u[1],u[0])%360, defl=arccos(u[2]/|u|)
+        # R=identity so u=velocity_rtn; clock=arctan2(u[1],u[0])%360, defl=arccos(-u[2]/|u|)
         expected_clock_angle = np.degrees(np.arctan2(vt, vr)) % 360
-        expected_deflection_angle = np.degrees(np.arccos(vn / expected_speed))
+        expected_deflection_angle = np.degrees(np.arccos(-vn / expected_speed))
         self.assertAlmostEqual(
             actual_proton_sw_clock_angle[0].nominal_value, expected_clock_angle
         )
