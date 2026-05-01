@@ -376,7 +376,7 @@ class SwapiProcessorIntegration(unittest.TestCase):
                 np.testing.assert_allclose(
                     deflection_angles[chk],
                     [0, 0, 0],
-                    rtol=0.01,
+                    atol=0.01,
                     err_msg="proton_sw_deflection_angle regression",
                 )
                 np.testing.assert_allclose(

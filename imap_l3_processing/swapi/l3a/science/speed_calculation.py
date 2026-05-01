@@ -57,19 +57,6 @@ def esa_voltage_to_alpha_speed(esa_voltage: ArrayLike) -> np.ndarray:
     )
 
 
-def get_peak_indices(count_rates, width, mask=True) -> slice:
-    max_indices = np.argwhere(
-        (count_rates == np.max(count_rates, where=mask, initial=0)) & mask
-    )
-    left_min_index = np.min(max_indices)
-    right_min_index = np.max(max_indices)
-
-    if right_min_index - left_min_index > 1:
-        raise Exception("Count rates contains multiple distinct peaks")
-
-    return slice(max(0, left_min_index - width), right_min_index + width + 1)
-
-
 def find_peak_center_of_mass_index(
     peak_slice, count_rates, minimum_count_rate=0, minimum_bin_count=0
 ):
@@ -114,29 +101,38 @@ def extract_coarse_sweep(data: np.ndarray):
 def calculate_combined_sweeps(coincidence_count_rates, energies):
     energies = np.mean(extract_coarse_sweep(energies), axis=0)
     coincidence_count_rates = extract_coarse_sweep(coincidence_count_rates)
-    average_coin_rates = np.sum(coincidence_count_rates, axis=0) / len(coincidence_count_rates)
+    average_coin_rates = np.sum(coincidence_count_rates, axis=0) / len(
+        coincidence_count_rates
+    )
     return average_coin_rates, energies
 
 
-def get_alpha_peak_indices(count_rates, energies, proton_peak_index) -> slice:
+def get_alpha_peak_indices(residuals, energies, proton_peak_index) -> slice:
     energies = np.asarray(energies)
     assert np.all(energies[:-1] >= energies[1:]), "Energies must be decreasing"
 
+    min_energy = 1.5 * energies[proton_peak_index]
+    max_energy = 4.0 * energies[proton_peak_index]
+
     def find_start_of_alpha_particle_peak():
-        last_count_rate = count_rates[proton_peak_index]
-        for i in reversed(range(proton_peak_index - 1)):
-            if count_rates[i] > last_count_rate:
+        start_bin = None
+        for i in reversed(range(proton_peak_index)):
+            if energies[i] >= min_energy:
+                start_bin = i
+                break
+        if start_bin is None:
+            return None
+        for i in reversed(range(start_bin + 1)):
+            if residuals[i] > residuals[i + 1] and residuals[i - 1] > residuals[i]:
                 return i
-            last_count_rate = count_rates[i]
+        return None
 
     start_of_alpha_peak = find_start_of_alpha_particle_peak()
     if start_of_alpha_peak is None:
         raise Exception("Alpha peak not found")
-    indices = np.arange(len(count_rates))
-    after_proton_peak = indices <= start_of_alpha_peak
-    before_4x_proton_energy = energies <= 4 * energies[proton_peak_index]
-    mask = after_proton_peak & before_4x_proton_energy
-    return get_peak_indices(count_rates, 2, mask)
+
+    end_of_alpha_peak = np.searchsorted(-energies, -max_energy)
+    return slice(int(end_of_alpha_peak), start_of_alpha_peak + 1)
 
 
 def calculate_sw_speed(particle_mass, particle_charge, energy):

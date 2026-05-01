@@ -476,109 +476,50 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
         self.assertGreater(result.temperature, 1e4)
         self.assertLess(result.temperature, 1e7)
 
-    # @unittest.expectedFailure
-    def test_weak_alpha_density_ratio(self):
-        """Chunk 58: weak alpha signal (T_p ~161K K). Density must not collapse.
-        Currently fails — LM still finds the n↓/T↑ ridge for weak signals."""
-        f = _load_fixture("weak_alpha")
-        result = self._run_alpha_fit("weak_alpha")
+    def _assert_density_ratio_near_neighbors(self, fixture_name):
+        f = _load_fixture(fixture_name)
+        result = self._run_alpha_fit(fixture_name)
         self.assertEqual(result.bad_fit_flag, 0)
         ratio = result.density / float(f["proton_density"])
-        self.assertGreater(ratio, 0.01)
+        neighbor_min = float(f["neighbor_min_density_ratio"])
+        self.assertGreaterEqual(ratio, 0.5 * neighbor_min)
         self.assertLess(ratio, 0.15)
 
-    @unittest.expectedFailure
+    def test_weak_alpha_density_ratio(self):
+        """Chunk 58: weak alpha signal (T_p ~161K K)."""
+        self._assert_density_ratio_near_neighbors("weak_alpha")
+
     def test_weak_alpha_cold_tp_density_ratio(self):
         """Chunk 93: weak alpha with cold protons (T_p ~103K K, n_p ~3.3)."""
-        f = _load_fixture("weak_alpha_cold_tp")
-        result = self._run_alpha_fit("weak_alpha_cold_tp")
-        self.assertEqual(result.bad_fit_flag, 0)
-        ratio = result.density / float(f["proton_density"])
-        T_ratio = result.temperature / float(f["proton_temperature"])
-        self.assertGreater(ratio, 0.01)
-        self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 20)
+        self._assert_density_ratio_near_neighbors("weak_alpha_cold_tp")
 
     def test_weak_alpha_moderate_tp_density_ratio(self):
         """Chunk 87: weak alpha with moderate protons (T_p ~160K K, n_p ~4.5)."""
-        f = _load_fixture("weak_alpha_moderate_tp")
-        result = self._run_alpha_fit("weak_alpha_moderate_tp")
-        self.assertEqual(result.bad_fit_flag, 0)
-        ratio = result.density / float(f["proton_density"])
-        T_ratio = result.temperature / float(f["proton_temperature"])
-        self.assertGreater(ratio, 0.01)
-        self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 20)
+        self._assert_density_ratio_near_neighbors("weak_alpha_moderate_tp")
 
     def test_weak_alpha_isolated_a_density_ratio(self):
         """Chunk 98: isolated single-point outlier (T_p ~170K K, n_p ~4.0)."""
-        f = _load_fixture("weak_alpha_isolated_a")
-        result = self._run_alpha_fit("weak_alpha_isolated_a")
-        self.assertEqual(result.bad_fit_flag, 0)
-        ratio = result.density / float(f["proton_density"])
-        T_ratio = result.temperature / float(f["proton_temperature"])
-        self.assertGreater(ratio, 0.01)
-        self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 20)
+        self._assert_density_ratio_near_neighbors("weak_alpha_isolated_a")
 
     def test_weak_alpha_isolated_b_density_ratio(self):
         """Chunk 236: isolated single-point outlier (T_p ~234K K, n_p ~5.2)."""
-        f = _load_fixture("weak_alpha_isolated_b")
-        result = self._run_alpha_fit("weak_alpha_isolated_b")
-        self.assertEqual(result.bad_fit_flag, 0)
-        ratio = result.density / float(f["proton_density"])
-        T_ratio = result.temperature / float(f["proton_temperature"])
-        self.assertGreater(ratio, 0.01)
-        self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 20)
+        self._assert_density_ratio_near_neighbors("weak_alpha_isolated_b")
 
-    @unittest.expectedFailure
     def test_density_dip_early_a(self):
-        """Chunk 35: isolated density dip (n_a/n_p ~0.015, neighbors ~0.04–0.07)."""
-        f = _load_fixture("density_dip_early_a")
-        result = self._run_alpha_fit("density_dip_early_a")
-        self.assertEqual(result.bad_fit_flag, 0)
-        ratio = result.density / float(f["proton_density"])
-        T_ratio = result.temperature / float(f["proton_temperature"])
-        self.assertGreater(ratio, 0.03)
-        self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 20)
+        """Chunk 35: isolated density dip (neighbors ~0.04–0.07)."""
+        self._assert_density_ratio_near_neighbors("density_dip_early_a")
 
-    @unittest.expectedFailure
     def test_density_dip_early_b(self):
-        """Chunk 159: isolated density dip (n_a/n_p ~0.011, neighbors ~0.06)."""
-        f = _load_fixture("density_dip_early_b")
-        result = self._run_alpha_fit("density_dip_early_b")
-        self.assertEqual(result.bad_fit_flag, 0)
-        ratio = result.density / float(f["proton_density"])
-        T_ratio = result.temperature / float(f["proton_temperature"])
-        self.assertGreater(ratio, 0.03)
-        self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 20)
+        """Chunk 159: isolated density dip (neighbors ~0.06)."""
+        self._assert_density_ratio_near_neighbors("density_dip_early_b")
 
-    @unittest.expectedFailure
     def test_density_dip_extreme_a(self):
-        """Chunk 1236: extreme density dip (n_a/n_p ~0.002, neighbors ~0.03–0.06)."""
-        f = _load_fixture("density_dip_extreme_a")
-        result = self._run_alpha_fit("density_dip_extreme_a")
-        self.assertEqual(result.bad_fit_flag, 0)
-        ratio = result.density / float(f["proton_density"])
-        T_ratio = result.temperature / float(f["proton_temperature"])
-        self.assertGreater(ratio, 0.02)
-        self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 20)
+        """Chunk 1236: extreme density dip (neighbors ~0.03)."""
+        self._assert_density_ratio_near_neighbors("density_dip_extreme_a")
 
-    @unittest.expectedFailure
     def test_density_dip_extreme_b(self):
-        """Chunk 1304: extreme density dip (n_a/n_p ~0.005, neighbors ~0.15)."""
-        f = _load_fixture("density_dip_extreme_b")
-        result = self._run_alpha_fit("density_dip_extreme_b")
-        self.assertEqual(result.bad_fit_flag, 0)
-        ratio = result.density / float(f["proton_density"])
-        T_ratio = result.temperature / float(f["proton_temperature"])
-        self.assertGreater(ratio, 0.02)
-        self.assertLess(ratio, 0.15)
-        self.assertLess(T_ratio, 20)
+        """Chunk 1304: extreme density dip (neighbors ~0.15)."""
+        self._assert_density_ratio_near_neighbors("density_dip_extreme_b")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Fit three least-squares formulations on real SWAPI L2 data and compare:
+Fit four least-squares formulations on real SWAPI L2 data and compare:
   1. Unweighted log-space (current): residual = log(model) - log(data)
-  2. sqrt(N)-weighted linear (previous): residual = (model - data) / sigma_poisson
-  3. Unweighted linear: residual = model - data
+  2. 1/sqrt(N)-weighted log-space: residual = (log(model) - log(data)) / (1/sqrt(N))
+  3. sqrt(N)-weighted linear (previous): residual = (model - data) / sigma_poisson
+  4. Unweighted linear: residual = model - data
 
 Uses three 5-sweep chunks from L2 CDFs with different solar wind conditions
 (slow/medium/fast). Each row is a chunk, each column is a sweep; all three
@@ -146,14 +147,20 @@ def _fit_log_unweighted(cr, grids, cs, cea, at, ats, rot, ig):
 
 def _fit_linear_weighted(cr, grids, cs, cea, at, ats, rot, ig):
     sigma = np.sqrt(np.maximum(cr * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
-    x0 = np.array(
-        [np.log(ig.density), np.log(ig.temperature), *ig.bulk_velocity_rtn]
-    )
+    x0 = np.array([np.log(ig.density), np.log(ig.temperature), *ig.bulk_velocity_rtn])
 
     def residuals(x):
         model_true = _model_count_rates(
-            np.exp(x[0]), np.exp(x[1]), x[2:5],
-            grids, cs, cea, at, ats, rot, PROTON_MASS_KG,
+            np.exp(x[0]),
+            np.exp(x[1]),
+            x[2:5],
+            grids,
+            cs,
+            cea,
+            at,
+            ats,
+            rot,
+            PROTON_MASS_KG,
         )
         return (apply_deadtime_correction_array(model_true) - cr) / sigma
 
@@ -174,15 +181,58 @@ def _fit_linear_weighted(cr, grids, cs, cea, at, ats, rot, ig):
     )
 
 
-def _fit_linear_unweighted(cr, grids, cs, cea, at, ats, rot, ig):
-    x0 = np.array(
-        [np.log(ig.density), np.log(ig.temperature), *ig.bulk_velocity_rtn]
-    )
+def _fit_log_weighted(cr, grids, cs, cea, at, ats, rot, ig):
+    sigma = 1.0 / np.sqrt(np.maximum(cr * SWAPI_LIVETIME_S, 1.0))
+    x0 = np.array([np.log(ig.density), np.log(ig.temperature), *ig.bulk_velocity_rtn])
 
     def residuals(x):
         model_true = _model_count_rates(
-            np.exp(x[0]), np.exp(x[1]), x[2:5],
-            grids, cs, cea, at, ats, rot, PROTON_MASS_KG,
+            np.exp(x[0]),
+            np.exp(x[1]),
+            x[2:5],
+            grids,
+            cs,
+            cea,
+            at,
+            ats,
+            rot,
+            PROTON_MASS_KG,
+        )
+        model = apply_deadtime_correction_array(model_true)
+        return (np.log(model) - np.log(cr)) / sigma
+
+    result = scipy.optimize.least_squares(residuals, x0, method="lm", diff_step=1e-4)
+    spin_axis = rot[0, 1, :].copy()
+    v = result.x[2:5]
+    vf = 2.0 * float(np.dot(v, spin_axis)) * spin_axis - v
+    xf = result.x.copy()
+    xf[2:5] = vf
+    rf = scipy.optimize.least_squares(residuals, xf, method="lm", diff_step=1e-4)
+    if np.sum(rf.fun**2) < np.sum(result.fun**2):
+        result = rf
+    return ProtonSolarWindMoments(
+        density=float(np.exp(result.x[0])),
+        temperature=float(np.exp(result.x[1])),
+        bulk_velocity_rtn=result.x[2:5],
+        bad_fit_flag=0,
+    )
+
+
+def _fit_linear_unweighted(cr, grids, cs, cea, at, ats, rot, ig):
+    x0 = np.array([np.log(ig.density), np.log(ig.temperature), *ig.bulk_velocity_rtn])
+
+    def residuals(x):
+        model_true = _model_count_rates(
+            np.exp(x[0]),
+            np.exp(x[1]),
+            x[2:5],
+            grids,
+            cs,
+            cea,
+            at,
+            ats,
+            rot,
+            PROTON_MASS_KG,
         )
         return apply_deadtime_correction_array(model_true) - cr
 
@@ -225,13 +275,16 @@ def main():
 
     fitter_specs = [
         ("Log unweighted", "C0", "-", _fit_log_unweighted),
+        ("1/√N-weighted log", "C3", "-.", _fit_log_weighted),
         ("√N-weighted linear", "C1", "--", _fit_linear_weighted),
         ("Unweighted linear", "C2", ":", _fit_linear_unweighted),
     ]
 
     for i_chunk, chunk_spec in enumerate(CHUNKS):
         print(f"\n--- {chunk_spec['label']} ---")
-        print(f"  Loading {chunk_spec['file']} sweeps {chunk_spec['sweep_start']}–{chunk_spec['sweep_start']+4}...")
+        print(
+            f"  Loading {chunk_spec['file']} sweeps {chunk_spec['sweep_start']}–{chunk_spec['sweep_start'] + 4}..."
+        )
         cr_2d, esa_2d, epochs, meas_times = _load_chunk(chunk_spec)
 
         n_bins = cr_2d.shape[1]

@@ -65,8 +65,8 @@ EPSILON_SG = 1e-6
 # Rearranged for forward model (true rate -> measured rate): g = n / (1 + n*tau)
 SWAPI_DEADTIME_S = 183.7e-9
 
-# Duration of one ESA energy step measurement; converts count rate to counts for
-# Poisson sigma estimation: sigma(rate) = sqrt(max(rate * T, 1)) / T
+# Duration of one ESA energy step measurement (seconds). Used by test harnesses
+# for Poisson noise generation (rate × T → counts → Poisson → ÷ T).
 SWAPI_LIVETIME_S = 0.145
 
 # Floor for the initial-guess temperature, applied when the fitted spectral width
@@ -790,7 +790,7 @@ def _optimize(
 
     vr0, vt0, vn0 = initial_guess.bulk_velocity_rtn
 
-    sigma = np.sqrt(np.maximum(count_rate * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
+    sigma = np.ones(len(count_rate))
 
     if spin_axis_rtn is None:
         spin_axis_rtn = rotation_matrices[0, 1, :].copy()

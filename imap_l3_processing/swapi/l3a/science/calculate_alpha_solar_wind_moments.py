@@ -23,21 +23,16 @@ from numpy import ndarray
 from imap_l3_processing.constants import (
     ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     ALPHA_PARTICLE_MASS_KG,
-    BOLTZMANN_CONSTANT_JOULES_PER_KELVIN,
-    METERS_PER_KILOMETER,
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    INITIAL_TEMPERATURE_FLOOR_K,
     ProtonSolarWindMoments,
-    SWAPI_LIVETIME_S,
     _model_count_rates,
     apply_deadtime_correction_array,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_K_FACTOR,
-    esa_voltage_to_alpha_speed,
     get_alpha_peak_indices,
 )
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
@@ -210,6 +205,7 @@ def fit_solar_wind_alpha_moments(
         count_rate=count_rate,
         esa_voltage=esa_voltage,
         proton_true_rate=proton_true_rate,
+        proton_temperature=float(proton_moments.temperature),
         passband_grids=passband_grids,
         alpha_central_speeds=alpha_central_speeds,
         alpha_central_eff_areas=alpha_central_eff_areas,
@@ -241,10 +237,7 @@ def fit_solar_wind_alpha_moments(
     rotation_matrices_peak = rotation_matrices[peak_flat_idx]
     passband_grids_peak = numba.typed.List([passband_grids[i] for i in peak_flat_idx])
 
-    sigma_peak = (
-        np.sqrt(np.maximum(count_rate_peak * SWAPI_LIVETIME_S, 1.0))
-        / SWAPI_LIVETIME_S
-    )
+    sigma_peak = np.ones(len(count_rate_peak))
 
     def residuals(x):
         return _alpha_residuals_njit(
@@ -314,6 +307,7 @@ def _alpha_initial_guess(
     count_rate: ndarray,
     esa_voltage: ndarray,
     proton_true_rate: ndarray,
+    proton_temperature: float,
     passband_grids: numba.typed.List,
     alpha_central_speeds: ndarray,
     alpha_central_eff_areas: ndarray,
@@ -357,49 +351,12 @@ def _alpha_initial_guess(
     if not np.any(residual_peak > 0):
         return None
 
-    speed_peak = esa_voltage_to_alpha_speed(voltage_per_sweep[peak_idx])
-    p0 = [residual_peak.max(), speed_peak[int(np.argmax(residual_peak))], 50.0]
-    try:
-        (_, bulk_speed, sigma_v), _ = scipy.optimize.curve_fit(
-            lambda v, A, mu, sigma: A * np.exp(-((v - mu) ** 2) / (2 * sigma**2)),
-            speed_peak,
-            residual_peak,
-            p0=p0,
-            bounds=([0, 0, 0], [np.inf, np.inf, np.inf]),
-        )
-    except RuntimeError:
-        bulk_speed = float(speed_peak[int(np.argmax(residual_peak))])
-        sigma_v = 50.0
-
-    sigma_floor_v = float(
-        np.sqrt(
-            INITIAL_TEMPERATURE_FLOOR_K
-            * BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
-            / ALPHA_PARTICLE_MASS_KG
-        )
-        / METERS_PER_KILOMETER
-    )
-    sigma_thermal_v = max(float(sigma_v), sigma_floor_v)
-    T_alpha = float(
-        ALPHA_PARTICLE_MASS_KG
-        * (sigma_thermal_v * METERS_PER_KILOMETER) ** 2
-        / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
-    )
-    # Extend the peak window toward higher speeds (lower bin indices) up to
-    # bulk_speed + 2σ.  This captures the rising edge of the alpha bump so
-    # that LM has enough width information to reject the n↓/T↑ ridge.
-    all_speeds = esa_voltage_to_alpha_speed(voltage_per_sweep)
-    upper_speed = bulk_speed + 2.0 * sigma_thermal_v
-    high_speed_ext = np.where(
-        (all_speeds <= upper_speed) & (np.arange(n_bins) < peak_idx[0])
-    )[0]
-    if len(high_speed_ext) > 0:
-        peak_idx = np.concatenate([high_speed_ext, peak_idx])
+    T_alpha = proton_temperature
 
     unit_alpha = _model_count_rates(
         1.0,
         T_alpha,
-        proton_bulk_velocity_rtn + 0.0 * b_hat_rtn,
+        proton_bulk_velocity_rtn,
         passband_grids,
         alpha_central_speeds,
         alpha_central_eff_areas,

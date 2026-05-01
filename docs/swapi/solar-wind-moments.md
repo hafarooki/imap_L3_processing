@@ -25,6 +25,7 @@ Replace with the proper `lab_time` lookup once the LUT format gains the field (s
 - [ ] Clarify behavior of partial last chunk from `chunk_l2_data` — if the day's sweep count isn't a multiple of 5, the final group has fewer sweeps and its epoch (`sci_start_time[0] + 30s`) is off-center; decide whether to drop it, pad it, or accept the timestamp offset
 - [ ] Handle daily repointing data gaps
 - [ ] Use L2 or L1D depending on what's available https://github.com/IMAP-Science-Operations-Center/imap_L3_processing/issues/13
+- [ ] Investigate the degeneracy in clock angle at 8:11 on 2026-02-04
 
 ## Model
 
@@ -178,9 +179,8 @@ Figure below shows initial-guess and final-fit accuracy across 10000 random sola
 
 ### Step 3: Optimization
 
-Parameters $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ (with $\mathbf{v}_b^\text{SC} = (v_R, v_T, v_N)$ in the spacecraft RTN frame) are fit by `scipy.optimize.least_squares` using the Levenberg–Marquardt algorithm (`method='lm'`, `diff_step=1e-4`) with Poisson-weighted residuals over a 10%-of-peak count-rate mask
-$$\mathcal{M} = \{i : C_i \geq 0.1 \max_j C_j\}, \qquad r_i = \frac{C_i^\text{model} - C_i}{\sigma_i}\ \ \text{for}\ i \in \mathcal{M}, \qquad \sigma_i = \frac{\sqrt{\max(C_i \cdot \Delta t,\; 1)}}{\Delta t},$$
-where $\Delta t = 0.145\ \text{s}$ is the livetime per ESA energy step. The Poisson standard deviation of a count rate uses $\max(C_i \Delta t, 1)$ — the observed photon count clamped to at least 1 (so $\sigma_i$ is never zero), divided by $\Delta t$ to return to count-rate units.
+Parameters $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ (with $\mathbf{v}_b^\text{SC} = (v_R, v_T, v_N)$ in the spacecraft RTN frame) are fit by `scipy.optimize.least_squares` using the Levenberg–Marquardt algorithm (`method='lm'`, `diff_step=1e-4`) with unweighted residuals over a 10%-of-peak count-rate mask:
+$$\mathcal{M} = \{i : C_i \geq 0.1 \max_j C_j\}, \qquad r_i = C_i^\text{model} - C_i\ \ \text{for}\ i \in \mathcal{M}.$$
 
 Bins below 10% of the peak count rate are dropped: they carry essentially no proton signal (the proton peak sits in a narrow speed window — most ESA bins are noise floor and off-axis leakage), but with N ≈ 355 bins per 5-sweep fit they still contribute non-trivial residuals that can pull the moments. The 10% threshold is chosen to exclude the deep tails (PUI/alpha contamination in production data) while keeping enough bins that the spin-axis-mirror basins remain discriminable — tighter masks (e.g. FWHM at 0.5×max) leave the cold-plasma chi² landscape too noise-degenerate to pick the right basin. The mask is global across all sweeps × bins fed to one fit, and is computed once from the observed count rates only — the model never re-evaluates it. Initial-guess construction (the Gaussian curve fit and the mean-rate density scaling) is unaffected and uses all bins. If fewer than 5 bins survive the mask (fewer constraints than free parameters), the mask is dropped and all bins are fit, which is purely a guard against pathological inputs (e.g. all-zero count rates).
 
@@ -216,9 +216,9 @@ Not accounting for this would result in an overestimate of the model count rate 
 
 #### Parameter uncertainties
 
-The Jacobian $J$ of the normalized residuals $r_i$ with respect to $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ at the solution is returned by the optimizer. The covariance matrix in parameter space is estimated as
+The Jacobian $J$ of the residuals $r_i$ with respect to $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ at the solution is returned by the optimizer. The covariance matrix in parameter space is estimated as
 $$\Sigma_x = s^2\,(J^\top J)^+, \qquad s^2 = \frac{\sum_i r_i^2}{N - p},$$
-where ${}^+$ denotes the Moore–Penrose pseudoinverse, $N$ is the number of residuals, and $p$ is the number of fitted parameters. The reduced chi-squared $s^2$ rescales the covariance so that uncertainties reflect the actual residual scatter (fitting error) rather than the assumed Poisson weights alone — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`. Uncertainty in $n$ and $T$ follows directly:
+where ${}^+$ denotes the Moore–Penrose pseudoinverse, $N$ is the number of residuals, and $p$ is the number of fitted parameters. Since the residuals are unweighted, the variance $s^2$ estimated from the residuals themselves captures both measurement noise and model error — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`. Uncertainty in $n$ and $T$ follows directly:
 $$\sigma_n = n\,\sqrt{\Sigma_{x,00}}, \qquad \sigma_T = T\,\sqrt{\Sigma_{x,11}}.$$
 
 **Speed, clock angle, and deflection angle** are computed in the IMAP DPS (despun spacecraft) frame rather than RTN so that the angles reflect the plasma flow direction relative to the spacecraft attitude. Let $R_\text{RTN\to DPS}$ be the rotation from RTN to DPS at the chunk center epoch (obtained via `get_swapi_dsrf_to_rtn(...)[0].T`), and let
@@ -234,7 +234,7 @@ $$\sigma_{|\mathbf{v}|} = \sqrt{\mathbf{g}_s^\top \Sigma_\text{DPS}\, \mathbf{g}
 $$\sigma_{\phi_c} = \sqrt{\mathbf{g}_c^\top \Sigma_\text{DPS}\, \mathbf{g}_c}, \quad \mathbf{g}_c = \frac{1}{u_{xy}^2}\begin{pmatrix}-u_1\\u_0\\0\end{pmatrix},$$
 $$\sigma_{\phi_d} = \sqrt{\mathbf{g}_d^\top \Sigma_\text{DPS}\, \mathbf{g}_d}, \quad \mathbf{g}_d = \frac{1}{|\mathbf{u}|^2}\begin{pmatrix}-\dfrac{u_0 u_2}{u_{xy}}\\-\dfrac{u_1 u_2}{u_{xy}}\\u_{xy}\end{pmatrix}.$$
 
-These uncertainties incorporate both Poisson shot noise and residual model–data mismatch through the $s^2$ scaling. When the model is a good fit ($s^2 \approx 1$), the result coincides with pure Poisson propagation; when systematic residuals inflate $s^2 > 1$ (non-Maxwellian features, alpha contamination, temporal variability within the fit window), the reported uncertainties grow accordingly.
+These uncertainties reflect the actual residual scatter through the $s^2$ scaling, which absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, temporal variability within the fit window).
 
 When $u_{xy} = 0$ exactly, $\mathbf{g}_c$ and $\mathbf{g}_d$ are undefined; the processor sets both $\sigma_{\phi_c}$ and $\sigma_{\phi_d}$ to NaN in that case.
 
