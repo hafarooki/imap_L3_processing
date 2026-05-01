@@ -75,7 +75,8 @@ def _alpha_residuals_njit(
     proton_bulk,
     b_hat_rtn,
     proton_true_rate,
-    log_count_rate,
+    count_rate,
+    sigma,
     passband_grids,
     alpha_central_speeds,
     alpha_central_eff_areas,
@@ -100,10 +101,7 @@ def _alpha_residuals_njit(
         ALPHA_PARTICLE_MASS_KG,
     )
     combined_obs = apply_deadtime_correction_array(proton_true_rate + alpha_true)
-    log_model = np.empty_like(combined_obs)
-    for i in range(len(combined_obs)):
-        log_model[i] = np.log(max(combined_obs[i], 1e-30))
-    return log_model - log_count_rate
+    return (combined_obs - count_rate) / sigma
 
 
 def fit_solar_wind_alpha_moments(
@@ -243,7 +241,10 @@ def fit_solar_wind_alpha_moments(
     rotation_matrices_peak = rotation_matrices[peak_flat_idx]
     passband_grids_peak = numba.typed.List([passband_grids[i] for i in peak_flat_idx])
 
-    log_count_rate_peak = np.log(count_rate_peak)
+    sigma_peak = (
+        np.sqrt(np.maximum(count_rate_peak * SWAPI_LIVETIME_S, 1.0))
+        / SWAPI_LIVETIME_S
+    )
 
     def residuals(x):
         return _alpha_residuals_njit(
@@ -251,7 +252,8 @@ def fit_solar_wind_alpha_moments(
             proton_bulk,
             b_hat_rtn,
             proton_true_rate_peak,
-            log_count_rate_peak,
+            count_rate_peak,
+            sigma_peak,
             passband_grids_peak,
             alpha_central_speeds_peak,
             alpha_central_eff_areas_peak,

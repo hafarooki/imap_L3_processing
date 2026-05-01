@@ -746,7 +746,8 @@ def interpolate_passband(
 @numba.njit
 def _residuals_njit(
     x,
-    log_count_rate,
+    count_rate,
+    sigma,
     passband_grids,
     central_speeds,
     central_effective_areas,
@@ -771,10 +772,7 @@ def _residuals_njit(
         mass_kg,
     )
     model_obs = apply_deadtime_correction_array(model_true)
-    log_model = np.empty_like(model_obs)
-    for i in range(len(model_obs)):
-        log_model[i] = np.log(max(model_obs[i], 1e-30))
-    return log_model - log_count_rate
+    return (model_obs - count_rate) / sigma
 
 
 def _optimize(
@@ -792,7 +790,7 @@ def _optimize(
 
     vr0, vt0, vn0 = initial_guess.bulk_velocity_rtn
 
-    log_count_rate = np.log(np.maximum(count_rate, 1e-30))
+    sigma = np.sqrt(np.maximum(count_rate * SWAPI_LIVETIME_S, 1.0)) / SWAPI_LIVETIME_S
 
     if spin_axis_rtn is None:
         spin_axis_rtn = rotation_matrices[0, 1, :].copy()
@@ -810,7 +808,8 @@ def _optimize(
     def residuals(x):
         return _residuals_njit(
             x,
-            log_count_rate,
+            count_rate,
+            sigma,
             passband_grids,
             central_speeds,
             central_effective_areas,
