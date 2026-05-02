@@ -47,7 +47,7 @@ from imap_l3_processing.constants import (
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
     EV_TO_KELVIN,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from figure_utils import load_swapi_response
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_SCIENCE_BINS,
     SWAPI_L2_K_FACTOR,
@@ -61,7 +61,6 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
 _TEST_L2_CDF = (
     _REPO_ROOT / "tests/test_data/swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf"
 )
@@ -119,10 +118,11 @@ _W_ESA = None
 _W_PARAMS = None  # tuple of (bulk_speeds, temperatures, densities, vTs, vNs)
 
 
-def _init_worker(sw_files, voltages, params):
+def _init_worker(voltages, params):
     global _W_SR, _W_TILED, _W_CS, _W_CEA, _W_AT, _W_ATS, _W_ROT, _W_ESA, _W_PARAMS
-    _W_SR = SWAPIResponse.from_files(*sw_files)
+    _W_SR = load_swapi_response()
     all_voltages = np.tile(voltages, _N_SWEEPS)
+    _W_SR.warm_cache(all_voltages)
     _W_TILED = numba.typed.List([_W_SR.create_passband_grid(v) for v in all_voltages])
     _W_CS = np.array(
         [_W_SR.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in all_voltages]
@@ -188,7 +188,7 @@ def _process_chunk(idx_range):
             _W_ESA,
             swapi_response=_W_SR,
             central_effective_area_scale=1,
-            rotation_matrices=_W_ROT
+            rotation_matrices=_W_ROT,
         )
 
         rows.append(
@@ -214,7 +214,7 @@ def _process_chunk(idx_range):
     return rows
 
 
-def _run_cases(sw_files, voltages: np.ndarray) -> dict:
+def _run_cases(voltages: np.ndarray) -> dict:
     rng = np.random.default_rng(_RNG_SEED)
     bulk_speeds = rng.uniform(300, 800, _N_SAMPLES)
     temperatures = np.exp(
@@ -242,7 +242,7 @@ def _run_cases(sw_files, voltages: np.ndarray) -> dict:
     with ProcessPoolExecutor(
         max_workers=n_workers,
         initializer=_init_worker,
-        initargs=(sw_files, voltages, params),
+        initargs=(voltages, params),
     ) as pool:
         rows = []
         for chunk_rows in pool.map(_process_chunk, chunks):
@@ -284,12 +284,7 @@ def _rmse_label(truth, est, scale):
 
 def main():
     print("Loading calibration data...")
-    sw_files = (
-        _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
-    )
-    sr = SWAPIResponse.from_files(*sw_files)
+    sr = load_swapi_response()
 
     print("Loading realistic SWAPI science voltages...")
     voltages = _load_science_voltages()
@@ -297,6 +292,7 @@ def main():
 
     print("Warming up JIT (driver process)...")
     _esa0 = np.tile(voltages, _N_SWEEPS)
+    sr.warm_cache(_esa0)
     _tiled0 = numba.typed.List([sr.create_passband_grid(v) for v in _esa0])
     _cs0 = np.array(
         [sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in _esa0]
@@ -317,9 +313,7 @@ def main():
         _rot0,
         PROTON_MASS_KG,
     )
-    _ig0 = _get_initial_guess(
-        _cr0, _esa0, _tiled0, _cs0, _cea0, _at0, _ats0, _rot0
-    )
+    _ig0 = _get_initial_guess(_cr0, _esa0, _tiled0, _cs0, _cea0, _at0, _ats0, _rot0)
     _optimize(_cr0, _tiled0, _cs0, _cea0, _at0, _ats0, _rot0, _ig0)
     fit_solar_wind_proton_moments(
         _cr0,
@@ -331,7 +325,7 @@ def main():
     print("JIT ready.")
 
     t_total = time.perf_counter()
-    data = _run_cases(sw_files, voltages)
+    data = _run_cases(voltages)
     print(f"Total wall time: {time.perf_counter() - t_total:.1f}s")
 
     n_bad = data["bad_flag"].sum()

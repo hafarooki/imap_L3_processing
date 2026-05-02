@@ -129,6 +129,7 @@ class TestCreatePassbandGridExtremeVoltages(unittest.TestCase):
         )
 
     def _assert_grid_value_bounds(self, esa_voltage):
+        self.response.warm_cache([esa_voltage])
         grid = self.response.create_passband_grid(esa_voltage)
         for values, label in [
             (grid.values_sunglasses, "SG"),
@@ -171,11 +172,13 @@ class TestWarmCache(unittest.TestCase):
         self.assertIs(self.response.create_passband_grid(500.0), cached)
 
     def test_warm_then_create_matches_cold_create(self):
-        cold = SWAPIResponse.from_files(
+        fresh = SWAPIResponse.from_files(
             AZIMUTHAL_TRANSMISSION_PATH,
             CENTRAL_EFFECTIVE_AREA_PATH,
             PASSBAND_FIT_COEFFICIENTS_PATH,
-        ).create_passband_grid(750.0)
+        )
+        fresh.warm_cache([750.0])
+        cold = fresh.create_passband_grid(750.0)
         self.response.warm_cache([750.0])
         warm = self.response.create_passband_grid(750.0)
         npt.assert_array_equal(warm.values_open_aperture, cold.values_open_aperture)
@@ -199,6 +202,7 @@ class TestPassbandPolynomialBoundaries(unittest.TestCase):
             CENTRAL_EFFECTIVE_AREA_PATH,
             PASSBAND_FIT_COEFFICIENTS_PATH,
         )
+        cls.response.warm_cache([2000.0 / 1.89])
         cls.grid = cls.response.create_passband_grid(2000.0 / 1.89)  # 2 keV beam
 
     def _passband_at_speed_ratio(self, grid_values, elevation, speed_ratio):
@@ -273,6 +277,7 @@ class TestPassbandPolynomialBoundaries(unittest.TestCase):
         low and high ends of the OA voltage range, since the polynomial fit
         produces different shapes at different V."""
         v_min, v_max = self.response.passband_esa_voltage_limits["OA"]
+        self.response.warm_cache([v_min * 1.05, v_max * 0.95])
         grid_low = self.response.create_passband_grid(v_min * 1.05)
         grid_high = self.response.create_passband_grid(v_max * 0.95)
 

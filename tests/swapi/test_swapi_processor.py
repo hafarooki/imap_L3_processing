@@ -941,7 +941,7 @@ class TestSwapiProcessor(TestCase):
 
         swapi_processor = SwapiProcessor(Mock(), input_metadata)
         with self.assertLogs(logger) as log_context:
-            product = swapi_processor.process_l3a_alpha_solar_wind(
+            product = swapi_processor.process_l3a_alpha(
                 data=chunk_of_five, dependencies=Mock()
             )
 

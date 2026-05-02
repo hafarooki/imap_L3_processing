@@ -317,7 +317,7 @@ class SwapiProcessor(Processor):
             if self.input_metadata.descriptor == "proton-sw":
                 data = self.process_l3a_proton(l3a_dependencies.data, l3a_dependencies)
             elif self.input_metadata.descriptor == "alpha-sw":
-                data = self.process_l3a_alpha_solar_wind(
+                data = self.process_l3a_alpha(
                     l3a_dependencies.data, l3a_dependencies
                 )
             elif self.input_metadata.descriptor == "pui-he":
@@ -337,6 +337,187 @@ class SwapiProcessor(Processor):
             l3b_combined_vdf.parent_file_names = self.get_parent_file_names()
             cdf_path = save_data(l3b_combined_vdf)
             return [cdf_path]
+
+    def process_l3a_proton(self, data, dependencies) -> SwapiL3ProtonSolarWindData:
+        chunks = list(chunk_l2_data(data, 5))
+
+        # Warm passband-grid cache in the parent so forked workers inherit it.
+        dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
+
+        # Precompute SPICE geometry for all chunks before entering multiprocessing.
+        # Chunks where SPICE fails (CK gaps) get None and are NaN-filled immediately.
+        precomputed = []
+        for data_chunk in chunks:
+            epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
+            try:
+                measurement_times = _measurement_times_for_chunk(
+                    data_chunk, SWAPI_SCIENCE_BINS
+                )
+                rm = get_swapi_geometry(measurement_times)
+                dsrf = get_swapi_dsrf_to_rtn(np.array([epoch]))[0]
+                sc_vel = get_spacecraft_velocity_rtn(epoch)
+                precomputed.append((epoch, rm, dsrf, sc_vel))
+            except Exception:
+                logger.warning(f"SPICE gap at epoch {epoch}, NaN-filling chunk")
+                precomputed.append((epoch, None, None, None))
+
+        results = []
+        submittable = [
+            (i, chunks[i], precomputed[i])
+            for i in range(len(chunks))
+            if precomputed[i][1] is not None
+        ]
+
+        with ProcessPoolExecutor(
+            max_workers=os.cpu_count(),
+            mp_context=multiprocessing.get_context("fork"),
+            initializer=_mp_init_worker,
+            initargs=(
+                dependencies.swapi_response,
+                dependencies.efficiency_calibration_table,
+                None,
+            ),
+        ) as executor:
+            future_to_idx = {
+                executor.submit(_proton_chunk_worker, chunk, epoch, rm, dsrf, sc_vel): i
+                for i, chunk, (epoch, rm, dsrf, sc_vel) in submittable
+            }
+            pool_results = {idx: fut.result() for fut, idx in future_to_idx.items()}
+
+        for i in range(len(chunks)):
+            if i in pool_results:
+                results.append(pool_results[i])
+            else:
+                results.append(_nan_proton_result(precomputed[i][0]))
+
+        epochs = [r[0] for r in results]
+        proton_solar_wind_speeds = [r[1] for r in results]
+        proton_solar_wind_clock_angles = [r[2] for r in results]
+        proton_solar_wind_deflection_angles = [r[3] for r in results]
+        proton_solar_wind_density = [r[4] for r in results]
+        proton_solar_wind_temperatures = [r[5] for r in results]
+        quality_flags = [r[6] for r in results]
+        bulk_velocities_rtn_sun = [r[7] for r in results]
+        bulk_velocities_rtn_sc = [r[8] for r in results]
+
+        proton_solar_wind_speed_metadata = replace(
+            self.input_metadata, descriptor="proton-sw"
+        )
+        proton_solar_wind_l3_data = SwapiL3ProtonSolarWindData(
+            proton_solar_wind_speed_metadata,
+            np.array(epochs),
+            np.array(proton_solar_wind_speeds),
+            np.array(proton_solar_wind_temperatures),
+            np.array(proton_solar_wind_density),
+            np.array(proton_solar_wind_clock_angles),
+            np.array(proton_solar_wind_deflection_angles),
+            np.array(quality_flags),
+            np.array(bulk_velocities_rtn_sun),
+            np.array(bulk_velocities_rtn_sc),
+        )
+
+        return proton_solar_wind_l3_data
+
+    def process_l3a_alpha(
+        self, data, dependencies
+    ) -> SwapiL3AlphaSolarWindData:
+        chunks = list(chunk_l2_data(data, 5))
+
+        # Warm passband-grid cache in the parent so forked workers inherit it.
+        dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
+
+        precomputed = []
+        for data_chunk in chunks:
+            epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
+            try:
+                measurement_times = _measurement_times_for_chunk(
+                    data_chunk, SWAPI_COARSE_SWEEP_BINS
+                )
+                rm = get_swapi_geometry(measurement_times)
+                b_hat = compute_b_hat_rtn(
+                    getattr(dependencies, "mag_l1d_data", None),
+                    int(epoch),
+                    int(THIRTY_SECONDS_IN_NANOSECONDS),
+                )
+                precomputed.append((epoch, rm, b_hat))
+            except Exception:
+                logger.warning(f"SPICE gap at epoch {epoch}, NaN-filling chunk")
+                precomputed.append((epoch, None, None))
+
+        submittable = [
+            (i, chunks[i], precomputed[i])
+            for i in range(len(chunks))
+            if precomputed[i][1] is not None
+        ]
+
+        with ProcessPoolExecutor(
+            max_workers=os.cpu_count(),
+            mp_context=multiprocessing.get_context("fork"),
+            initializer=_mp_init_worker,
+            initargs=(
+                dependencies.swapi_response,
+                dependencies.efficiency_calibration_table,
+                getattr(dependencies, "mag_l1d_data", None),
+            ),
+        ) as executor:
+            future_to_idx = {
+                executor.submit(_alpha_chunk_worker, chunk, epoch, rm, b_hat): i
+                for i, chunk, (epoch, rm, b_hat) in submittable
+            }
+            pool_results = {idx: fut.result() for fut, idx in future_to_idx.items()}
+
+        alpha_results = []
+        for i in range(len(chunks)):
+            if i in pool_results:
+                alpha_results.append(pool_results[i])
+            else:
+                alpha_results.append(_nan_alpha_result(precomputed[i][0]))
+
+        epochs, densities, density_uncerts = [], [], []
+        temperatures, temperature_uncerts = [], []
+        velocity_rtns, velocity_covariance_rtns = [], []
+        delta_vs, delta_v_uncerts = [], []
+        b_hat_rtns = []
+        ref_proton_densities, ref_proton_temperatures, ref_proton_velocity_rtns = (
+            [],
+            [],
+            [],
+        )
+        bad_fit_flags = []
+
+        for epoch, mom, b_hat, ref_n, ref_T, ref_v in alpha_results:
+            epochs.append(epoch)
+            densities.append(mom.density)
+            density_uncerts.append(mom.density_sigma)
+            temperatures.append(mom.temperature)
+            temperature_uncerts.append(mom.temperature_sigma)
+            velocity_rtns.append(mom.bulk_velocity_rtn)
+            velocity_covariance_rtns.append(mom.velocity_covariance_rtn)
+            delta_vs.append(mom.delta_v)
+            delta_v_uncerts.append(mom.delta_v_sigma)
+            b_hat_rtns.append(b_hat)
+            ref_proton_densities.append(ref_n)
+            ref_proton_temperatures.append(ref_T)
+            ref_proton_velocity_rtns.append(ref_v)
+            bad_fit_flags.append(int(mom.bad_fit_flag))
+
+        return SwapiL3AlphaSolarWindData(
+            replace(self.input_metadata, descriptor="alpha-sw"),
+            np.array(epochs),
+            np.array(densities),
+            np.array(density_uncerts),
+            np.array(temperatures),
+            np.array(temperature_uncerts),
+            np.array(velocity_rtns),
+            np.array(velocity_covariance_rtns),
+            np.array(delta_vs),
+            np.array(delta_v_uncerts),
+            np.array(b_hat_rtns),
+            np.array(ref_proton_densities),
+            np.array(ref_proton_temperatures),
+            np.array(ref_proton_velocity_rtns),
+            np.array(bad_fit_flags),
+        )
 
     def process_l3a_pui(
         self, data, dependencies: SwapiL3ADependencies
@@ -492,187 +673,6 @@ class SwapiProcessor(Processor):
         )
 
         return pui_data
-
-    def process_l3a_alpha_solar_wind(
-        self, data, dependencies
-    ) -> SwapiL3AlphaSolarWindData:
-        chunks = list(chunk_l2_data(data, 5))
-
-        # Warm passband-grid cache in the parent so forked workers inherit it.
-        dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
-
-        precomputed = []
-        for data_chunk in chunks:
-            epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
-            try:
-                measurement_times = _measurement_times_for_chunk(
-                    data_chunk, SWAPI_COARSE_SWEEP_BINS
-                )
-                rm = get_swapi_geometry(measurement_times)
-                b_hat = compute_b_hat_rtn(
-                    getattr(dependencies, "mag_l1d_data", None),
-                    int(epoch),
-                    int(THIRTY_SECONDS_IN_NANOSECONDS),
-                )
-                precomputed.append((epoch, rm, b_hat))
-            except Exception:
-                logger.warning(f"SPICE gap at epoch {epoch}, NaN-filling chunk")
-                precomputed.append((epoch, None, None))
-
-        submittable = [
-            (i, chunks[i], precomputed[i])
-            for i in range(len(chunks))
-            if precomputed[i][1] is not None
-        ]
-
-        with ProcessPoolExecutor(
-            max_workers=os.cpu_count(),
-            mp_context=multiprocessing.get_context("fork"),
-            initializer=_mp_init_worker,
-            initargs=(
-                dependencies.swapi_response,
-                dependencies.efficiency_calibration_table,
-                getattr(dependencies, "mag_l1d_data", None),
-            ),
-        ) as executor:
-            future_to_idx = {
-                executor.submit(_alpha_chunk_worker, chunk, epoch, rm, b_hat): i
-                for i, chunk, (epoch, rm, b_hat) in submittable
-            }
-            pool_results = {idx: fut.result() for fut, idx in future_to_idx.items()}
-
-        alpha_results = []
-        for i in range(len(chunks)):
-            if i in pool_results:
-                alpha_results.append(pool_results[i])
-            else:
-                alpha_results.append(_nan_alpha_result(precomputed[i][0]))
-
-        epochs, densities, density_uncerts = [], [], []
-        temperatures, temperature_uncerts = [], []
-        velocity_rtns, velocity_covariance_rtns = [], []
-        delta_vs, delta_v_uncerts = [], []
-        b_hat_rtns = []
-        ref_proton_densities, ref_proton_temperatures, ref_proton_velocity_rtns = (
-            [],
-            [],
-            [],
-        )
-        bad_fit_flags = []
-
-        for epoch, mom, b_hat, ref_n, ref_T, ref_v in alpha_results:
-            epochs.append(epoch)
-            densities.append(mom.density)
-            density_uncerts.append(mom.density_sigma)
-            temperatures.append(mom.temperature)
-            temperature_uncerts.append(mom.temperature_sigma)
-            velocity_rtns.append(mom.bulk_velocity_rtn)
-            velocity_covariance_rtns.append(mom.velocity_covariance_rtn)
-            delta_vs.append(mom.delta_v)
-            delta_v_uncerts.append(mom.delta_v_sigma)
-            b_hat_rtns.append(b_hat)
-            ref_proton_densities.append(ref_n)
-            ref_proton_temperatures.append(ref_T)
-            ref_proton_velocity_rtns.append(ref_v)
-            bad_fit_flags.append(int(mom.bad_fit_flag))
-
-        return SwapiL3AlphaSolarWindData(
-            replace(self.input_metadata, descriptor="alpha-sw"),
-            np.array(epochs),
-            np.array(densities),
-            np.array(density_uncerts),
-            np.array(temperatures),
-            np.array(temperature_uncerts),
-            np.array(velocity_rtns),
-            np.array(velocity_covariance_rtns),
-            np.array(delta_vs),
-            np.array(delta_v_uncerts),
-            np.array(b_hat_rtns),
-            np.array(ref_proton_densities),
-            np.array(ref_proton_temperatures),
-            np.array(ref_proton_velocity_rtns),
-            np.array(bad_fit_flags),
-        )
-
-    def process_l3a_proton(self, data, dependencies) -> SwapiL3ProtonSolarWindData:
-        chunks = list(chunk_l2_data(data, 5))
-
-        # Warm passband-grid cache in the parent so forked workers inherit it.
-        dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
-
-        # Precompute SPICE geometry for all chunks before entering multiprocessing.
-        # Chunks where SPICE fails (CK gaps) get None and are NaN-filled immediately.
-        precomputed = []
-        for data_chunk in chunks:
-            epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
-            try:
-                measurement_times = _measurement_times_for_chunk(
-                    data_chunk, SWAPI_SCIENCE_BINS
-                )
-                rm = get_swapi_geometry(measurement_times)
-                dsrf = get_swapi_dsrf_to_rtn(np.array([epoch]))[0]
-                sc_vel = get_spacecraft_velocity_rtn(epoch)
-                precomputed.append((epoch, rm, dsrf, sc_vel))
-            except Exception:
-                logger.warning(f"SPICE gap at epoch {epoch}, NaN-filling chunk")
-                precomputed.append((epoch, None, None, None))
-
-        results = []
-        submittable = [
-            (i, chunks[i], precomputed[i])
-            for i in range(len(chunks))
-            if precomputed[i][1] is not None
-        ]
-
-        with ProcessPoolExecutor(
-            max_workers=os.cpu_count(),
-            mp_context=multiprocessing.get_context("fork"),
-            initializer=_mp_init_worker,
-            initargs=(
-                dependencies.swapi_response,
-                dependencies.efficiency_calibration_table,
-                None,
-            ),
-        ) as executor:
-            future_to_idx = {
-                executor.submit(_proton_chunk_worker, chunk, epoch, rm, dsrf, sc_vel): i
-                for i, chunk, (epoch, rm, dsrf, sc_vel) in submittable
-            }
-            pool_results = {idx: fut.result() for fut, idx in future_to_idx.items()}
-
-        for i in range(len(chunks)):
-            if i in pool_results:
-                results.append(pool_results[i])
-            else:
-                results.append(_nan_proton_result(precomputed[i][0]))
-
-        epochs = [r[0] for r in results]
-        proton_solar_wind_speeds = [r[1] for r in results]
-        proton_solar_wind_clock_angles = [r[2] for r in results]
-        proton_solar_wind_deflection_angles = [r[3] for r in results]
-        proton_solar_wind_density = [r[4] for r in results]
-        proton_solar_wind_temperatures = [r[5] for r in results]
-        quality_flags = [r[6] for r in results]
-        bulk_velocities_rtn_sun = [r[7] for r in results]
-        bulk_velocities_rtn_sc = [r[8] for r in results]
-
-        proton_solar_wind_speed_metadata = replace(
-            self.input_metadata, descriptor="proton-sw"
-        )
-        proton_solar_wind_l3_data = SwapiL3ProtonSolarWindData(
-            proton_solar_wind_speed_metadata,
-            np.array(epochs),
-            np.array(proton_solar_wind_speeds),
-            np.array(proton_solar_wind_temperatures),
-            np.array(proton_solar_wind_density),
-            np.array(proton_solar_wind_clock_angles),
-            np.array(proton_solar_wind_deflection_angles),
-            np.array(quality_flags),
-            np.array(bulk_velocities_rtn_sun),
-            np.array(bulk_velocities_rtn_sc),
-        )
-
-        return proton_solar_wind_l3_data
 
     def process_l3b(self, data, dependencies):
         epochs = []

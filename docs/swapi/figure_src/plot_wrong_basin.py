@@ -32,7 +32,6 @@ from imap_l3_processing.constants import (
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_SCIENCE_BINS,
     SWAPI_L2_K_FACTOR,
@@ -42,9 +41,9 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     apply_deadtime_correction_array,
     _residuals_njit,
 )
+from figure_utils import load_swapi_response
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
 _TEST_L2_CDF = (
     _REPO_ROOT / "tests/test_data/swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf"
 )
@@ -80,16 +79,13 @@ def _spin_rotation_matrices(n: int) -> np.ndarray:
 
 
 def main():
-    sr = SWAPIResponse.from_files(
-        _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
-    )
+    sr = load_swapi_response()
     with spacepy.pycdf.CDF(str(_TEST_L2_CDF)) as cdf:
         voltages = (
             cdf["esa_energy"][...].mean(axis=0)[SWAPI_SCIENCE_BINS] / SWAPI_L2_K_FACTOR
         )
     all_voltages = np.tile(voltages, _N_SWEEPS)
+    sr.warm_cache(all_voltages)
     tiled = numba.typed.List([sr.create_passband_grid(v) for v in all_voltages])
     tiled_cs = np.array(
         [sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in all_voltages]

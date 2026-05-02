@@ -138,6 +138,7 @@ def _make_sw_params(
 
 def _build_proton_arrays(sr, voltages):
     """Build grids, central_speeds, central_effective_areas, az_trans, spacing for proton fits."""
+    sr.warm_cache(voltages)
     grids = numba.typed.List([sr.create_passband_grid(v) for v in voltages])
     cs = np.array(
         [sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in voltages]
@@ -235,6 +236,7 @@ class TestInterpolatePassband(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         sr = _load_swapi_response()
+        sr.warm_cache([_peak_voltage(450.0)])
         cls.grid = sr.create_passband_grid(_peak_voltage(450.0))
 
     def test_central_value_is_one_for_normalized_grid(self):
@@ -314,6 +316,7 @@ class TestCalculateIntegral(unittest.TestCase):
 
     def _ci(self, voltage, sw_params):
         """Compute calculate_integral for the given voltage and sw_params."""
+        self.swapi_response.warm_cache([voltage])
         grid = self.swapi_response.create_passband_grid(voltage)
         cs = self.swapi_response.central_speed(
             voltage, PROTON_MASS_PER_CHARGE_M_P_PER_E
@@ -1548,6 +1551,7 @@ class TestGetAngularLimits(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         sr = _load_swapi_response()
+        sr.warm_cache([_peak_voltage(450.0)])
         cls.grid = sr.create_passband_grid(_peak_voltage(450.0))
         cls.cs = sr.central_speed(
             _peak_voltage(450.0), PROTON_MASS_PER_CHARGE_M_P_PER_E

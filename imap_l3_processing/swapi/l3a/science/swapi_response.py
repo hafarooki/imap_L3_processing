@@ -189,32 +189,35 @@ class SWAPIResponse:
         )
 
     def warm_cache(self, esa_voltages) -> None:
-        """Populate `_grid_cache` for every unique voltage in `esa_voltages`.
+        """Build and cache PassbandGrids for every unique finite voltage in `esa_voltages`.
 
-        Intended to be called in the parent process before forking workers, so the
-        ~1.8 ms pandas pivot in `_build_passband_array` is paid once per voltage
-        instead of once per worker. Under fork, children inherit the populated cache.
+        This is the only path that builds grids. Call this in the parent process before
+        forking workers so the ~1.8 ms pandas pivot is paid once per voltage and forked
+        workers inherit the populated cache via COW rather than rebuilding independently.
+        Calling with a voltage already in the cache is a no-op.
         """
         for v in np.unique(np.asarray(esa_voltages, dtype=float).ravel()):
-            if np.isfinite(v):
-                self.create_passband_grid(float(v))
+            key = float(v)
+            if np.isfinite(v) and key not in self._grid_cache:
+                self._grid_cache[key] = self._build_passband_grid(key)
 
     def create_passband_grid(self, esa_voltage: float) -> PassbandGrid:
-        """Build a V-only PassbandGrid (passband-shape arrays + boundaries + active-el ranges).
+        """Return the cached PassbandGrid for `esa_voltage`.
 
-        Species- and time-dependent quantities — central speed, central effective area,
-        azimuthal transmission — are tracked separately on this `SWAPIResponse` and must be
-        passed alongside the grid when calling `calculate_integral`. Cache key is V only.
-
-        Cached because pandas pivot/unstack inside `_build_passband_array` dominates this
-        function (~1.8 ms per call), and fits typically reuse the same 72 ESA voltages
-        across many sweeps within one processor run.
+        Raises KeyError if `warm_cache` was not called for this voltage. The cache must
+        be populated before any call to this method — call `warm_cache(voltages)` first.
         """
         cache_key = float(esa_voltage)
-        cached = self._grid_cache.get(cache_key)
-        if cached is not None:
-            return cached
+        try:
+            return self._grid_cache[cache_key]
+        except KeyError:
+            raise KeyError(
+                f"No PassbandGrid cached for ESA voltage {esa_voltage} V. "
+                f"Call warm_cache([{esa_voltage}]) before create_passband_grid."
+            ) from None
 
+    def _build_passband_grid(self, esa_voltage: float) -> PassbandGrid:
+        """Build a PassbandGrid from scratch for the given voltage (no caching)."""
         oa_values = self.get_passband_values(esa_voltage, "OA")
         sg_values = self.get_passband_values(esa_voltage, "SG")
 
@@ -248,7 +251,7 @@ class SWAPIResponse:
         oa_active_el_range = _active_el_range(min_OA_boundary, _TARGET_ELEVATIONS)
         sg_active_el_range = _active_el_range(min_SG_boundary, _TARGET_ELEVATIONS)
 
-        grid = PassbandGrid(
+        return PassbandGrid(
             min_elevation=float(_TARGET_ELEVATIONS[0]),
             elevation_spacing=float(_TARGET_ELEVATIONS[1] - _TARGET_ELEVATIONS[0]),
             min_speed_ratio=float(_TARGET_SPEED_RATIOS[0]),
@@ -264,8 +267,6 @@ class SWAPIResponse:
             oa_active_el_range=oa_active_el_range,
             sg_active_el_range=sg_active_el_range,
         )
-        self._grid_cache[cache_key] = grid
-        return grid
 
     @classmethod
     def from_files(

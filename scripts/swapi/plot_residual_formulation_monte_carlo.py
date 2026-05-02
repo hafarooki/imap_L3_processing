@@ -87,6 +87,7 @@ def _load_swapi_response():
 
 
 def _build_proton_arrays(sr, voltages):
+    sr.warm_cache(voltages)
     grids = numba.typed.List([sr.create_passband_grid(v) for v in voltages])
     cs = np.array([sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in voltages])
     cea = np.array([sr.get_central_effective_area(v) for v in voltages])
@@ -131,6 +132,7 @@ def _apply_mask(sr, voltages, noisy_rates, clean_rates, rot):
     nr_m = noisy_rates[keep]
     cr_m = clean_rates[keep]
     rot_m = rot[keep]
+    sr.warm_cache(v_m)
     grids_m = numba.typed.List([sr.create_passband_grid(v) for v in v_m])
     cs_m = np.array([sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in v_m])
     cea_m = np.array([sr.get_central_effective_area(v) for v in v_m])

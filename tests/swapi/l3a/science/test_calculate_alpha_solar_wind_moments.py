@@ -96,6 +96,7 @@ class TestPassbandGridSpecies(unittest.TestCase):
     def test_grid_cache_keys_on_voltage_only(self):
         # Grid is V-only; same voltage always returns the exact same cached object.
         V = 800.0
+        self.sr.warm_cache([V])
         g1 = self.sr.create_passband_grid(V)
         g2 = self.sr.create_passband_grid(V)
         self.assertIs(g1, g2)
@@ -110,6 +111,7 @@ class TestModelCountRatesSpecies(unittest.TestCase):
     def setUpClass(cls):
         sr = _swapi_response()
         V = 1000.0
+        sr.warm_cache([V])
         cls.proton_grids = numba.typed.List([sr.create_passband_grid(V)])
         cls.cs = np.array([sr.central_speed(V, PROTON_MASS_PER_CHARGE_M_P_PER_E)])
         cls.cea = np.array([sr.get_central_effective_area(V)])
@@ -219,6 +221,7 @@ def _synthesize_combined_observed(
     n_meas = _N_SWEEPS * len(voltages)
     rot = _spin_rotation_matrices(n_meas)
     esa_flat = np.tile(voltages, _N_SWEEPS)
+    sr.warm_cache(esa_flat)
     grids = numba.typed.List([sr.create_passband_grid(v) for v in esa_flat])
     p_cs = np.array(
         [sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in esa_flat]

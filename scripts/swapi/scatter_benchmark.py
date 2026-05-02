@@ -10,19 +10,28 @@ Adjust the N constants and re-run to assess accuracy.
 Output: docs/swapi/figures/scatter_benchmark.png
 Usage:  python scripts/swapi/scatter_benchmark.py
 """
+
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from imap_l3_processing.constants import METERS_PER_KILOMETER, PROTON_CHARGE_COULOMBS, PROTON_MASS_KG, PROTON_CHARGE_OVER_MASS_C_PER_KG
+from imap_l3_processing.constants import (
+    METERS_PER_KILOMETER,
+    PROTON_CHARGE_COULOMBS,
+    PROTON_MASS_KG,
+    PROTON_CHARGE_OVER_MASS_C_PER_KG,
+)
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    SWParams, calculate_integral,
+    SWParams,
+    calculate_integral,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
@@ -30,12 +39,17 @@ from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
 _OUTPUT_DIR = _REPO_ROOT / "docs" / "swapi" / "figures"
-_REFERENCE_INTEGRALS_PATH = _REPO_ROOT / "tests" / "swapi" / "l3a" / "science" / "reference_integrals.csv"
+_REFERENCE_INTEGRALS_PATH = (
+    _REPO_ROOT / "tests" / "swapi" / "l3a" / "science" / "reference_integrals.csv"
+)
 
 
 def _peak_voltage(bulk_speed_km_s):
-    return (PROTON_MASS_KG * (bulk_speed_km_s * METERS_PER_KILOMETER) ** 2
-            / (2 * SWAPI_K_FACTOR * PROTON_CHARGE_COULOMBS))
+    return (
+        PROTON_MASS_KG
+        * (bulk_speed_km_s * METERS_PER_KILOMETER) ** 2
+        / (2 * SWAPI_K_FACTOR * PROTON_CHARGE_COULOMBS)
+    )
 
 
 def main():
@@ -49,17 +63,23 @@ def main():
     df = pd.read_csv(_REFERENCE_INTEGRALS_PATH)
     df = df[df.integral > 1]  # only consider 1 Hz and above
 
-    truths = df['integral'].to_numpy()
+    truths = df["integral"].to_numpy()
     optimized = np.empty(len(df))
 
     # TODO incorporate background into model instead maybe?
     optimized = optimized + 1e-1
     truths = truths + 1e-1
 
+    peak_voltages = [
+        _peak_voltage(float(row.bulk_speed)) for row in df.itertuples(index=False)
+    ]
+    swapi_response.warm_cache(peak_voltages)
+
     print(f"Computing {len(df)} optimized integrals...")
     for i, row in enumerate(df.itertuples(index=False)):
         thermal_speed = float(
-            np.sqrt(row.temperature_ev * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG) / METERS_PER_KILOMETER
+            np.sqrt(row.temperature_ev * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG)
+            / METERS_PER_KILOMETER
         )
         sw = SWParams(
             density=float(row.density),
@@ -78,7 +98,7 @@ def main():
     print(f"Median |rel error|: {np.median(np.abs(rel_errors)):.2%}")
     print(f"95th pct |rel err|: {np.percentile(np.abs(rel_errors), 95):.2%}")
 
-    log_t = np.log10(df['temperature_ev'].values)
+    log_t = np.log10(df["temperature_ev"].values)
     t_norm = matplotlib.colors.Normalize(vmin=log_t.min(), vmax=log_t.max())
     cmap = matplotlib.colormaps["coolwarm"]
     colors = cmap(t_norm(log_t))
@@ -90,7 +110,7 @@ def main():
     lo = 1e-1  # background level in https://link.springer.com/article/10.1007/s11214-025-01229-8/figures/29
     hi = max(truths[positive].max(), optimized[positive].max())
     lo, hi = lo / 2, hi * 2
-    ax.plot([lo, hi], [lo, hi], 'k--', linewidth=1, label='y = x')
+    ax.plot([lo, hi], [lo, hi], "k--", linewidth=1, label="y = x")
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
 
@@ -100,9 +120,12 @@ def main():
     ax.set_yscale("log")
     ax.legend()
     from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-        N_ELEVATION, N_AZIMUTH_SG, N_SPEED,
+        N_ELEVATION,
+        N_AZIMUTH_SG,
+        N_SPEED,
         N_AZIMUTH_OA_TARGET_SPACING_DEG,
     )
+
     ax.set_title(
         f"N_el={N_ELEVATION}  N_az_sg={N_AZIMUTH_SG}  oa_dx={N_AZIMUTH_OA_TARGET_SPACING_DEG}°  N_sp={N_SPEED}\n"
         f"max|err|={np.abs(rel_errors).max():.1%}   "

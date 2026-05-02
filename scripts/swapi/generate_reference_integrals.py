@@ -104,6 +104,7 @@ def main():
         for i in range(_N_SAMPLES)
     ]
     voltages = [_peak_voltage(float(v)) for v in bulk_speeds]
+    swapi_response.warm_cache(voltages)
     grids = [swapi_response.create_passband_grid(v) for v in voltages]
     central_speeds = [swapi_response.central_speed(v, 1.0) for v in voltages]
     central_effective_areas = [

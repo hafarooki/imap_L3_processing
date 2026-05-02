@@ -46,14 +46,12 @@ Each 12-second ESA sweep contains **72 ESA steps** (indices 0–71). Their roles
 
 To fit protons, we use both the coarse sweeps and the fine sweeps, since the fine sweeps usually provide extra information about the protons.
 Occasionally, one or more fine sweep steps will have zero ESA voltage; these are excluded from the fit.
+Likewise, only steps near the proton peak are included.
 To fit alphas, we use only the coarse sweeps.
-For both protons and alphas, most of the steps are discarded and only a few are actually used.
-`TODO: should this paragraph go in the later sections?`
+For both protons and alphas, most of the steps are discarded and only the few that are near the peak are actually used.
 
 The CDF provides these 12-second sweeps for one day per file.
-`TODO: how do we handle the edges of the file?`
  `SwapiProcessor` groups sweeps into non-overlapping 5-sweep chunks (60s cadence), the least common multiple of the spin rate (approximately 15s) and the sweep cadence (12s).
-`TODO: details of how the chunks are made?`
 The solar wind fitting algorithms are applied to these 5-sweep chunks individually.
 The use of 5 sweeps makes it possible to determine the bulk velocity of the solar wind.
 
@@ -71,7 +69,6 @@ $$t_i = t_\text{epoch} + i \cdot \tfrac{12}{72}\,\text{s} = t_\text{epoch} + i \
 ### MAG L1D (alpha only)
 
 The alpha moments fitter requires magnetic field direction from MAG L1D (`b_dsrf` in the despun spacecraft frame). Each MAG sample in the chunk's 60 s window ($\pm 30$ s around the chunk center, exactly the 5-sweep span) is rotated DSRF→RTN at its own epoch and the rotated vectors are averaged in RTN; the unit direction of that mean is then taken as $\hat{\mathbf{B}}^\text{RTN}$. Rotating per-sample before averaging preserves the spacecraft-attitude evolution across the window rather than collapsing it to a single chunk-center rotation. When MAG data is unavailable, a nominal Parker spiral direction is used as fallback (see [Quality flags](#quality-flags-alpha-specific)).
-`TODO finalize handling of fallback`
 
 ## SWAPI Response Model
 
@@ -94,16 +91,13 @@ It differs from $k_\text{L2} = 1.93$, which is the $k$-factor determined approxi
 They differ primarily due to slight inaccuracy of the beam energy and orientation in the lab measurements. 
 
 > ![](figures/calibration_curves.png)
-> [*Central effective area and azimuthal transmission.*](figure_src/plot_calibration_curves.py)
+> *Central effective area and azimuthal transmission.* [[src]](figure_src/plot_calibration_curves.py)
 
 $T(\phi)$ and $\mathcal{A}_0^s(V)$ are 1D functions stored in simple CSV files with a uniform grid. They are interpolated linearly for practical usage. ESA voltages outside the tabulated range are clamped to the endpoint values.
 
 ![SWAPI passband and integration region at three beam energies](figures/passband_boundaries.png)
-> [*Example passbands.*](docs/swapi/figure_src/plot_passband_boundaries.py)
+> *Example passbands.* [[src]](figure_src/plot_passband_boundaries.py)
 
-`TODO double check endpoints of open aperture`
-
-`TODO: revise this paragraph`
 $P$ for a given $V$ is represented as a `PassbandGrid` object.
 The CSV file contains polynomial fits of $\log P$ for each ($\theta$, $v/v_0$) pixel as a function of $\log(k^* |V|)$ with a separate fit for the open aperture ($|\phi| > 20°$ and sunglasses $|\phi| \leq 20°$).
 `SWAPIResponse.create_passband_grid` constructs a `PassbandGrid` for an arbitrary $V$ by interpolating these fits evaluated at $V$ onto a uniformly spaced ($\theta$, $v/v_0$) grid ($\theta = −15°$ to $15°$ in 61 points with $0.5°$ spacing, $v/v_0 = 0.9$ to $1.1$ in 101 points) and stores the result in a `PassbandGrid` struct.
@@ -111,10 +105,9 @@ The uniform spacing is for computationally efficient interpolation.
 When $V$ falls outside the range used to fit the polynomials in the CSV, it is silently clamped to the nearest endpoint.
 
 `PassbandGrid` also keeps track of the integration contour: per-elevation speed-ratio bounds (`min_OA_boundary` / `max_OA_boundary` / `min_SG_boundary` / `max_SG_boundary`) plus a per-region active elevation range (`oa_active_el_range` / `sg_active_el_range`).
-The contour is set by a threshold rather than by a hard zero: a $(\theta, v/v_0)$ pixel is treated as zero when $P(\theta, v/v_0; V) < 10^{-2} \cdot \max P(\cdot; V)$.
+The contour is set by a threshold of 1% of the maximum.
 The boundary is the first grid point outside the above-threshold region in each row, and rows whose maximum falls below the threshold drop out entirely (tightening the active elevation range too). Both the speed-ratio bounds and the active elevation range are therefore $V$-dependent and recomputed inside `create_passband_grid` for every new $V$.
 `SwapiProcessor` precomputes the grids for each L2 file before fitting the 5-sweep chunks.
-`TODO verify that this caching is thread safe or that the passband grids are initialized before the multiprocessing`
 
 ## Solar Wind Model Count Rate Integral
 The solar wind proton velocity distribution function (VDF) is modeled as a drifting Maxwellian. In instrument coordinates, it is parameterized by bulk velocity ($v_b, \theta_b, \phi_b$), temperature ($K$), and density ($n$).
@@ -126,6 +119,7 @@ Substituting into the count rate integral in spherical velocity coordinates $(v,
 $$C(V) = \frac{n\, \mathcal{A}_0(V)}{(\sqrt{2\pi}\, v_\text{th})^3} \sum_\text{region} \int \cos\theta\, d\theta \int T(\phi)\, d\phi \int v^3\, P\!\left(\tfrac{v}{v_0}, \theta\right) \exp\!\left(-\frac{v^2 + v_b^2 - 2vv_b\cos\alpha}{2v_\text{th}^2}\right) dv.$$
 
 The sum runs over three azimuth regions: sunglasses (SG, $|\phi| \leq 20°$), left open aperture (OA, $-150° < \phi < -20°$), and right open aperture ($20° < \phi < 150°$).
+They are integrated separately so that only one passband is used for each integral and because the integral will generally have separate peaks in each of these regions due to the vanes at $\pm 20^\circ$.
 
 ### Angular limits
 
@@ -136,8 +130,8 @@ with $\varepsilon_\text{SG} = \varepsilon_\text{OA} = 10^{-6}$. The integration 
 | Region | Elevation bounds | Azimuth bounds |
 |--------|------------------|----------------|
 | SG     | $[-10.5°,\; 7°]$    | $[-20°,\; 20°]$ |
-| OA−    | $[-12°,\; 10.5°]$   | $[-150°,\; -20°]$ (overridden by scan; see below) |
-| OA+    | $[-12°,\; 10.5°]$   | $[20°,\; 150°]$ (overridden by scan; see below) |
+| OA−    | $[-12°,\; 10.5°]$   | $[-150°,\; -20°]$ |
+| OA+    | $[-12°,\; 10.5°]$   | $[20°,\; 150°]$ |
 
 `TODO update this, no longer applicable`
 Elevation bounds extend one half-cell beyond the nonzero stored rows of each passband (the bilinear-interp extent). Truncating earlier misses a small "second peak" near the FOV edge where the rising Maxwellian (toward $\theta_b$) outweighs the falling passband.

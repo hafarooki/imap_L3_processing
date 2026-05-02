@@ -40,11 +40,10 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     calculate_integral,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from tests.swapi.l3a.science.reference_integral import reference_integral_fixed_limits
+from figure_utils import load_swapi_response
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
 _OUTPUT_DIR = _REPO_ROOT / "docs" / "swapi" / "figures"
 
 
@@ -111,11 +110,7 @@ CASES = [
 
 def main():
     print("Loading calibration data...")
-    swapi_response = SWAPIResponse.from_files(
-        _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
-    )
+    swapi_response = load_swapi_response()
 
     n_voltages = 60
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
@@ -136,6 +131,7 @@ def main():
 
         optimized = np.empty(n_voltages)
         reference = np.empty(n_voltages)
+        swapi_response.warm_cache(esa_voltages)
         for i, v in enumerate(esa_voltages):
             grid = swapi_response.create_passband_grid(float(v))
             optimized[i] = calculate_integral(grid, sw)

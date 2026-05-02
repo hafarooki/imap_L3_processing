@@ -289,7 +289,7 @@ def create_swapi_l3a_cdf(geometric_factor_calibration_file,
     processor = SwapiProcessor(Mock(), input_metadata)
 
     l3a_proton_sw = processor.process_l3a_proton(swapi_data, swapi_l3_dependencies)
-    l3a_alpha_sw = processor.process_l3a_alpha_solar_wind(swapi_data, swapi_l3_dependencies)
+    l3a_alpha_sw = processor.process_l3a_alpha(swapi_data, swapi_l3_dependencies)
     l3a_pui_he = processor.process_l3a_pui(swapi_data, swapi_l3_dependencies)
     proton_cdf_path = save_data(l3a_proton_sw, delete_if_present=True)
     alpha_cdf_path = save_data(l3a_alpha_sw, delete_if_present=True)

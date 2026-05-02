@@ -51,10 +51,9 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     esa_voltage_to_alpha_speed,
     get_alpha_peak_indices,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from figure_utils import load_swapi_response
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
 _FIXTURE_PATH = (
     _REPO_ROOT / "tests" / "test_data" / "swapi" / "alpha_fit_test_spectra.npz"
 )
@@ -89,6 +88,7 @@ def _plot_case(axes_top, axes_bot, sr, f, title):
     cr_flat = f["cr_flat"]  # (310,)
 
     # Build passband grids and model arrays
+    sr.warm_cache(esa_flat)
     grids = numba.typed.List([sr.create_passband_grid(v) for v in esa_flat])
     p_cs = np.array(
         [sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in esa_flat]
@@ -161,7 +161,9 @@ def _plot_case(axes_top, axes_bot, sr, f, title):
 
     # Run peak finder
     energies = SWAPI_K_FACTOR * np.abs(voltage_per_sweep)
-    peak = get_alpha_peak_indices(count_avg - proton_bg_avg, energies, count_avg.argmax())
+    peak = get_alpha_peak_indices(
+        count_avg - proton_bg_avg, energies, count_avg.argmax()
+    )
     peak_idx = np.arange(peak.start, peak.stop)
     residual_peak = np.maximum(count_avg[peak_idx] - proton_bg_avg[peak_idx], 0.0)
 
@@ -314,11 +316,7 @@ def _plot_case(axes_top, axes_bot, sr, f, title):
 
 def main():
     print("Loading calibration data...")
-    sr = SWAPIResponse.from_files(
-        _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
-    )
+    sr = load_swapi_response()
 
     data = np.load(_FIXTURE_PATH)
     n_cases = len(_CASES)

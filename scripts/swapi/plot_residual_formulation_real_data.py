@@ -87,6 +87,7 @@ def _load_swapi_response():
 
 
 def _build_proton_arrays(sr, voltages):
+    sr.warm_cache(voltages)
     grids = numba.typed.List([sr.create_passband_grid(v) for v in voltages])
     cs = np.array(
         [sr.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in voltages]
