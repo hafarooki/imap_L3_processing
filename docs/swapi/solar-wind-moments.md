@@ -70,8 +70,7 @@ $$t_i = t_\text{epoch} + i \cdot \tfrac{12}{72}\,\text{s} = t_\text{epoch} + i \
 
 ### MAG L1D (alpha only)
 
-The alpha moments fitter requires magnetic field direction from MAG L1D (`b_dsrf` in the despun spacecraft frame). The field is rebinned to the chunk center (30 s window) and rotated to RTN via the precomputed DSRF→RTN matrix. When MAG data is unavailable, a nominal Parker spiral direction is used as fallback (see [Quality flags](#quality-flags-alpha-specific)).
-`TODO shouldn't it be binned with a 60s window?`
+The alpha moments fitter requires magnetic field direction from MAG L1D (`b_dsrf` in the despun spacecraft frame). Each MAG sample in the chunk's 60 s window ($\pm 30$ s around the chunk center, exactly the 5-sweep span) is rotated DSRF→RTN at its own epoch and the rotated vectors are averaged in RTN; the unit direction of that mean is then taken as $\hat{\mathbf{B}}^\text{RTN}$. Rotating per-sample before averaging preserves the spacecraft-attitude evolution across the window rather than collapsing it to a single chunk-center rotation. When MAG data is unavailable, a nominal Parker spiral direction is used as fallback (see [Quality flags](#quality-flags-alpha-specific)).
 `TODO finalize handling of fallback`
 
 ## SWAPI Response Model
@@ -81,48 +80,47 @@ $$C(V) = \sum_s \int d^3v \; v \, f^s(\mathbf{v}) \, \mathcal{A}^s(\mathbf{v}, V
 where $f^s$ is the VDF of species $s$ and $\mathcal{A}^s$ is the effective area.
 
 The effective area is decomposed as
-$$\mathcal{A}^s(v, \theta, \phi, V) = \mathcal{A}_0^s(V) \cdot P^s\!\left(\dfrac{v}{v_0^s},\, \theta,\, \phi,\, V\right) \cdot T(\phi),$$
+$$\mathcal{A}^s(v, \theta, \phi, V) = \mathcal{A}_0^s(V) \cdot P\!\left(\dfrac{v}{v_0^s},\, \theta,\, \phi,\, V\right) \cdot T(\phi),$$
 where:
-- $v_0^s = \sqrt{2 k^* q^s |V| / m^s}$ is the central speed ($k^* = 1.89$ eV/V; [Two k-factors](#two-k-factors));
+- $v_0^s = \sqrt{2 k^* q^s |V| / m^s}$ is the central speed;
 - $\mathcal{A}_0^s$ is the central effective area;
-- $P^s$ is the energy-angle passband;
+- $P$ is the energy-angle passband;
 - $T$ is the azimuthal transmission factor.
 
 Copies of these three functions in the form of CSV files are in `instrument_team_data/swapi`.
 
-$T(\phi)$ and $\mathcal{A}_0^s(V)$ are 1D functions as shown below:
-`TODO: describe how it's used in SwapiResponse`
+The normalization of $\mathcal{A}_0^s$ and $P$ are aligned in terms of the value at $\theta = 0$ and $k^* \equiv 1.89$ eV/V/e, the peak $E/|V|$ at $\theta=0^\circ$ based on high-resolution SIMION simulations.
+It differs from $k_\text{L2} = 1.93$, which is the $k$-factor determined approximately from lab measurements (Rankin et al. 2025).
+They differ primarily due to slight inaccuracy of the beam energy and orientation in the lab measurements. 
+
 > ![](figures/calibration_curves.png)
 > [*Central effective area and azimuthal transmission.*](figure_src/plot_calibration_curves.py)
 
+$T(\phi)$ and $\mathcal{A}_0^s(V)$ are 1D functions stored in simple CSV files with a uniform grid. They are interpolated linearly for practical usage. ESA voltages outside the tabulated range are clamped to the endpoint values.
+
+![SWAPI passband and integration region at three beam energies](figures/passband_boundaries.png)
+> [*Example passbands.*](docs/swapi/figure_src/plot_passband_boundaries.py)
+
+`TODO double check endpoints of open aperture`
+
 `TODO: revise this paragraph`
-$P^s$ is voltage-dependent.
-For a given $V_i$, it is represented as a `PassbandGrid` object.
+$P$ for a given $V$ is represented as a `PassbandGrid` object.
 The CSV file contains polynomial fits of $\log P$ for each ($\theta$, $v/v_0$) pixel as a function of $\log(k^* |V|)$ with a separate fit for the open aperture ($|\phi| > 20°$ and sunglasses $|\phi| \leq 20°$).
 `SWAPIResponse.create_passband_grid` constructs a `PassbandGrid` for an arbitrary $V$ by interpolating these fits evaluated at $V$ onto a uniformly spaced ($\theta$, $v/v_0$) grid ($\theta = −15°$ to $15°$ in 61 points with $0.5°$ spacing, $v/v_0 = 0.9$ to $1.1$ in 101 points) and stores the result in a `PassbandGrid` struct.
 The uniform spacing is for computationally efficient interpolation.
 When $V$ falls outside the range used to fit the polynomials in the CSV, it is silently clamped to the nearest endpoint.
-The output of this function is cached in case of repeated calls for the same $V$.
+
+`PassbandGrid` also keeps track of the integration contour: per-elevation speed-ratio bounds (`min_OA_boundary` / `max_OA_boundary` / `min_SG_boundary` / `max_SG_boundary`) plus a per-region active elevation range (`oa_active_el_range` / `sg_active_el_range`).
+The contour is set by a threshold rather than by a hard zero: a $(\theta, v/v_0)$ pixel is treated as zero when $P(\theta, v/v_0; V) < 10^{-2} \cdot \max P(\cdot; V)$.
+The boundary is the first grid point outside the above-threshold region in each row, and rows whose maximum falls below the threshold drop out entirely (tightening the active elevation range too). Both the speed-ratio bounds and the active elevation range are therefore $V$-dependent and recomputed inside `create_passband_grid` for every new $V$.
+`SwapiProcessor` precomputes the grids for each L2 file before fitting the 5-sweep chunks.
 `TODO verify that this caching is thread safe or that the passband grids are initialized before the multiprocessing`
-Some examples of $P^*$ are shown below:
-![SWAPI passband and integration region at three beam energies](figures/passband_boundaries.png)
-> [*Example passbands.*](docs/swapi/figure_src/plot_passband_boundaries.py)
-
-
-## Two k-factors
-
-`TODO revisit this section`
-
-The L2 product labels its energy axis using an outdated SWAPI k-factor:
-$$\texttt{esa\_energy}_\text{L2} = k_\text{L2} \cdot |V|, \qquad k_\text{L2} = 1.93\ \text{eV/V}.$$
-The L3 fitter expects true ESA voltage $V$ as input, so any code that reads L2's `esa_energy` and feeds it to `fit_solar_wind_proton_moments`, `create_passband_grid`, or `esa_voltage_to_proton_speed` must first divide by $k_\text{L2}$.
-
-All internal L3 physics — passband normalization, central speed $v_0^s$, the polynomial fits in $\log(k^*|V|)$ — uses the revised k-factor $k^* = 1.89$ eV/V from high-resolution SIMION simulations. The two values are exposed as `SWAPI_L2_K_FACTOR` and `SWAPI_K_FACTOR` in `imap_l3_processing/swapi/l3a/science/speed_calculation.py`. Mixing them silently shifts the fitted moments by ~1–2%.
 
 ## Solar Wind Model Count Rate Integral
-The solar wind proton VDF is modeled as a drifting Maxwellian:
-$$f_p(\mathbf{v}) = \frac{n}{(\sqrt{2\pi}\, v_\text{th})^3} \exp\!\left(-\frac{v^2 + v_b^2 - 2 v\, v_b \cos\alpha}{2 v_\text{th}^2}\right),$$
-where $\cos\alpha = \sin\theta_b \sin\theta + \cos\theta_b \cos\theta \cos(\phi - \phi_b)$ and $v_\text{th} = \sqrt{k_B T/m_p}$ ($T$ in Kelvin).
+The solar wind proton velocity distribution function (VDF) is modeled as a drifting Maxwellian. In instrument coordinates, it is parameterized by bulk velocity ($v_b, \theta_b, \phi_b$), temperature ($K$), and density ($n$).
+The VDF is given by:
+$$f_p(\mathbf{v}) = f_p(v, \theta, \phi) = \frac{n}{(\sqrt{2\pi}\, v_\text{th})^3} \exp\!\left(-\frac{v^2 + v_b^2 - 2 v\, v_b \cos\alpha(\theta, \phi)}{2 v_\text{th}^2}\right),$$
+where $\cos\alpha = \sin\theta_b \sin\theta + \cos\theta_b \cos\theta \cos(\phi - \phi_b)$ and $v_\text{th} = \sqrt{k_B T/m_p}$.
 
 Substituting into the count rate integral in spherical velocity coordinates $(v, \theta, \phi)$:
 $$C(V) = \frac{n\, \mathcal{A}_0(V)}{(\sqrt{2\pi}\, v_\text{th})^3} \sum_\text{region} \int \cos\theta\, d\theta \int T(\phi)\, d\phi \int v^3\, P\!\left(\tfrac{v}{v_0}, \theta\right) \exp\!\left(-\frac{v^2 + v_b^2 - 2vv_b\cos\alpha}{2v_\text{th}^2}\right) dv.$$
@@ -307,14 +305,10 @@ Joint refit of both species is deferred (Stage 2 does not resolve alpha contamin
 
 ### Species-dependent pieces
 
-The same `PassbandGrid` infrastructure works for both species — the grid is V-only (passband shape depends only on voltage, not species), so `SWAPIResponse.create_passband_grid(V)` is cached by `float(V)` and shared between proton and alpha fits at the same ESA voltage. Species-dependent quantities — central speed $v_0^s$ and scaled central effective area — are computed separately and passed alongside the grid to `calculate_integral`. At the same $V$,
+The same `PassbandGrid` infrastructure works for both species — the grid is V-only (passband shape depends only on voltage, not species), so `SWAPIResponse.create_passband_grid(V)` is cached by `float(V)` and shared between proton and alpha fits at the same ESA voltage. `SwapiProcessor` calls `SWAPIResponse.warm_cache(data.energy / SWAPI_L2_K_FACTOR)` in the parent process before each `ProcessPoolExecutor`, so the ~1.8 ms pandas pivot inside `_build_passband_array` is paid once per unique voltage in the parent rather than once per worker; under `fork`, children inherit the populated cache and the bulk numpy buffers stay shared via copy-on-write. Species-dependent quantities — central speed $v_0^s$ and scaled central effective area — are computed separately and passed alongside the grid to `calculate_integral`. At the same $V$,
 $$\frac{v_0^\alpha}{v_0^p} = \sqrt{\frac{q_\alpha m_p}{q_p m_\alpha}} = \sqrt{\frac{2 m_p}{4 m_p}} = \frac{1}{\sqrt 2}.$$
 Thermal speed uses Boltzmann's constant with temperature in Kelvin:
 $$v_{th}^\alpha = \sqrt{\frac{k_B T_\alpha}{m_\alpha}}.$$
-
-### Two k-factors (continued)
-
-The same proton-revised $k^* = 1.89$ eV/V applies to both species inside the fitter. The L2 product still uses the outdated $k_{L2} = 1.93$ to label its `esa_energy` field, so the alpha pipeline divides L2 `esa_energy` by `SWAPI_L2_K_FACTOR` before passing voltages in.
 
 ### Effective-area scaling
 
@@ -366,7 +360,7 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 
 ### Magnetic-field rotation
 
-$\hat{\mathbf{B}}^\text{RTN}$ is computed per-chunk by `_compute_b_hat_rtn` from MAG L1D's `b_dsrf` (despun spacecraft frame) using `MagL1dData.rebin_to(chunk_center, 30s)` and a precomputed `dsrf_to_rtn` rotation matrix (from `get_swapi_dsrf_to_rtn`, SPICE: `IMAP_DPS → IMAP_RTN`). Both the rotation matrix and the MAG rebin are computed once per chunk during SPICE precomputation, before multiprocessing dispatch. NaN propagation: rebin returning non-finite or near-zero magnitude → `MAG_GAP`. When proton speed is finite but MAG is unavailable (or the rebinned $\hat{\mathbf{B}}$ fails the unit-vector check $0.99 < \|\hat{\mathbf{B}}\| < 1.01$), the fitter falls back to the nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ in RTN and sets `ALPHA_MAG_DATA_FALLBACK`.
+$\hat{\mathbf{B}}^\text{RTN}$ is computed per-chunk by `compute_b_hat_rtn` from MAG L1D's `b_dsrf` (despun spacecraft frame). It selects the MAG samples whose epochs lie in $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$ — exactly the 5-sweep chunk span — calls `get_swapi_dsrf_to_rtn(sample_epochs)` (SPICE: `IMAP_DPS → IMAP_RTN`) to get a per-sample rotation matrix at each sample's own epoch, applies them to rotate every $\mathbf{b}_\text{DSRF}$ to RTN, averages the rotated vectors in RTN, and normalizes. Computing the rotation per-sample (rather than precomputing a single `dsrf_to_rtn` at the chunk center and averaging in DSRF) keeps the spacecraft-attitude evolution across the 60 s window from being collapsed away. NaN propagation: empty window, any non-finite sample, or near-zero averaged $|\mathbf{B}|$ → `MAG_GAP`. When proton speed is finite but MAG is unavailable (or the averaged $\hat{\mathbf{B}}$ fails the unit-vector check $0.99 < \|\hat{\mathbf{B}}\| < 1.01$), the fitter falls back to the nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ in RTN and sets `ALPHA_MAG_DATA_FALLBACK`.
 
 ### Known limitations
 

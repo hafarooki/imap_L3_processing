@@ -6,19 +6,28 @@ for each region (Open Aperture and Sunglasses).
 Output: docs/swapi/figures/passband_boundaries.png
 Usage:  python docs/swapi/figure_src/plot_passband_boundaries.py
 """
+
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import numpy as np
 
-from imap_l3_processing.constants import PROTON_MASS_KG, PROTON_CHARGE_OVER_MASS_C_PER_KG, PROTON_CHARGE_COULOMBS
+from imap_l3_processing.constants import (
+    PROTON_MASS_KG,
+    PROTON_CHARGE_OVER_MASS_C_PER_KG,
+    PROTON_CHARGE_COULOMBS,
+)
 from imap_l3_processing.swapi.l3a.science.swapi_response import (
-    SWAPIResponse, eval_boundary_min, eval_boundary_max,
+    SWAPIResponse,
+    eval_boundary_min,
+    eval_boundary_max,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -26,8 +35,13 @@ _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
 _OUTPUT_DIR = _REPO_ROOT / "docs" / "swapi" / "figures"
 
 _REGIONS = [
-    ("Open Aperture (OA)", "min_OA_boundary", "max_OA_boundary", "values_open_aperture"),
-    ("Sunglasses (SG)",    "min_SG_boundary", "max_SG_boundary", "values_sunglasses"),
+    (
+        "Open Aperture (OA)",
+        "min_OA_boundary",
+        "max_OA_boundary",
+        "values_open_aperture",
+    ),
+    ("Sunglasses (SG)", "min_SG_boundary", "max_SG_boundary", "values_sunglasses"),
 ]
 
 
@@ -37,8 +51,14 @@ def _plot_passband(ax, grid, values, bnd_min, bnd_max, label):
     speed_ratios = grid.min_speed_ratio + np.arange(n_speed) * grid.speed_ratio_spacing
     extent = [speed_ratios[0], speed_ratios[-1], elevations[0], elevations[-1]]
 
-    im = ax.imshow(values, origin="lower", aspect="auto", extent=extent,
-                   cmap="gist_heat", norm=mcolors.LogNorm(vmin=1e-3, vmax=1))
+    im = ax.imshow(
+        values,
+        origin="lower",
+        aspect="auto",
+        extent=extent,
+        cmap="gist_heat",
+        norm=mcolors.LogNorm(vmin=1e-3, vmax=1),
+    )
 
     sr_lo, sr_hi = speed_ratios[0], speed_ratios[-1]
     el_lo, el_hi = elevations[0], elevations[-1]
@@ -77,18 +97,25 @@ def main():
 
     n_voltages = len(esa_voltages)
     n_regions = len(_REGIONS)
-    fig, axes = plt.subplots(n_regions, n_voltages, figsize=(5 * n_voltages, 4 * n_regions), sharey=True)
+    fig, axes = plt.subplots(
+        n_regions, n_voltages, figsize=(5 * n_voltages, 4 * n_regions), sharey=True
+    )
 
     for col, esa_voltage in enumerate(esa_voltages):
         grid = swapi_response.create_passband_grid(esa_voltage)
+        central_speed = swapi_response.central_speed(esa_voltage, 1.0)
 
-        for row, (region_label, bnd_min_attr, bnd_max_attr, values_attr) in enumerate(_REGIONS):
+        for row, (region_label, bnd_min_attr, bnd_max_attr, values_attr) in enumerate(
+            _REGIONS
+        ):
             values = getattr(grid, values_attr)
             bnd_min = getattr(grid, bnd_min_attr)
             bnd_max = getattr(grid, bnd_max_attr)
 
             ax = axes[row, col]
-            title = f"{region_label}  |  {esa_voltage:.1f} V  ({grid.central_speed:.0f} km/s)"
+            title = (
+                f"{region_label}  |  {esa_voltage:.1f} V  ({central_speed:.0f} km/s)"
+            )
             im = _plot_passband(ax, grid, values, bnd_min, bnd_max, title)
             if col == 0:
                 ax.set_ylabel("Elevation (deg)")

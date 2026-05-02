@@ -348,6 +348,9 @@ class SwapiProcessor(Processor):
 
         chunks = list(chunk_l2_data(data, 5))
 
+        # Warm passband-grid cache in the parent so forked workers inherit it.
+        dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
+
         # Precompute SPICE geometry for all chunks before entering multiprocessing.
         precomputed = []
         for data_chunk in chunks:
@@ -495,6 +498,9 @@ class SwapiProcessor(Processor):
     ) -> SwapiL3AlphaSolarWindData:
         chunks = list(chunk_l2_data(data, 5))
 
+        # Warm passband-grid cache in the parent so forked workers inherit it.
+        dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
+
         precomputed = []
         for data_chunk in chunks:
             epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
@@ -503,12 +509,10 @@ class SwapiProcessor(Processor):
                     data_chunk, SWAPI_COARSE_SWEEP_BINS
                 )
                 rm = get_swapi_geometry(measurement_times)
-                dsrf = get_swapi_dsrf_to_rtn(np.array([epoch]))[0]
                 b_hat = compute_b_hat_rtn(
                     getattr(dependencies, "mag_l1d_data", None),
                     int(epoch),
                     int(THIRTY_SECONDS_IN_NANOSECONDS),
-                    dsrf_to_rtn=dsrf,
                 )
                 precomputed.append((epoch, rm, b_hat))
             except Exception:
@@ -592,6 +596,9 @@ class SwapiProcessor(Processor):
 
     def process_l3a_proton(self, data, dependencies) -> SwapiL3ProtonSolarWindData:
         chunks = list(chunk_l2_data(data, 5))
+
+        # Warm passband-grid cache in the parent so forked workers inherit it.
+        dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
 
         # Precompute SPICE geometry for all chunks before entering multiprocessing.
         # Chunks where SPICE fails (CK gaps) get None and are NaN-filled immediately.

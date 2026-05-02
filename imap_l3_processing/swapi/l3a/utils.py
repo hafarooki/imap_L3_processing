@@ -86,22 +86,33 @@ def compute_b_hat_rtn(
     mag_l1d_data,
     chunk_epoch_center_tt2000_ns: int,
     chunk_epoch_delta_ns: int,
-    dsrf_to_rtn,
 ) -> np.ndarray:
-    """Return the unit MAG vector at the chunk center, expressed in RTN. Returns NaN
-    when MAG data is missing, the rebin produces non-finite values, or |B| is too small
-    to define a direction. The alpha fitter interprets a NaN return as MAG_GAP."""
+    """Average B over the chunk window in RTN, returning the unit direction.
+
+    Each MAG sample in `[center - delta, center + delta)` is rotated DSRF→RTN at
+    its own epoch (`IMAP_DPS → IMAP_RTN`) before averaging, so spacecraft-attitude
+    evolution within the window is preserved rather than collapsed to a single
+    chunk-center rotation. Returns NaN when MAG is unavailable, no samples fall in
+    the window, the in-window samples include non-finite values, or the averaged
+    |B| is too small to define a direction. The alpha fitter interprets a NaN
+    return as MAG_GAP."""
     if mag_l1d_data is None:
         return np.full(3, np.nan)
-    b_dsrf = mag_l1d_data.rebin_to(
-        np.array([chunk_epoch_center_tt2000_ns]),
-        np.array([chunk_epoch_delta_ns]),
-    )[0]
-    if not np.all(np.isfinite(b_dsrf)) or np.linalg.norm(b_dsrf) < 1e-12:
+    start = chunk_epoch_center_tt2000_ns - chunk_epoch_delta_ns
+    end = chunk_epoch_center_tt2000_ns + chunk_epoch_delta_ns
+    left = np.searchsorted(mag_l1d_data.epoch, start, side="left")
+    right = np.searchsorted(mag_l1d_data.epoch, end, side="left")
+    if right == left:
         return np.full(3, np.nan)
-    R = dsrf_to_rtn
-    b_rtn = R @ b_dsrf
-    return b_rtn / np.linalg.norm(b_rtn)
+    sample_epochs = mag_l1d_data.epoch[left:right]
+    sample_b_dsrf = mag_l1d_data.mag_data[left:right]
+    rotation = get_swapi_dsrf_to_rtn(sample_epochs)
+    b_rtn = np.einsum("nij,nj->ni", rotation, sample_b_dsrf)
+    b_rtn_mean = b_rtn.mean(axis=0)
+    norm = np.linalg.norm(b_rtn_mean)
+    if not np.all(np.isfinite(b_rtn_mean)) or norm < 1e-12:
+        return np.full(3, np.nan)
+    return b_rtn_mean / norm
 
 
 def chunk_l2_data(data: SwapiL2Data, chunk_size: int) -> Iterable[SwapiL2Data]:
