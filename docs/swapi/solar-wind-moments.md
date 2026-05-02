@@ -74,7 +74,7 @@ The alpha moments fitter requires magnetic field direction from MAG L1D (`b_dsrf
 `TODO shouldn't it be binned with a 60s window?`
 `TODO finalize handling of fallback`
 
-## Model
+## SWAPI Response Model
 
 The coincidence count rate at ESA voltage $V$ is
 $$C(V) = \sum_s \int d^3v \; v \, f^s(\mathbf{v}) \, \mathcal{A}^s(\mathbf{v}, V),$$
@@ -109,7 +109,9 @@ Some examples of $P^*$ are shown below:
 > [*Example passbands.*](docs/swapi/figure_src/plot_passband_boundaries.py)
 
 
-#### Two k-factors
+## Two k-factors
+
+`TODO revisit this section`
 
 The L2 product labels its energy axis using an outdated SWAPI k-factor:
 $$\texttt{esa\_energy}_\text{L2} = k_\text{L2} \cdot |V|, \qquad k_\text{L2} = 1.93\ \text{eV/V}.$$
@@ -117,7 +119,7 @@ The L3 fitter expects true ESA voltage $V$ as input, so any code that reads L2's
 
 All internal L3 physics — passband normalization, central speed $v_0^s$, the polynomial fits in $\log(k^*|V|)$ — uses the revised k-factor $k^* = 1.89$ eV/V from high-resolution SIMION simulations. The two values are exposed as `SWAPI_L2_K_FACTOR` and `SWAPI_K_FACTOR` in `imap_l3_processing/swapi/l3a/science/speed_calculation.py`. Mixing them silently shifts the fitted moments by ~1–2%.
 
-
+## Solar Wind Model Count Rate Integral
 The solar wind proton VDF is modeled as a drifting Maxwellian:
 $$f_p(\mathbf{v}) = \frac{n}{(\sqrt{2\pi}\, v_\text{th})^3} \exp\!\left(-\frac{v^2 + v_b^2 - 2 v\, v_b \cos\alpha}{2 v_\text{th}^2}\right),$$
 where $\cos\alpha = \sin\theta_b \sin\theta + \cos\theta_b \cos\theta \cos(\phi - \phi_b)$ and $v_\text{th} = \sqrt{k_B T/m_p}$ ($T$ in Kelvin).
@@ -139,6 +141,7 @@ with $\varepsilon_\text{SG} = \varepsilon_\text{OA} = 10^{-6}$. The integration 
 | OA−    | $[-12°,\; 10.5°]$   | $[-150°,\; -20°]$ (overridden by scan; see below) |
 | OA+    | $[-12°,\; 10.5°]$   | $[20°,\; 150°]$ (overridden by scan; see below) |
 
+`TODO update this, no longer applicable`
 Elevation bounds extend one half-cell beyond the nonzero stored rows of each passband (the bilinear-interp extent). Truncating earlier misses a small "second peak" near the FOV edge where the rising Maxwellian (toward $\theta_b$) outweighs the falling passband.
 
 #### OA azimuth: integrand-aware trim
