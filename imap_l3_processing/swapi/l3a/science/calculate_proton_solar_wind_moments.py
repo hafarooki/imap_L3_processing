@@ -572,7 +572,7 @@ def _get_angular_limits(
     )
 
     if region == 0:
-        sg_lo, sg_hi = grid.sg_active_el_range
+        sg_lo, sg_hi = grid.sg_elevation_range
         min_elevation, max_elevation = _dynamic_limits(
             sw_params.bulk_elevation, angular_width, sg_lo, sg_hi
         )
@@ -580,7 +580,7 @@ def _get_angular_limits(
             sw_params.bulk_azimuth, angular_width, -20.0, 20.0
         )
     else:
-        oa_lo, oa_hi = grid.oa_active_el_range
+        oa_lo, oa_hi = grid.oa_elevation_range
         min_elevation, max_elevation = _dynamic_limits(
             sw_params.bulk_elevation, angular_width, oa_lo, oa_hi
         )

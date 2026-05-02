@@ -273,7 +273,7 @@ class TestPassbandPolynomialBoundaries(unittest.TestCase):
         )
 
     def test_boundaries_depend_on_voltage(self):
-        """Boundaries (and active elevation ranges) should differ between the
+        """Boundaries (and elevation ranges) should differ between the
         low and high ends of the OA voltage range, since the polynomial fit
         produces different shapes at different V."""
         v_min, v_max = self.response.passband_esa_voltage_limits["OA"]
@@ -303,13 +303,13 @@ class TestPassbandPolynomialBoundaries(unittest.TestCase):
             msg="boundaries did not change between low- and high-V grids",
         )
 
-    def test_active_el_range_consistent_with_boundary(self):
-        """The active elevation range should bracket the first/last elevation in the
+    def test_elevation_range_consistent_with_boundary(self):
+        """The elevation range should bracket the first/last elevation in the
         boundary array (within one target-elevation spacing)."""
         spacing = float(_TARGET_ELEVATIONS[1] - _TARGET_ELEVATIONS[0])
         for region, bnd, active in [
-            ("OA", self.grid.min_OA_boundary, self.grid.oa_active_el_range),
-            ("SG", self.grid.min_SG_boundary, self.grid.sg_active_el_range),
+            ("OA", self.grid.min_OA_boundary, self.grid.oa_elevation_range),
+            ("SG", self.grid.min_SG_boundary, self.grid.sg_elevation_range),
         ]:
             with self.subTest(region=region):
                 lo, hi = active

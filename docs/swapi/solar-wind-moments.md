@@ -104,9 +104,9 @@ The CSV file contains polynomial fits of $\log P$ for each ($\theta$, $v/v_0$) p
 The uniform spacing is for computationally efficient interpolation.
 When $V$ falls outside the range used to fit the polynomials in the CSV, it is silently clamped to the nearest endpoint.
 
-`PassbandGrid` also keeps track of the integration contour: per-elevation speed-ratio bounds (`min_OA_boundary` / `max_OA_boundary` / `min_SG_boundary` / `max_SG_boundary`) plus a per-region active elevation range (`oa_active_el_range` / `sg_active_el_range`).
+`PassbandGrid` also keeps track of the integration contour: per-elevation speed-ratio bounds (`min_OA_boundary` / `max_OA_boundary` / `min_SG_boundary` / `max_SG_boundary`) plus a per-region elevation range (`oa_elevation_range` / `sg_elevation_range`).
 The contour is set by a threshold of 1% of the maximum.
-The boundary is the first grid point outside the above-threshold region in each row, and rows whose maximum falls below the threshold drop out entirely (tightening the active elevation range too). Both the speed-ratio bounds and the active elevation range are therefore $V$-dependent and recomputed inside `create_passband_grid` for every new $V$.
+The boundary is the first grid point outside the above-threshold region in each row, and rows whose maximum falls below the threshold drop out entirely (tightening the elevation range too). Both the speed-ratio bounds and the elevation range are therefore $V$-dependent and recomputed inside `create_passband_grid` for every new $V$.
 `SwapiProcessor` precomputes the grids for each L2 file before fitting the 5-sweep chunks.
 
 ## Solar Wind Model Count Rate Integral
@@ -123,51 +123,71 @@ They are integrated separately so that only one passband is used for each integr
 
 ### Angular limits
 
-Integration limits are centered on $(\theta_b, \phi_b)$ and clamped per region to the bilinear-interpolation extent of that region's passband. The half-width is where the Maxwellian drops below $\varepsilon$:
-$$\Delta\alpha = \arccos\!\left(\mathrm{clip}\!\left(\frac{v_\text{th}^2 \ln\varepsilon}{v_0 v_b} + 1;\; -1,\; 1\right)\right),$$
-with $\varepsilon_\text{SG} = \varepsilon_\text{OA} = 10^{-6}$. The integration window is $[\theta_b - \Delta\alpha,\; \theta_b + \Delta\alpha]$ in elevation and $[\phi_b - \Delta\alpha,\; \phi_b + \Delta\alpha]$ in azimuth, then clamped per region:
+For each region, the $(\theta, \phi)$ integration window is built from an angular radius $\Delta\alpha$ around the bulk direction, then clamped to the region's geometric extent in $\phi$ and the V-dependent elevation range of the region's passband in $\theta$. Special treatment is given for the open aperture region's integration limit.
 
-| Region | Elevation bounds | Azimuth bounds |
-|--------|------------------|----------------|
-| SG     | $[-10.5°,\; 7°]$    | $[-20°,\; 20°]$ |
-| OA−    | $[-12°,\; 10.5°]$   | $[-150°,\; -20°]$ |
-| OA+    | $[-12°,\; 10.5°]$   | $[20°,\; 150°]$ |
+#### Angular radius
 
-`TODO update this, no longer applicable`
-Elevation bounds extend one half-cell beyond the nonzero stored rows of each passband (the bilinear-interp extent). Truncating earlier misses a small "second peak" near the FOV edge where the rising Maxwellian (toward $\theta_b$) outweighs the falling passband.
+The VDF can be split into a speed factor and an angular factor (using $|\mathbf{v} - \mathbf{v}_b|^2 = (v - v_b)^2 + 2 v v_b (1 - \cos\alpha)$):
+$$f(v, \alpha) \propto \exp\!\left(-\frac{(v - v_b)^2}{2 v_\text{th}^2}\right)\,\exp\!\left(\frac{v\,v_b\,(\cos\alpha - 1)}{v_\text{th}^2}\right),$$
+where $\alpha$ is the angular distance from the bulk direction. $\Delta\alpha$ is defined as the value of $\alpha$ at which the angular factor drops to $\varepsilon$, evaluated at $v = v_0$ (the passband central speed, where the radial integrand is largest):
+$$\Delta\alpha = \arccos\!\left(\mathrm{clamp}\!\left(\frac{v_\text{th}^2 \ln\varepsilon}{v_0 v_b} + 1;\; -1,\; 1\right)\right),$$
+with $\varepsilon_\text{SG} = \varepsilon_\text{OA} = 10^{-6}$. For $v_0 \approx v_b$ this reduces to $\Delta\alpha \approx \sigma_\alpha\,\sqrt{-2\ln\varepsilon}$, where $\sigma_\alpha = v_\text{th}/v_b$ is the natural angular thermal width — about $5.26\,\sigma_\alpha$ at $\varepsilon = 10^{-6}$. Aside from potential numerical instability, the clamp is needed only for when $v_\text{th}$ is large enough relative to $\sqrt{v_0 v_b}$ to drive the cosine argument out of $[-1, 1]$, in which case $\Delta\alpha = 180^\circ$ and the entire region is integrated.
+
+#### Per-region clamping
+
+$\Delta\alpha$ is applied as a half-extent independently in $\theta$ and $\phi$ — a conservative choice, since the rectangle $[\theta_b \pm \Delta\alpha] \times [\phi_b \pm \Delta\alpha]$ contains the spherical disk of radius $\Delta\alpha$. The window is then clamped per region:
+
+| Region | Azimuth Range |
+|--------|----------------|
+| SG     | $[-20°,\; 20°]$ |
+| OA−    | $[-150°,\; -20°]$ |
+| OA+    | $[20°,\; 150°]$ |
+
+Azimuth is clamped to the geometric boundaries in the table above; elevation is clamped to the region's $V$-dependent passband elevation range.
+If the gaussian window falls entirely outside either clamp — $[\theta_b \pm \Delta\alpha]$ outside the elevation range, or $[\phi_b \pm \Delta\alpha]$ outside the azimuth range — both clamped endpoints collapse to the same boundary and that dimension has zero width, so the region is skipped entirely.
+This is primarily useful in that it skips the the open aperture integration most of the time, since the open aperture has no significant contribution to the total count rate under most solar wind conditions.
 
 #### OA azimuth: integrand-aware trim
 
-For OA, the gaussian-only $\Delta\alpha$ above is replaced by a transmission-aware scan (`_trim_oa_azimuth_by_integrand`). The motivation: $T(\phi)$ is essentially zero from $20°$ to $25°$ and only rises to its plateau by $30°$, so the standard $\Delta\alpha = 5.26\,\sigma_\alpha$ window (from $\varepsilon = 10^{-6}$) routinely opens a 1°–10° sliver of OA where the integrand $\rho \times T \approx 0$ — wasting integration nodes on a dead zone. Conversely, when $\phi_b$ sits past $\sim 15°$, the OA window must extend well past $\Delta\alpha$ to capture the high-$T$ region where the gaussian tail × full transmission still contributes.
+For OA, the gaussian-only $\Delta\alpha$ above is replaced by a transmission-aware scan (`_trim_oa_azimuth_by_integrand`). Motivation: $T(\phi)$ is essentially zero from $20°$ to $25°$ and only rises to its plateau by $30°$, so the standard $\Delta\alpha \approx 5.26\,\sigma_\alpha$ window routinely opens a 1°–10° sliver of OA where the integrand $\rho \times T \approx 0$ — wasting integration nodes on a dead zone. Conversely, when $\phi_b$ sits past $\sim 15°$, the OA window must extend well past $\Delta\alpha$ to capture the high-$T$ region where the gaussian tail times full transmission still contributes.
 
 The trim works in three steps:
 
-1. **Scan** $\rho(\phi) \cdot T(\phi)$ at $(\theta = \mathrm{clip}(\theta_b, \theta_\text{lo}, \theta_\text{hi}),\; v = v_0)$ across the full OA passband ($[20°, 150°]$ for OA+, $[-150°, -20°]$ for OA−), at adaptive spacing $\Delta\phi_\text{scan} = \mathrm{clip}(\sigma_\alpha / 2,\; 0.1°,\; 1°)$. Spacing tracks the gaussian width so cold-plasma peaks (sub-degree wide) aren't missed by a coarse grid. The "elevation peak inside the window" is where density is maximal at fixed $\phi$.
-2. **Skip** the OA region entirely if $\max(\rho T) < 10^{-9}$ — gaussian tail is too far from any meaningful-transmission $\phi$.
+1. **Scan** $\rho(\phi) \cdot T(\phi)$ at $(\theta = \mathrm{clip}(\theta_b, \theta_\text{lo}, \theta_\text{hi}),\; v = v_0)$ across the full OA passband ($[20°, 150°]$ for OA+, $[-150°, -20°]$ for OA−), at adaptive spacing $\Delta\phi_\text{scan} = \mathrm{clip}(\sigma_\alpha / 2,\; 0.1°,\; 1°)$. Spacing tracks the gaussian width so cold-plasma peaks (sub-degree wide) aren't missed by a coarse grid. Clipping $\theta_b$ into the active elevation range puts the scan at the in-passband peak in the elevation direction.
+2. **Skip** the OA region entirely if $\max(\rho T) < 10^{-9}$ — the gaussian tail is too far from any $\phi$ with meaningful transmission.
 3. **Anchor** the integration window at the OA inner boundary ($\pm 20°$, on the SG side) and trim only the *far* end at the threshold $\rho T > 10^{-3} \times \max$. Anchoring is essential: $T(\pm 20°) = 0$ by construction, so the rising-edge peak (at $\sim \pm 21°$ for $\phi_b$ near zero) sits between the boundary and the first scan grid point that exceeds threshold; trimming the boundary side would cut off real signal.
 
-For typical solar wind at $T \sim 100{,}000$ K and $|\phi_b| < 6°$, the trim collapses the OA window to a few degrees adjacent to the SG/OA transition. For high-deflection cases ($|\phi_b| > 15°$), the scan finds the peak at $\phi \sim 25°$–$30°$ and the trim returns essentially the same window as the gaussian-only $\Delta\alpha$ would. Median chunk fit time drops from ~963 ms (with the gaussian-only $\Delta\alpha$ feeding 41 OA azimuth nodes) to ~175 ms — a ~5.5× speedup with no loss of accuracy on the reference-integral histogram (max ratio error stays at 10% for low-rate edge cases, identical to the un-trimmed integrator).
+For typical solar wind at $T \sim 100{,}000$ K and $|\phi_b| < 6°$, the trim collapses the OA window to a few degrees adjacent to the SG/OA transition. For high-deflection cases ($|\phi_b| > 15°$), the scan finds the peak at $\phi \sim 25°$–$30°$ and the trim returns essentially the same window as the gaussian-only $\Delta\alpha$ would. Median chunk fit time drops from ~963 ms (gaussian-only $\Delta\alpha$ feeding 41 OA azimuth nodes) to ~175 ms — a ~5.5× speedup with no loss of accuracy on the reference-integral histogram (max ratio error stays at 10% for low-rate edge cases, identical to the un-trimmed integrator).
 
 ### Speed limits
 
-The speed window is computed per elevation by clamping the Maxwellian's effective support $[v_b - 10v_\text{th},\; v_b + 10v_\text{th}]$ to the passband's per-elevation support $[r_\text{min}(\theta),\, r_\text{max}(\theta)]\,v_0$:
+For each elevation node, the speed integration window is the intersection of the Maxwellian's effective support and the passband's per-elevation speed-ratio support:
 $$v_\text{min}(\theta) = \mathrm{clip}\!\left(v_b - 10v_\text{th};\; r_\text{min}(\theta)\,v_0,\; r_\text{max}(\theta)\,v_0\right), \qquad v_\text{max}(\theta) = \mathrm{clip}\!\left(v_b + 10v_\text{th};\; r_\text{min}(\theta)\,v_0,\; r_\text{max}(\theta)\,v_0\right).$$
-$r_\text{min}(\theta)$ and $r_\text{max}(\theta)$ (blue curves below) are read from `min_*_boundary` / `max_*_boundary` via `_eval_boundary`. When the Maxwellian's support falls entirely outside the passband at a given elevation, the window collapses and the elevation contributes nothing.
+The $\pm 10\,v_\text{th}$ window is essentially the full Maxwellian support — the integrand at $10\sigma$ is below $e^{-50} \sim 10^{-22}$. When the Maxwellian and the passband don't overlap at a given elevation, both clamped endpoints fall to the same boundary and that elevation contributes nothing.
 
-Two implementation details about the boundaries:
+#### Boundary data
 
-- **Voltage-independent.** The boundaries are computed once at `SWAPIResponse.from_files` time using a representative voltage, not per `create_passband_grid` call. This is valid because `exp(polyval(...))` is always strictly positive, so the same (elevation, speed-ratio) cells are nonzero for every in-range voltage.
-- **Expanding interpolation.** `_eval_boundary` does not linearly interpolate between stored grid points. Instead, for a query elevation between two stored points, it returns the more expansive of the two: `min` of the two min-boundaries, `max` of the two max-boundaries. This guarantees the integration window brackets the full nonzero passband at all elevations, at the cost of a small over-integration in the gap between stored points.
+The per-elevation speed-ratio bounds $r_\text{min}(\theta)$, $r_\text{max}(\theta)$ are stored as the `min_*_boundary` and `max_*_boundary` arrays in `PassbandGrid` (each of shape $(2, n_\text{active})$: row 0 elevations, row 1 speed-ratio bounds). They are constructed in `_passband_boundaries`:
 
-The integral is evaluated as nested elevation $\to$ azimuth $\to$ speed loops with **Gauss-Legendre quadrature** in every dimension at $(N_\text{elev}, N_\text{az,SG}, N_\text{az,OA}, N_\text{speed}) = (21, 21, 21, 11)$. OA azimuth nodes are now equal in count to SG since the transmission-aware trim above produces a tighter integration window — 21 nodes over the trimmed range gives equivalent or better accuracy than the previous 41 nodes over the wider gaussian-only window. The per-elevation row $v^3 P(v/v_0, \theta)$ is precomputed once and reused across all azimuths (azimuth enters only through the Maxwellian). The passband is renormalized at runtime so that $P(1, 0°, V) = 1$ (`PassbandGrid` stores the raw polynomial-evaluated SIMION values). JIT-compiled with Numba. See `calculate_integral(PassbandGrid, SWParams, central_speed, central_effective_area, azimuthal_transmission, transmission_spacing)`.
+1. Mask passband cells below $1\%$ of the grid maximum (`_PASSBAND_BOUNDARY_THRESHOLD = 1e-2`) to zero.
+2. For each elevation row containing at least one above-threshold cell, record the speed ratio one grid step ($\Delta r = 0.002$) beyond the first/last above-threshold cell as $r_\text{min}$, $r_\text{max}$.
+3. Drop elevations with no above-threshold cells; these are also excluded from `*_elevation_range`.
+
+The number of active elevations may differ between SG and OA (and varies with $V$ within a region). All four boundary arrays are V-dependent — they are recomputed inside `_build_passband_grid` for every voltage, since each cell's polynomial response varies with $V$ and the relative-threshold cutoff captures different cells at different voltages.
+
+#### Expanding lookup
+
+`_eval_boundary` evaluates $r_\text{min}(\theta)$ or $r_\text{max}(\theta)$ at GL elevation nodes. For a query elevation between two stored rows it does **not** linearly interpolate: it returns the more expansive of the two bounds (`min` of the two min-boundaries, `max` of the two max-boundaries). This guarantees the integration window brackets the full above-threshold passband at every GL elevation node, at the cost of a small over-integration of zero-valued cells in the gap between stored rows. Linear interpolation would produce a tighter window but could exclude above-threshold cells in the gap, biasing the integral low. The numpy-side equivalents `eval_boundary_min` / `eval_boundary_max` (used by tests and the reference integrator) implement the same rule.
+
+The integral is evaluated as nested elevation $\to$ azimuth $\to$ speed loops with Gauss-Legendre quadrature in every dimension at $(N_\text{elev}, N_\text{az,SG}, N_\text{az,OA}, N_\text{speed}) = (21, 21, 21, 11)$. OA azimuth nodes are now equal in count to SG since the transmission-aware trim above produces a tighter integration window — 21 nodes over the trimmed range gives equivalent or better accuracy than the previous 41 nodes over the wider gaussian-only window. The per-elevation row $v^3 P(v/v_0, \theta)$ is precomputed once and reused across all azimuths (azimuth enters only through the Maxwellian). The passband is renormalized at runtime so that $P(1, 0°, V) = 1$ (`PassbandGrid` stores the raw polynomial-evaluated SIMION values). JIT-compiled with Numba. See `calculate_integral(PassbandGrid, SWParams, central_speed, central_effective_area, azimuthal_transmission, transmission_spacing)`.
+
+### Integrator Validation
 
 Representative model spectra below exercise the integrator's edges. The off-axis azimuth case ($\phi_b = 18°$) is the worst overall (18.8%): the bulk sits adjacent to the SG/OA transition where the azimuthal transmission rises five orders of magnitude across 10°, and the optimized integrator cannot resolve that transition as densely as the reference's 0.1° spacing.
 
 ![Production vs ground-truth spectra for six representative SW configurations](figures/spectra.png)
 
 *Generated by `docs/swapi/figure_src/plot_spectra.py`.*
-
-### Integrator Validation
 
 The optimized integrator is validated against a high-resolution fixed-limit reference (`reference_integral_fixed_limits`) over 10000 random solar-wind configurations (`reference_integrals.csv`). Each configuration is evaluated at the ESA voltage whose central proton speed equals its `bulk_speed`. The histogram below bins the resulting (optimized / reference) ratio, stacked by reference count rate.
 

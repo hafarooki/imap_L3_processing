@@ -37,10 +37,11 @@ class PassbandGrid(NamedTuple):
     )
     min_SG_boundary: NDArray
     max_SG_boundary: NDArray
-    # Voltage-independent bilinear-nonzero elevation range per region (min, max).
-    # Reflects (CSV-stored elevation extent) ± half target spacing, clamped to target grid.
-    oa_active_el_range: tuple
-    sg_active_el_range: tuple
+    # V-dependent elevation range per region (min, max). Bound at the
+    # linear-interp threshold-crossing elevation between the outermost active row
+    # (max passband > 1% of grid max) and its zero-valued inactive neighbor.
+    oa_elevation_range: tuple
+    sg_elevation_range: tuple
 
 
 def _build_passband_array(
@@ -97,35 +98,82 @@ def _passband_boundaries(
     grid_values: NDArray, target_elevations: NDArray, target_speed_ratios: NDArray
 ) -> tuple[NDArray, NDArray]:
     """Return (min_boundary, max_boundary) each shape (2, n_active):
-    row 0 = elevation values, row 1 = boundary speed ratio (one grid step outside the
-    region where the passband exceeds `_PASSBAND_BOUNDARY_THRESHOLD * max(grid)`)."""
+    row 0 = elevation values, row 1 = the speed-ratio at which the linearly-interpolated
+    passband within the row crosses `_PASSBAND_BOUNDARY_THRESHOLD * max(grid)`, going
+    outward from the active region. The crossing is found by linear interpolation
+    between the outermost above-threshold cell `v_a` and its below-threshold neighbor
+    `v_b`: `r_threshold = r_a ± spacing · (v_a - cutoff) / (v_a - v_b)`. Falls back
+    to the edge cell's speed ratio when the active region touches the grid edge."""
     spacing = float(target_speed_ratios[1] - target_speed_ratios[0])
     cutoff = _PASSBAND_BOUNDARY_THRESHOLD * float(grid_values.max())
+    n_speed = grid_values.shape[1]
     active_elevations, min_ratios, max_ratios = [], [], []
     for elev, row in zip(target_elevations, grid_values):
-        above = target_speed_ratios[row > cutoff]
-        if len(above) > 0:
-            active_elevations.append(float(elev))
-            min_ratios.append(float(above[0]) - spacing)
-            max_ratios.append(float(above[-1]) + spacing)
+        above_idx = np.where(row > cutoff)[0]
+        if len(above_idx) == 0:
+            continue
+        i_lo = int(above_idx[0])
+        i_hi = int(above_idx[-1])
+        v_lo = float(row[i_lo])
+        v_hi = float(row[i_hi])
+        active_elevations.append(float(elev))
+        if i_lo > 0:
+            v_lo_minus = float(row[i_lo - 1])
+            min_ratios.append(
+                float(target_speed_ratios[i_lo])
+                - spacing * (v_lo - cutoff) / (v_lo - v_lo_minus)
+            )
+        else:
+            min_ratios.append(float(target_speed_ratios[i_lo]))
+        if i_hi < n_speed - 1:
+            v_hi_plus = float(row[i_hi + 1])
+            max_ratios.append(
+                float(target_speed_ratios[i_hi])
+                + spacing * (v_hi - cutoff) / (v_hi - v_hi_plus)
+            )
+        else:
+            max_ratios.append(float(target_speed_ratios[i_hi]))
     elevs = np.array(active_elevations)
     return np.vstack([elevs, np.array(min_ratios)]), np.vstack(
         [elevs, np.array(max_ratios)]
     )
 
 
-def _active_el_range(min_boundary: NDArray, target_elevations: NDArray) -> tuple:
-    """Bilinear-nonzero elevation range = active row range ± half target-spacing,
-    clamped to target grid extent. V-dependent: an elevation row is "active" only if
-    at least one of its passband values exceeds the boundary threshold (see
-    `_passband_boundaries`)."""
-    if min_boundary.shape[1] == 0:
+def _elevation_range(grid_values: NDArray, target_elevations: NDArray) -> tuple:
+    """Elevation range bracketing the rows whose max passband exceeds
+    `_PASSBAND_BOUNDARY_THRESHOLD * max(grid)`, with the outer bounds at the linear-
+    interp threshold-crossing elevation between the outermost active row (with
+    row-max `M_a > cutoff`) and its inactive neighbor (`M_b ≤ cutoff`):
+    `θ_threshold = θ_a ± spacing · (M_a - cutoff) / (M_a - M_b)`. Approximates the
+    max-over-speed of the bilinear interp by the linear interp of per-row maxes,
+    which is exact when the max-cell index aligns between the two rows (true for
+    the unimodal SWAPI passband). Falls back to the edge row's elevation when the
+    active region touches the grid edge."""
+    cutoff = _PASSBAND_BOUNDARY_THRESHOLD * float(grid_values.max())
+    row_max = grid_values.max(axis=1)
+    active_idx = np.where(row_max > cutoff)[0]
+    if len(active_idx) == 0:
         return (float(target_elevations[0]), float(target_elevations[0]))
     target_spacing = float(target_elevations[1] - target_elevations[0])
-    min_active = float(min_boundary[0, 0])
-    max_active = float(min_boundary[0, -1])
-    lo = max(float(target_elevations[0]), min_active - target_spacing)
-    hi = min(float(target_elevations[-1]), max_active + target_spacing)
+    n_el = len(target_elevations)
+    i_lo = int(active_idx[0])
+    i_hi = int(active_idx[-1])
+    M_lo = float(row_max[i_lo])
+    M_hi = float(row_max[i_hi])
+    if i_lo > 0:
+        M_lo_minus = float(row_max[i_lo - 1])
+        lo = float(target_elevations[i_lo]) - target_spacing * (M_lo - cutoff) / (
+            M_lo - M_lo_minus
+        )
+    else:
+        lo = float(target_elevations[i_lo])
+    if i_hi < n_el - 1:
+        M_hi_plus = float(row_max[i_hi + 1])
+        hi = float(target_elevations[i_hi]) + target_spacing * (M_hi - cutoff) / (
+            M_hi - M_hi_plus
+        )
+    else:
+        hi = float(target_elevations[i_hi])
     return (lo, hi)
 
 
@@ -228,28 +276,14 @@ class SWAPIResponse:
             sg_values, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS
         )
 
-        # Mask cells below the threshold to zero so production and reference
-        # integrals see the same passband (the polynomial-fit "tail" below
-        # threshold is treated as instrument-team-flagged artifact).
-        oa_grid = np.where(
-            oa_grid >= _PASSBAND_BOUNDARY_THRESHOLD * float(oa_grid.max()),
-            oa_grid,
-            0.0,
-        )
-        sg_grid = np.where(
-            sg_grid >= _PASSBAND_BOUNDARY_THRESHOLD * float(sg_grid.max()),
-            sg_grid,
-            0.0,
-        )
-
         min_OA_boundary, max_OA_boundary = _passband_boundaries(
             oa_grid, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS
         )
         min_SG_boundary, max_SG_boundary = _passband_boundaries(
             sg_grid, _TARGET_ELEVATIONS, _TARGET_SPEED_RATIOS
         )
-        oa_active_el_range = _active_el_range(min_OA_boundary, _TARGET_ELEVATIONS)
-        sg_active_el_range = _active_el_range(min_SG_boundary, _TARGET_ELEVATIONS)
+        oa_elevation_range = _elevation_range(oa_grid, _TARGET_ELEVATIONS)
+        sg_elevation_range = _elevation_range(sg_grid, _TARGET_ELEVATIONS)
 
         return PassbandGrid(
             min_elevation=float(_TARGET_ELEVATIONS[0]),
@@ -264,8 +298,8 @@ class SWAPIResponse:
             max_OA_boundary=max_OA_boundary,
             min_SG_boundary=min_SG_boundary,
             max_SG_boundary=max_SG_boundary,
-            oa_active_el_range=oa_active_el_range,
-            sg_active_el_range=sg_active_el_range,
+            oa_elevation_range=oa_elevation_range,
+            sg_elevation_range=sg_elevation_range,
         )
 
     @classmethod

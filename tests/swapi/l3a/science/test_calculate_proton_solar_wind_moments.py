@@ -351,7 +351,7 @@ class TestCalculateIntegral(unittest.TestCase):
         self.assertGreater(rate_hot, rate_cold)
 
     def test_nonzero_for_bulk_elevation_outside_sg_passband_range(self):
-        # bulk_elevation=8° is above the SG active elevation range (−11 to 7)
+        # bulk_elevation=8° is above the SG elevation range (−11 to 7)
         # but within the OA range (−12 to 10). The elevation window is clamped to
         # the passband bounds, so the OA contribution is nonzero.
         self.assertGreater(
@@ -1485,8 +1485,8 @@ class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):
             max_OA_boundary=boundary,
             min_SG_boundary=boundary,
             max_SG_boundary=boundary,
-            oa_active_el_range=(-12.0, 10.5),
-            sg_active_el_range=(-10.5, 7.0),
+            oa_elevation_range=(-12.0, 10.5),
+            sg_elevation_range=(-10.5, 7.0),
         )
         sw_params = SWParams(
             density=5.0,
@@ -1522,8 +1522,8 @@ class TestInterpolateTransmissionBoundary(unittest.TestCase):
             max_OA_boundary=boundary,
             min_SG_boundary=boundary,
             max_SG_boundary=boundary,
-            oa_active_el_range=(-12.0, 10.5),
-            sg_active_el_range=(-10.5, 7.0),
+            oa_elevation_range=(-12.0, 10.5),
+            sg_elevation_range=(-10.5, 7.0),
         )
 
     def test_azimuth_far_beyond_array_returns_zero(self):
