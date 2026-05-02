@@ -6,6 +6,7 @@ import numba
 import numpy as np
 import scipy.optimize
 from numpy import ndarray
+from uncertainties import ufloat
 
 from imap_l3_processing.constants import (
     BOLTZMANN_CONSTANT_JOULES_PER_KELVIN,
@@ -87,6 +88,42 @@ class ProtonSolarWindMoments:
     velocity_covariance: ndarray = field(
         default_factory=lambda: np.full((3, 3), np.nan)
     )  # shape (3, 3), km^2/s^2; covariance of [vR, vT, vN]
+
+
+def derive_velocity_angles(
+    fitting_result: "ProtonSolarWindMoments",
+    dsrf_to_rtn,
+) -> tuple:
+    """Return (speed, clock_angle, deflection_angle) as ufloats in the DPS frame."""
+    R = dsrf_to_rtn.T
+    u = R @ (fitting_result.bulk_velocity_rtn)
+
+    speed = float(np.linalg.norm(u))
+    speed2 = speed**2
+    vxy2 = float(u[0] ** 2 + u[1] ** 2)
+    vxy = float(np.sqrt(vxy2))
+
+    cov_DPS = R @ fitting_result.velocity_covariance @ R.T
+
+    g_speed = u / speed
+    speed_sigma = float(np.sqrt(g_speed @ cov_DPS @ g_speed))
+
+    if vxy2 > 0:
+        g_clock = np.array([-u[1] / vxy2, u[0] / vxy2, 0.0])
+        clock_sigma = float(np.degrees(np.sqrt(g_clock @ cov_DPS @ g_clock)))
+        g_defl = np.array(
+            [u[0] * u[2] / (speed2 * vxy), u[1] * u[2] / (speed2 * vxy), -vxy / speed2]
+        )
+        defl_sigma = float(np.degrees(np.sqrt(g_defl @ cov_DPS @ g_defl)))
+    else:
+        clock_sigma = np.nan
+        defl_sigma = np.nan
+
+    return (
+        ufloat(speed, speed_sigma),
+        ufloat(np.degrees(np.arctan2(u[1], u[0])) % 360, clock_sigma),
+        ufloat(np.degrees(np.arccos(-u[2] / speed)), defl_sigma),
+    )
 
 
 def fit_solar_wind_proton_moments(

@@ -33,6 +33,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_moments imp
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     ProtonSolarWindMoments,
+    derive_velocity_angles,
     fit_solar_wind_proton_moments,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
@@ -45,6 +46,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
 from imap_l3_processing.swapi.l3a.swapi_l3a_dependencies import SwapiL3ADependencies
 from imap_l3_processing.swapi.l3a.utils import (
     chunk_l2_data,
+    compute_b_hat_rtn,
     get_spacecraft_velocity_rtn,
     get_swapi_dsrf_to_rtn,
     get_swapi_geometry,
@@ -73,64 +75,6 @@ def _mp_init_worker(swapi_response, efficiency_table, mag_l1d_data):
     _mp_shared["swapi_response"] = swapi_response
     _mp_shared["efficiency_table"] = efficiency_table
     _mp_shared["mag_l1d_data"] = mag_l1d_data
-
-
-def _derive_proton_velocity_angles(
-    fitting_result: ProtonSolarWindMoments,
-    dsrf_to_rtn,
-) -> tuple:
-    """Return (speed, clock_angle, deflection_angle) as ufloats from proton moments."""
-    R = dsrf_to_rtn.T
-    u = R @ (fitting_result.bulk_velocity_rtn)
-
-    speed = float(np.linalg.norm(u))
-    speed2 = speed**2
-    vxy2 = float(u[0] ** 2 + u[1] ** 2)
-    vxy = float(np.sqrt(vxy2))
-
-    cov_DPS = R @ fitting_result.velocity_covariance @ R.T
-
-    g_speed = u / speed
-    speed_sigma = float(np.sqrt(g_speed @ cov_DPS @ g_speed))
-
-    if vxy2 > 0:
-        g_clock = np.array([-u[1] / vxy2, u[0] / vxy2, 0.0])
-        clock_sigma = float(np.degrees(np.sqrt(g_clock @ cov_DPS @ g_clock)))
-        g_defl = np.array(
-            [u[0] * u[2] / (speed2 * vxy), u[1] * u[2] / (speed2 * vxy), -vxy / speed2]
-        )
-        defl_sigma = float(np.degrees(np.sqrt(g_defl @ cov_DPS @ g_defl)))
-    else:
-        clock_sigma = np.nan
-        defl_sigma = np.nan
-
-    return (
-        ufloat(speed, speed_sigma),
-        ufloat(np.degrees(np.arctan2(u[1], u[0])) % 360, clock_sigma),
-        ufloat(np.degrees(np.arccos(-u[2] / speed)), defl_sigma),
-    )
-
-
-def _compute_b_hat_rtn(
-    mag_l1d_data,
-    chunk_epoch_center_tt2000_ns: int,
-    chunk_epoch_delta_ns: int,
-    dsrf_to_rtn,
-) -> np.ndarray:
-    """Return the unit MAG vector at the chunk center, expressed in RTN. Returns NaN
-    when MAG data is missing, the rebin produces non-finite values, or |B| is too small
-    to define a direction. The alpha fitter interprets a NaN return as MAG_GAP."""
-    if mag_l1d_data is None:
-        return np.full(3, np.nan)
-    b_dsrf = mag_l1d_data.rebin_to(
-        np.array([chunk_epoch_center_tt2000_ns]),
-        np.array([chunk_epoch_delta_ns]),
-    )[0]
-    if not np.all(np.isfinite(b_dsrf)) or np.linalg.norm(b_dsrf) < 1e-12:
-        return np.full(3, np.nan)
-    R = dsrf_to_rtn
-    b_rtn = R @ b_dsrf
-    return b_rtn / np.linalg.norm(b_rtn)
 
 
 def _measurement_times_for_chunk(data_chunk, bin_slice):
@@ -172,11 +116,15 @@ def _nan_alpha_result(epoch):
         delta_v=np.nan,
         bad_fit_flag=int(SwapiL3Flags.HI_CHI_SQ),
     )
-    mom._b_hat_rtn = np.full(3, np.nan)
-    mom._ref_proton_density = np.nan
-    mom._ref_proton_temperature = np.nan
-    mom._ref_proton_velocity_rtn = np.full(3, np.nan)
-    return epoch, mom
+    return (epoch, mom, np.full(3, np.nan), np.nan, np.nan, np.full(3, np.nan))
+
+
+def _efficiency_scales(efficiency_table, epoch):
+    eps_p_lab = float(efficiency_table.eps_p_lab)
+    return (
+        float(efficiency_table.get_proton_efficiency_for(epoch)) / eps_p_lab,
+        float(efficiency_table.get_alpha_efficiency_for(epoch)) / eps_p_lab,
+    )
 
 
 def _fit_proton_moments(
@@ -189,9 +137,7 @@ def _fit_proton_moments(
 ) -> ProtonSolarWindMoments:
     count_rates = data_chunk.coincidence_count_rate[:, bin_slice].flatten()
     voltages = data_chunk.energy[:, bin_slice].flatten() / SWAPI_L2_K_FACTOR
-    proton_eff_scale = float(efficiency_table.get_proton_efficiency_for(epoch)) / float(
-        efficiency_table.eps_p_lab
-    )
+    proton_eff_scale, _ = _efficiency_scales(efficiency_table, epoch)
     return fit_solar_wind_proton_moments(
         count_rates,
         voltages,
@@ -227,7 +173,7 @@ def _proton_chunk_worker(
             rotation_matrices=rotation_matrices,
         )
         quality_flag |= fitting_result.bad_fit_flag
-        speed, clock_angle, deflection_angle = _derive_proton_velocity_angles(
+        speed, clock_angle, deflection_angle = derive_velocity_angles(
             fitting_result, dsrf_to_rtn
         )
         bulk_velocity_rtn_sc = fitting_result.bulk_velocity_rtn
@@ -274,7 +220,7 @@ def _pui_proton_chunk_worker(data_chunk, epoch, rotation_matrices, dsrf_to_rtn):
             rotation_matrices=rotation_matrices,
         )
         quality_flag |= fitting_result.bad_fit_flag
-        speed, clock_angle, deflection_angle = _derive_proton_velocity_angles(
+        speed, clock_angle, deflection_angle = derive_velocity_angles(
             fitting_result, dsrf_to_rtn
         )
     except Exception:
@@ -285,34 +231,20 @@ def _pui_proton_chunk_worker(data_chunk, epoch, rotation_matrices, dsrf_to_rtn):
     return speed, clock_angle, deflection_angle, quality_flag
 
 
-def _alpha_chunk_worker(
-    data_chunk, epoch_center_of_chunk, rotation_matrices, b_hat_rtn
+def _fit_alpha_chunk(
+    data_chunk,
+    swapi_response,
+    efficiency_table,
+    epoch_center_of_chunk,
+    rotation_matrices,
+    b_hat_rtn,
 ):
-    swapi_response = _mp_shared["swapi_response"]
-    efficiency_table = _mp_shared["efficiency_table"]
-
-    nan_b_hat = np.full(3, np.nan)
-    nan_ref_v = np.full(3, np.nan)
-
-    def _annotate(mom, b_hat, n_ref, T_ref, v_ref):
-        mom._b_hat_rtn = b_hat
-        mom._ref_proton_density = n_ref
-        mom._ref_proton_temperature = T_ref
-        mom._ref_proton_velocity_rtn = v_ref
-        return mom
-
     try:
         if np.any(np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))):
             raise ValueError("Fill values in input data")
 
-        eps_p_lab = float(efficiency_table.eps_p_lab)
-        proton_eff_scale = (
-            float(efficiency_table.get_proton_efficiency_for(epoch_center_of_chunk))
-            / eps_p_lab
-        )
-        alpha_eff_scale = (
-            float(efficiency_table.get_alpha_efficiency_for(epoch_center_of_chunk))
-            / eps_p_lab
+        proton_eff_scale, alpha_eff_scale = _efficiency_scales(
+            efficiency_table, epoch_center_of_chunk
         )
 
         proton_moments = _fit_proton_moments(
@@ -341,7 +273,8 @@ def _alpha_chunk_worker(
             proton_eff_scale,
             rotation_matrices=rotation_matrices,
         )
-        return epoch_center_of_chunk, _annotate(
+        return (
+            epoch_center_of_chunk,
             mom,
             b_hat_rtn,
             float(proton_moments.density),
@@ -353,16 +286,20 @@ def _alpha_chunk_worker(
             f"Alpha moments fit exception at epoch {epoch_center_of_chunk}; using NaN fill",
             exc_info=True,
         )
-        mom = AlphaSolarWindMoments(
-            density=np.nan,
-            temperature=np.nan,
-            bulk_velocity_rtn=np.full(3, np.nan),
-            delta_v=np.nan,
-            bad_fit_flag=int(SwapiL3Flags.HI_CHI_SQ),
-        )
-        return epoch_center_of_chunk, _annotate(
-            mom, nan_b_hat, np.nan, np.nan, nan_ref_v
-        )
+        return _nan_alpha_result(epoch_center_of_chunk)
+
+
+def _alpha_chunk_worker(
+    data_chunk, epoch_center_of_chunk, rotation_matrices, b_hat_rtn
+):
+    return _fit_alpha_chunk(
+        data_chunk,
+        _mp_shared["swapi_response"],
+        _mp_shared["efficiency_table"],
+        epoch_center_of_chunk,
+        rotation_matrices,
+        b_hat_rtn,
+    )
 
 
 class SwapiProcessor(Processor):
@@ -370,135 +307,6 @@ class SwapiProcessor(Processor):
         self, dependencies: ProcessingInputCollection, input_metadata: InputMetadata
     ):
         super().__init__(dependencies, input_metadata)
-
-    @staticmethod
-    def _fit_proton_moments_for_chunk(
-        data_chunk,
-        dependencies,
-        epoch,
-        bin_slice,
-        rotation_matrices=None,
-    ) -> ProtonSolarWindMoments:
-        """Prepare arrays from *bin_slice* and fit proton solar wind moments.
-
-        ``rotation_matrices``  may be passed when
-        pre-computed by the caller (e.g. for the alpha stage-2 fit) to avoid a
-        second SPICE call; if omitted ``fit_solar_wind_proton_moments`` resolves
-        them internally.
-        """
-        return _fit_proton_moments(
-            data_chunk,
-            dependencies.swapi_response,
-            dependencies.efficiency_calibration_table,
-            epoch,
-            bin_slice,
-            rotation_matrices=rotation_matrices,
-        )
-
-    @staticmethod
-    def _fit_alpha_moments_for_chunk(
-        data_chunk,
-        dependencies,
-        epoch_center_of_chunk,
-        rotation_matrices=None,
-        b_hat_rtn=None,
-    ) -> AlphaSolarWindMoments:
-        """Run Stage 1 (proton fit on coarse-bin axis) and Stage 2 (alpha fit) for a
-        5-sweep chunk, returning an `AlphaSolarWindMoments` augmented with three reference
-        proton fields (`_ref_proton_*`) and the `_b_hat_rtn` actually used. NaN-filled
-        when MAG is absent, the proton fit fails, or alpha peak-finding fails."""
-        nan_b_hat = np.full(3, np.nan)
-        nan_ref_v = np.full(3, np.nan)
-
-        def _annotate(mom: AlphaSolarWindMoments, b_hat, n_ref, T_ref, v_ref):
-            mom._b_hat_rtn = b_hat
-            mom._ref_proton_density = n_ref
-            mom._ref_proton_temperature = T_ref
-            mom._ref_proton_velocity_rtn = v_ref
-            return mom
-
-        try:
-            if np.any(
-                np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
-            ):
-                raise ValueError("Fill values in input data")
-
-            if rotation_matrices is None:
-                measurement_times = _measurement_times_for_chunk(
-                    data_chunk, SWAPI_COARSE_SWEEP_BINS
-                )
-                rotation_matrices = get_swapi_geometry(measurement_times)
-
-            eps_p_lab = float(dependencies.efficiency_calibration_table.eps_p_lab)
-            proton_eff_scale = (
-                float(
-                    dependencies.efficiency_calibration_table.get_proton_efficiency_for(
-                        epoch_center_of_chunk
-                    )
-                )
-                / eps_p_lab
-            )
-            alpha_eff_scale = (
-                float(
-                    dependencies.efficiency_calibration_table.get_alpha_efficiency_for(
-                        epoch_center_of_chunk
-                    )
-                )
-                / eps_p_lab
-            )
-
-            proton_moments = SwapiProcessor._fit_proton_moments_for_chunk(
-                data_chunk,
-                dependencies,
-                epoch_center_of_chunk,
-                SWAPI_COARSE_SWEEP_BINS,
-                rotation_matrices=rotation_matrices,
-            )
-
-            if b_hat_rtn is None:
-                b_hat_rtn = _compute_b_hat_rtn(
-                    getattr(dependencies, "mag_l1d_data", None),
-                    int(epoch_center_of_chunk),
-                    int(THIRTY_SECONDS_IN_NANOSECONDS),
-                )
-
-            count_rates = data_chunk.coincidence_count_rate[:, SWAPI_COARSE_SWEEP_BINS]
-            voltages = data_chunk.energy[:, SWAPI_COARSE_SWEEP_BINS] / SWAPI_L2_K_FACTOR
-            measurement_times = _measurement_times_for_chunk(
-                data_chunk, SWAPI_COARSE_SWEEP_BINS
-            )
-
-            mom = fit_solar_wind_alpha_moments(
-                count_rates.flatten(),
-                voltages.flatten(),
-                measurement_times,
-                dependencies.swapi_response,
-                proton_moments,
-                b_hat_rtn,
-                alpha_eff_scale,
-                proton_eff_scale,
-                rotation_matrices=rotation_matrices,
-            )
-            return _annotate(
-                mom,
-                b_hat_rtn,
-                float(proton_moments.density),
-                float(proton_moments.temperature),
-                np.asarray(proton_moments.bulk_velocity_rtn, dtype=float),
-            )
-        except Exception:
-            logger.info(
-                f"Alpha moments fit exception at epoch {epoch_center_of_chunk}; using NaN fill",
-                exc_info=True,
-            )
-            mom = AlphaSolarWindMoments(
-                density=np.nan,
-                temperature=np.nan,
-                bulk_velocity_rtn=np.full(3, np.nan),
-                delta_v=np.nan,
-                bad_fit_flag=int(SwapiL3Flags.HI_CHI_SQ),
-            )
-            return _annotate(mom, nan_b_hat, np.nan, np.nan, nan_ref_v)
 
     def process(self):
         if self.input_metadata.data_level == "l3a":
@@ -685,32 +493,8 @@ class SwapiProcessor(Processor):
     def process_l3a_alpha_solar_wind(
         self, data, dependencies
     ) -> SwapiL3AlphaSolarWindData:
-        epochs = []
-
-        alpha_solar_wind_speeds = []
-        alpha_solar_wind_densities = []
-        alpha_solar_wind_temperatures = []
-        alpha_solar_wind_bad_fit_flags = []
-        alpha_solar_wind_pre_lut_densities = []
-        alpha_solar_wind_pre_lut_temperatures = []
-
-        moments_density = []
-        moments_density_uncert = []
-        moments_temperature = []
-        moments_temperature_uncert = []
-        moments_velocity_rtn = []
-        moments_velocity_covariance_rtn = []
-        moments_delta_v = []
-        moments_delta_v_uncert = []
-        moments_b_hat_rtn = []
-        moments_ref_proton_density = []
-        moments_ref_proton_temperature = []
-        moments_ref_proton_velocity_rtn = []
-        moments_bad_fit_flag = []
-
         chunks = list(chunk_l2_data(data, 5))
 
-        # Precompute SPICE geometry for all chunks before entering multiprocessing.
         precomputed = []
         for data_chunk in chunks:
             epoch = data_chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
@@ -720,7 +504,7 @@ class SwapiProcessor(Processor):
                 )
                 rm = get_swapi_geometry(measurement_times)
                 dsrf = get_swapi_dsrf_to_rtn(np.array([epoch]))[0]
-                b_hat = _compute_b_hat_rtn(
+                b_hat = compute_b_hat_rtn(
                     getattr(dependencies, "mag_l1d_data", None),
                     int(epoch),
                     int(THIRTY_SECONDS_IN_NANOSECONDS),
@@ -760,70 +544,51 @@ class SwapiProcessor(Processor):
             else:
                 alpha_results.append(_nan_alpha_result(precomputed[i][0]))
 
-        for epoch, mom in alpha_results:
-            alpha_solar_wind_speed = ufloat(np.nan, np.nan)
-            alpha_density = ufloat(np.nan, np.nan)
-            alpha_temperature = ufloat(np.nan, np.nan)
-            alpha_pre_lut_density = ufloat(np.nan, np.nan)
-            alpha_pre_lut_temperature = ufloat(np.nan, np.nan)
-            bad_fit_flag = SwapiL3Flags.NONE
+        epochs, densities, density_uncerts = [], [], []
+        temperatures, temperature_uncerts = [], []
+        velocity_rtns, velocity_covariance_rtns = [], []
+        delta_vs, delta_v_uncerts = [], []
+        b_hat_rtns = []
+        ref_proton_densities, ref_proton_temperatures, ref_proton_velocity_rtns = (
+            [],
+            [],
+            [],
+        )
+        bad_fit_flags = []
+
+        for epoch, mom, b_hat, ref_n, ref_T, ref_v in alpha_results:
             epochs.append(epoch)
-            alpha_solar_wind_speeds.append(alpha_solar_wind_speed)
-            alpha_solar_wind_densities.append(alpha_density)
-            alpha_solar_wind_temperatures.append(alpha_temperature)
-            alpha_solar_wind_bad_fit_flags.append(bad_fit_flag)
-            alpha_solar_wind_pre_lut_densities.append(alpha_pre_lut_density)
-            alpha_solar_wind_pre_lut_temperatures.append(alpha_pre_lut_temperature)
+            densities.append(mom.density)
+            density_uncerts.append(mom.density_sigma)
+            temperatures.append(mom.temperature)
+            temperature_uncerts.append(mom.temperature_sigma)
+            velocity_rtns.append(mom.bulk_velocity_rtn)
+            velocity_covariance_rtns.append(mom.velocity_covariance_rtn)
+            delta_vs.append(mom.delta_v)
+            delta_v_uncerts.append(mom.delta_v_sigma)
+            b_hat_rtns.append(b_hat)
+            ref_proton_densities.append(ref_n)
+            ref_proton_temperatures.append(ref_T)
+            ref_proton_velocity_rtns.append(ref_v)
+            bad_fit_flags.append(int(mom.bad_fit_flag))
 
-            moments_density.append(mom.density)
-            moments_density_uncert.append(mom.density_sigma)
-            moments_temperature.append(mom.temperature)
-            moments_temperature_uncert.append(mom.temperature_sigma)
-            moments_velocity_rtn.append(mom.bulk_velocity_rtn)
-            moments_velocity_covariance_rtn.append(mom.velocity_covariance_rtn)
-            moments_delta_v.append(mom.delta_v)
-            moments_delta_v_uncert.append(mom.delta_v_sigma)
-            moments_b_hat_rtn.append(mom._b_hat_rtn)
-            moments_ref_proton_density.append(mom._ref_proton_density)
-            moments_ref_proton_temperature.append(mom._ref_proton_temperature)
-            moments_ref_proton_velocity_rtn.append(mom._ref_proton_velocity_rtn)
-            moments_bad_fit_flag.append(int(mom.bad_fit_flag))
-
-        alpha_solar_wind_speed_metadata = replace(
-            self.input_metadata, descriptor="alpha-sw"
-        )
-        alpha_solar_wind_l3_data = SwapiL3AlphaSolarWindData(
-            alpha_solar_wind_speed_metadata,
+        return SwapiL3AlphaSolarWindData(
+            replace(self.input_metadata, descriptor="alpha-sw"),
             np.array(epochs),
-            np.array(alpha_solar_wind_speeds),
-            np.array(alpha_solar_wind_temperatures),
-            np.array(alpha_solar_wind_densities),
-            np.array(alpha_solar_wind_bad_fit_flags),
-            np.array(alpha_solar_wind_pre_lut_temperatures),
-            np.array(alpha_solar_wind_pre_lut_densities),
-            alpha_sw_moments_density=np.array(moments_density),
-            alpha_sw_moments_density_uncert=np.array(moments_density_uncert),
-            alpha_sw_moments_temperature=np.array(moments_temperature),
-            alpha_sw_moments_temperature_uncert=np.array(moments_temperature_uncert),
-            alpha_sw_moments_velocity_rtn=np.array(moments_velocity_rtn),
-            alpha_sw_moments_velocity_covariance_rtn=np.array(
-                moments_velocity_covariance_rtn
-            ),
-            alpha_sw_moments_delta_v=np.array(moments_delta_v),
-            alpha_sw_moments_delta_v_uncert=np.array(moments_delta_v_uncert),
-            alpha_sw_moments_b_hat_rtn=np.array(moments_b_hat_rtn),
-            alpha_sw_moments_reference_proton_density=np.array(
-                moments_ref_proton_density
-            ),
-            alpha_sw_moments_reference_proton_temperature=np.array(
-                moments_ref_proton_temperature
-            ),
-            alpha_sw_moments_reference_proton_velocity_rtn=np.array(
-                moments_ref_proton_velocity_rtn
-            ),
-            alpha_sw_moments_bad_fit_flag=np.array(moments_bad_fit_flag),
+            np.array(densities),
+            np.array(density_uncerts),
+            np.array(temperatures),
+            np.array(temperature_uncerts),
+            np.array(velocity_rtns),
+            np.array(velocity_covariance_rtns),
+            np.array(delta_vs),
+            np.array(delta_v_uncerts),
+            np.array(b_hat_rtns),
+            np.array(ref_proton_densities),
+            np.array(ref_proton_temperatures),
+            np.array(ref_proton_velocity_rtns),
+            np.array(bad_fit_flags),
         )
-        return alpha_solar_wind_l3_data
 
     def process_l3a_proton(self, data, dependencies) -> SwapiL3ProtonSolarWindData:
         chunks = list(chunk_l2_data(data, 5))

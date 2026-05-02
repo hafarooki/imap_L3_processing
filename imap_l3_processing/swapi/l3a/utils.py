@@ -53,9 +53,7 @@ def get_swapi_geometry(measurement_time: ndarray) -> ndarray:
             for t in np.atleast_1d(measurement_time) / ONE_SECOND_IN_NANOSECONDS
         ]
     )
-    return get_rotation_matrix(
-        et_times, SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_SWAPI
-    )
+    return get_rotation_matrix(et_times, SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_SWAPI)
 
 
 def get_swapi_dsrf_to_rtn(measurement_time_tt2000_ns: ndarray) -> ndarray:
@@ -78,17 +76,40 @@ def get_spacecraft_velocity_rtn(epoch_tt2000_ns: float) -> ndarray:
     """Return the spacecraft velocity at `epoch_tt2000_ns` (TT2000 ns) in RTN, km/s."""
     et = spiceypy.unitim(float(epoch_tt2000_ns) / ONE_SECOND_IN_NANOSECONDS, "TT", "ET")
     state_eclipj2000 = imap_state(et, SpiceFrame.ECLIPJ2000)
-    rtn_from_eclipj2000 = get_rotation_matrix(et, SpiceFrame.ECLIPJ2000, SpiceFrame.IMAP_RTN)
+    rtn_from_eclipj2000 = get_rotation_matrix(
+        et, SpiceFrame.ECLIPJ2000, SpiceFrame.IMAP_RTN
+    )
     return np.einsum("ij,j->i", rtn_from_eclipj2000, state_eclipj2000[3:])
 
 
+def compute_b_hat_rtn(
+    mag_l1d_data,
+    chunk_epoch_center_tt2000_ns: int,
+    chunk_epoch_delta_ns: int,
+    dsrf_to_rtn,
+) -> np.ndarray:
+    """Return the unit MAG vector at the chunk center, expressed in RTN. Returns NaN
+    when MAG data is missing, the rebin produces non-finite values, or |B| is too small
+    to define a direction. The alpha fitter interprets a NaN return as MAG_GAP."""
+    if mag_l1d_data is None:
+        return np.full(3, np.nan)
+    b_dsrf = mag_l1d_data.rebin_to(
+        np.array([chunk_epoch_center_tt2000_ns]),
+        np.array([chunk_epoch_delta_ns]),
+    )[0]
+    if not np.all(np.isfinite(b_dsrf)) or np.linalg.norm(b_dsrf) < 1e-12:
+        return np.full(3, np.nan)
+    R = dsrf_to_rtn
+    b_rtn = R @ b_dsrf
+    return b_rtn / np.linalg.norm(b_rtn)
+
+
 def chunk_l2_data(data: SwapiL2Data, chunk_size: int) -> Iterable[SwapiL2Data]:
-    i = 0
-    while i < len(data.sci_start_time):
+    n = len(data.sci_start_time)
+    for i in range(0, n - n % chunk_size, chunk_size):
         yield SwapiL2Data(
             data.sci_start_time[i : i + chunk_size],
             data.energy[i : i + chunk_size],
             data.coincidence_count_rate[i : i + chunk_size],
             data.coincidence_count_rate_uncertainty[i : i + chunk_size],
         )
-        i += chunk_size

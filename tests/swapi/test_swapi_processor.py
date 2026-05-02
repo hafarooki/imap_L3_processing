@@ -946,18 +946,9 @@ class TestSwapiProcessor(TestCase):
             )
 
         self.assertIsInstance(product, SwapiL3AlphaSolarWindData)
-        np.testing.assert_array_equal(nominal_values(product.alpha_sw_speed), [np.nan])
-        np.testing.assert_array_equal(std_devs(product.alpha_sw_speed), [np.nan])
-
-        np.testing.assert_array_equal(
-            nominal_values(product.alpha_sw_temperature), [np.nan]
-        )
-        np.testing.assert_array_equal(std_devs(product.alpha_sw_temperature), [np.nan])
-
-        np.testing.assert_array_equal(
-            nominal_values(product.alpha_sw_density), [np.nan]
-        )
-        np.testing.assert_array_equal(std_devs(product.alpha_sw_density), [np.nan])
+        np.testing.assert_array_equal(product.alpha_sw_density, [np.nan])
+        np.testing.assert_array_equal(product.alpha_sw_temperature, [np.nan])
+        np.testing.assert_array_equal(product.alpha_sw_delta_v, [np.nan])
 
     def test_process_l3a_pui_outputs_fill_for_chunks_with_fill(self):
         instrument = "swapi"
@@ -1195,39 +1186,20 @@ class TestSwapiProcessor(TestCase):
             ]
         )
 
-        (
-            actual_alpha_metadata,
-            actual_alpha_epoch,
-            actual_alpha_sw_speed,
-            actual_alpha_sw_temperature,
-            actual_alpha_sw_density,
-            actual_bad_fit_flag,
-            actual_pre_lut_temp,
-            actual_pre_lut_density,
-        ) = mock_alpha_solar_wind_data_constructor.call_args.args
-        self.assertEqual(expected_alpha_metadata, actual_alpha_metadata)
+        args = mock_alpha_solar_wind_data_constructor.call_args.args
+        actual_alpha_metadata = args[0]
+        actual_alpha_epoch = args[1]
+        actual_density = args[2]
+        actual_bad_fit_flag = args[14]
 
+        self.assertEqual(expected_alpha_metadata, actual_alpha_metadata)
         np.testing.assert_array_equal(
             np.array([initial_epoch + THIRTY_SECONDS_IN_NANOSECONDS]),
             actual_alpha_epoch,
         )
-        # LUT pipeline is removed — speed, temperature, density, pre-LUT fields are always NaN.
-        self.assertTrue(np.all(np.isnan(nominal_values(actual_alpha_sw_speed))))
-        self.assertTrue(np.all(np.isnan(nominal_values(actual_alpha_sw_temperature))))
-        self.assertTrue(np.all(np.isnan(nominal_values(actual_alpha_sw_density))))
-        self.assertTrue(np.all(np.isnan(nominal_values(actual_pre_lut_temp))))
-        self.assertTrue(np.all(np.isnan(nominal_values(actual_pre_lut_density))))
+        np.testing.assert_array_equal(actual_density, np.array([alpha_moments.density]))
         np.testing.assert_array_equal(
-            actual_bad_fit_flag, np.array([SwapiL3Flags.NONE])
-        )
-
-        # Moments kwargs are populated from fit_solar_wind_alpha_moments.
-        kwargs = mock_alpha_solar_wind_data_constructor.call_args.kwargs
-        np.testing.assert_array_equal(
-            kwargs["alpha_sw_moments_density"], np.array([alpha_moments.density])
-        )
-        np.testing.assert_array_equal(
-            kwargs["alpha_sw_moments_bad_fit_flag"], np.array([int(SwapiL3Flags.NONE)])
+            actual_bad_fit_flag, np.array([int(SwapiL3Flags.NONE)])
         )
 
         mock_manager.add_instrument_attrs.assert_called_once_with(

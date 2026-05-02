@@ -14,8 +14,6 @@ from imap_l3_processing.swapi.l3a.models import (
     PROTON_SOLAR_WIND_SPEED_CDF_VAR_NAME,
     EPOCH_DELTA_CDF_VAR_NAME,
     SwapiL3AlphaSolarWindData,
-    ALPHA_SOLAR_WIND_SPEED_CDF_VAR_NAME,
-    ALPHA_SOLAR_WIND_SPEED_UNCERTAINTY_CDF_VAR_NAME,
     PROTON_SOLAR_WIND_TEMPERATURE_CDF_VAR_NAME,
     PROTON_SOLAR_WIND_TEMPERATURE_UNCERTAINTY_CDF_VAR_NAME,
     PROTON_SOLAR_WIND_DENSITY_CDF_VAR_NAME,
@@ -152,47 +150,40 @@ class TestModels(CdfModelTestCase):
         )
 
     def test_getting_alpha_sw_data_product_variables(self):
+        n = 10
         epoch_data = np.arange(20, step=2)
         epoch_delta = np.full_like(epoch_data, THIRTY_SECONDS_IN_NANOSECONDS)
-        expected_speed_nominal_values = np.arange(10, step=1.0)
-        expected_speed_std = np.arange(5, step=0.5)
-        alpha_speed = uarray(expected_speed_nominal_values, expected_speed_std)
-        expected_temperature_nominal_values = np.arange(300000, step=30000.0)
-        expected_temperature_std_devs = np.arange(50000, step=5000.0)
-        alpha_temperature = uarray(
-            expected_temperature_nominal_values, expected_temperature_std_devs
-        )
-        expected_alpha_density_nominal_values = np.arange(2, step=0.2)
-        expected_alpha_density_std_devs = np.arange(1, step=0.1)
-        expected_flag_values = np.full_like(epoch_data, SwapiL3Flags.NONE)
-        expected_flag_values[: len(epoch_data) // 2] = SwapiL3Flags.HI_CHI_SQ
-
-        alpha_density = uarray(
-            expected_alpha_density_nominal_values, expected_alpha_density_std_devs
-        )
-
-        expected_pre_lut_temperature_nominal_values = np.arange(400000, step=40000.0)
-        expected_pre_lut_temperature_std_devs = np.arange(20000, step=2000.0)
-        alpha_pre_lut_temperature = uarray(
-            expected_pre_lut_temperature_nominal_values,
-            expected_pre_lut_temperature_std_devs,
-        )
-        expected_pre_lut_alpha_density_nominal_values = np.arange(2.4, step=0.24)
-        expected_pre_lut_alpha_density_std_devs = np.arange(1.5, step=0.15)
-        alpha_pre_lut_density = uarray(
-            expected_pre_lut_alpha_density_nominal_values,
-            expected_pre_lut_alpha_density_std_devs,
-        )
+        density = np.arange(n, dtype=float)
+        density_uncert = np.arange(n, dtype=float) * 0.1
+        temperature = np.arange(n, dtype=float) * 1e4
+        temperature_uncert = np.arange(n, dtype=float) * 1e3
+        velocity_rtn = np.random.randn(n, 3)
+        velocity_covariance_rtn = np.random.randn(n, 3, 3)
+        delta_v = np.arange(n, dtype=float) * 10
+        delta_v_uncert = np.arange(n, dtype=float)
+        b_hat_rtn = np.random.randn(n, 3)
+        ref_proton_density = np.arange(n, dtype=float) * 5
+        ref_proton_temperature = np.arange(n, dtype=float) * 1e5
+        ref_proton_velocity_rtn = np.random.randn(n, 3)
+        bad_fit_flag = np.full(n, SwapiL3Flags.NONE)
+        bad_fit_flag[: n // 2] = SwapiL3Flags.HI_CHI_SQ
 
         data = SwapiL3AlphaSolarWindData(
             Mock(),
             epoch_data,
-            alpha_speed,
-            alpha_temperature,
-            alpha_density,
-            expected_flag_values,
-            alpha_pre_lut_temperature,
-            alpha_pre_lut_density,
+            density,
+            density_uncert,
+            temperature,
+            temperature_uncert,
+            velocity_rtn,
+            velocity_covariance_rtn,
+            delta_v,
+            delta_v_uncert,
+            b_hat_rtn,
+            ref_proton_density,
+            ref_proton_temperature,
+            ref_proton_velocity_rtn,
+            bad_fit_flag,
         )
         variables = data.to_data_product_variables()
 
@@ -200,41 +191,43 @@ class TestModels(CdfModelTestCase):
         self.assert_variable_attributes(
             variables[1], epoch_delta, EPOCH_DELTA_CDF_VAR_NAME
         )
+        self.assert_variable_attributes(variables[2], density, "alpha_sw_density")
         self.assert_variable_attributes(
-            variables[2],
-            expected_speed_nominal_values,
-            ALPHA_SOLAR_WIND_SPEED_CDF_VAR_NAME,
+            variables[3], density_uncert, "alpha_sw_density_uncert"
         )
         self.assert_variable_attributes(
-            variables[3],
-            expected_speed_std,
-            ALPHA_SOLAR_WIND_SPEED_UNCERTAINTY_CDF_VAR_NAME,
+            variables[4], temperature, "alpha_sw_temperature"
         )
         self.assert_variable_attributes(
-            variables[4], expected_temperature_nominal_values, "alpha_sw_temperature"
+            variables[5], temperature_uncert, "alpha_sw_temperature_uncert"
         )
         self.assert_variable_attributes(
-            variables[5], expected_temperature_std_devs, "alpha_sw_temperature_uncert"
+            variables[6], velocity_rtn, "alpha_sw_velocity_rtn"
         )
         self.assert_variable_attributes(
-            variables[6], expected_alpha_density_nominal_values, "alpha_sw_density"
+            variables[7],
+            velocity_covariance_rtn,
+            "alpha_sw_velocity_covariance_rtn",
+        )
+        self.assert_variable_attributes(variables[8], delta_v, "alpha_sw_delta_v")
+        self.assert_variable_attributes(
+            variables[9], delta_v_uncert, "alpha_sw_delta_v_uncert"
+        )
+        self.assert_variable_attributes(variables[10], b_hat_rtn, "alpha_sw_b_hat_rtn")
+        self.assert_variable_attributes(
+            variables[11], ref_proton_density, "alpha_sw_reference_proton_density"
         )
         self.assert_variable_attributes(
-            variables[7], expected_alpha_density_std_devs, "alpha_sw_density_uncert"
-        )
-
-        self.assert_variable_attributes(variables[8], expected_flag_values, "swp_flags")
-
-        self.assert_variable_attributes(
-            variables[9],
-            expected_pre_lut_temperature_nominal_values,
-            "alpha_sw_pre_lut_temperature",
+            variables[12],
+            ref_proton_temperature,
+            "alpha_sw_reference_proton_temperature",
         )
         self.assert_variable_attributes(
-            variables[10],
-            expected_pre_lut_alpha_density_nominal_values,
-            "alpha_sw_pre_lut_density",
+            variables[13],
+            ref_proton_velocity_rtn,
+            "alpha_sw_reference_proton_velocity_rtn",
         )
+        self.assert_variable_attributes(variables[14], bad_fit_flag, "swp_flags")
 
     def test_getting_pui_data_product_variables(self):
         epoch_data = np.arange(20, step=2)
