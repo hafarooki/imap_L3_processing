@@ -1,17 +1,3 @@
-"""Alpha solar wind moments fitter (Stage 2 of the two-stage proton-frozen scheme).
-
-Reuses the proton fitter's `_model_count_rates` (now species-parameterized) to model the
-alpha contribution to the count rate. Stage 1 — the proton fit on the same chunk — is
-performed by the caller and passed in as `proton_moments`. Stage 2 here is a 3-DOF
-Levenberg–Marquardt over (n_α, T_α, Δv) where v_α = v_p* + Δv * B̂. The combined
-observed model is `deadtime(proton_true + alpha_true)` so deadtime acts on the sum.
-
-When magnetic data is unavailable, the fit uses the nominal Parker spiral direction
-(45° from R toward −T in RTN) and flags the result with ALPHA_MAG_DATA_FALLBACK.
-
-See `docs/swapi/solar-wind-moments.md` § "Alpha Particle Moments".
-"""
-
 from dataclasses import dataclass
 from typing import Optional
 
