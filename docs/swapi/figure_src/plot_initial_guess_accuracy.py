@@ -14,7 +14,7 @@ because scipy.optimize.least_squares does most of its bookkeeping in pure Python
 and holds the GIL.
 
 Solar wind parameter ranges (seed=7):
-  bulk_speed:   200–2000 km/s         (uniform)
+  bulk_speed:   200–1500 km/s         (uniform)
   temperature:  23,000–580,000 K      (log-uniform)
   density:        2–20 cm⁻³          (uniform)
   vT, vN:       −50–50 km/s          (uniform)
@@ -34,6 +34,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor  # noqa: 
 import numpy as np
 import numba
 import spacepy.pycdf
+from uncertainties import UFloat
 import matplotlib
 
 matplotlib.use("Agg")
@@ -75,6 +76,11 @@ _N_BINS = 71  # SWAPI_SCIENCE_BINS = slice(1, 72)
 _DT_S = _SWEEP_S / 72  # bin spacing within a 72-bin sweep
 
 _R_BASE_RTN_TO_SWAPI = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+
+
+def _nom(x):
+    """Return the nominal value of a UFloat, or float-cast a plain numeric."""
+    return x.nominal_value if isinstance(x, UFloat) else float(x)
 
 
 def _load_science_voltages() -> np.ndarray:
@@ -198,16 +204,16 @@ def _process_chunk(idx_range):
                 v_b,
                 vT,
                 vN,
-                ig.density,
-                ig.temperature,
-                ig.bulk_velocity_rtn[0],
-                ig.bulk_velocity_rtn[1],
-                ig.bulk_velocity_rtn[2],
-                result.density,
-                result.temperature,
-                result.bulk_velocity_rtn[0],
-                result.bulk_velocity_rtn[1],
-                result.bulk_velocity_rtn[2],
+                _nom(ig.density),
+                _nom(ig.temperature),
+                _nom(ig.bulk_velocity_rtn[0]),
+                _nom(ig.bulk_velocity_rtn[1]),
+                _nom(ig.bulk_velocity_rtn[2]),
+                _nom(result.density),
+                _nom(result.temperature),
+                _nom(result.bulk_velocity_rtn[0]),
+                _nom(result.bulk_velocity_rtn[1]),
+                _nom(result.bulk_velocity_rtn[2]),
                 bool(result.bad_fit_flag),
             )
         )
@@ -216,7 +222,7 @@ def _process_chunk(idx_range):
 
 def _run_cases(voltages: np.ndarray) -> dict:
     rng = np.random.default_rng(_RNG_SEED)
-    bulk_speeds = rng.uniform(200, 2000, _N_SAMPLES)
+    bulk_speeds = rng.uniform(200, 1500, _N_SAMPLES)
     temperatures = np.exp(
         rng.uniform(np.log(2 * EV_TO_KELVIN), np.log(50 * EV_TO_KELVIN), _N_SAMPLES)
     )
