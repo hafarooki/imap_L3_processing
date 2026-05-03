@@ -317,6 +317,17 @@ def fit_solar_wind_alpha_moments(
         T_now = float(np.exp(result.x[1]))
         chi2_now = float(np.sum(result.fun**2))
         per_bin_now = chi2_now / max(n_data, 1)
+        # When the current fit is unphysical (T_α/T_p > 20 — beyond the
+        # user-stated 19× upper limit), relax the per-bin SSE gate:
+        # trims that restore T to a physical value can have *higher*
+        # per-bin SSE than the runaway-T fit when the residual has
+        # wider-than-Maxwellian tails (the runaway fit captures those
+        # tails better in absolute SSE, even though the small-window
+        # physical fit is the right answer). Cap the relaxation at 2×
+        # per-bin SSE so we don't accept clearly worse candidates.
+        unphysical_now = T_now > 20.0 * proton_T
+        chi2_gate = (2.0 * per_bin_now) if unphysical_now else per_bin_now
+
         candidates = []
         for trim_lo, trim_hi in ((1, 0), (0, 1), (1, 1)):
             if len(current_window) - trim_lo - trim_hi < 5:
@@ -334,7 +345,11 @@ def fit_solar_wind_alpha_moments(
             chi2_t = float(np.sum(r_t.fun**2))
             T_t = float(np.exp(r_t.x[1]))
             per_bin_t = chi2_t / max(n_t, 1)
-            if per_bin_t < per_bin_now and T_t < T_now:
+            # In unphysical regime require T_t < 20·T_p (so the trim
+            # actually escaped the runaway-T basin); otherwise just
+            # require T_t < T_now. Per-bin gated as above.
+            T_ok = (T_t < 20.0 * proton_T) if unphysical_now else (T_t < T_now)
+            if per_bin_t < chi2_gate and T_ok:
                 candidates.append(
                     (per_bin_t, T_t, r_t, res_t, n_t, new_window)
                 )
