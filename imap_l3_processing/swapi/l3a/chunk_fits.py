@@ -3,8 +3,12 @@
 `ChunkFitter` is the strategy base class; `ProtonChunkFitter`,
 `PuiProtonChunkFitter`, and `AlphaChunkFitter` each own one science pipeline.
 `ParallelChunkRunner` precomputes geometry per chunk in the parent process and
-submits each chunk to a fork-context Pool. Geometry methods return None-filled
-tuples on SPICE gaps; `fit_chunk` handles them via try/except. Shared state
+submits each chunk to a fork-context Pool. When SPICE geometry is unavailable
+`precompute_geometry` returns ``None`` for the rotation-matrix slot and
+`fit_chunk` emits ``EPHEMERIS_GAP`` (not ``BAD_FIT``). For ``AlphaChunkFitter``
+a second independent sentinel tracks MAG availability: a NaN ``b_hat_rtn``
+while SPICE succeeded emits ``MAG_GAP``. ``BAD_FIT`` is reserved for chunks
+where geometry was valid but the optimizer or peak-finder failed. Shared state
 (SWAPIResponse cache, calibration table, the fitter itself) is passed once per
 worker via `Pool` `initargs` and lives in the module-level `_shared` dict, so
 per-chunk pickling stays bounded to chunk + geometry tuple.
@@ -123,6 +127,28 @@ class ProtonChunkFitter(ChunkFitter):
         bulk_velocity_rtn_sc = np.full(3, np.nan)
         velocity_covariance = np.full((3, 3), np.nan)
         quality_flag = SwapiL3Flags.NONE
+        if rotation_matrices is None or sc_velocity_rtn is None:
+            quality_flag |= SwapiL3Flags.EPHEMERIS_GAP
+            return dict(
+                epoch=epoch,
+                proton_sw_speed=speed_nom,
+                proton_sw_speed_uncert=speed_unc,
+                proton_sw_speed_sun=sun_speed_nom,
+                proton_sw_speed_sun_uncert=sun_speed_unc,
+                proton_sw_temperature=temp_nom,
+                proton_sw_temperature_uncert=temp_unc,
+                proton_sw_density=density_nom,
+                proton_sw_density_uncert=density_unc,
+                proton_sw_clock_angle=clock_nom,
+                proton_sw_clock_angle_uncert=clock_unc,
+                proton_sw_deflection_angle=defl_nom,
+                proton_sw_deflection_angle_uncert=defl_unc,
+                proton_sw_bulk_velocity_rtn_sun=bulk_velocity_rtn_sun,
+                proton_sw_bulk_velocity_rtn_sun_covariance=velocity_covariance,
+                proton_sw_bulk_velocity_rtn_sc=bulk_velocity_rtn_sc,
+                proton_sw_bulk_velocity_rtn_sc_covariance=velocity_covariance,
+                quality_flags=quality_flag,
+            )
         try:
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
@@ -202,14 +228,15 @@ class AlphaChunkFitter(ChunkFitter):
         epoch = chunk_epoch(chunk)
         try:
             rm = get_swapi_geometry(measurement_times(chunk, SWAPI_COARSE_SWEEP_BINS))
-            b_hat = compute_b_hat_rtn(
-                self.mag_data, int(epoch), int(THIRTY_SECONDS_IN_NANOSECONDS)
-            )
         except Exception:
             logger.warning(
-                "Geometry gap in alpha fit, NaN-filling chunk", exc_info=True
+                "SPICE gap in alpha geometry, NaN-filling chunk", exc_info=True
             )
-            rm = b_hat = None
+            rm = None
+        # compute_b_hat_rtn returns NaN arrays on MAG gaps — does not raise.
+        b_hat = compute_b_hat_rtn(
+            self.mag_data, int(epoch), int(THIRTY_SECONDS_IN_NANOSECONDS)
+        )
         return (epoch, rm, b_hat)
 
     def fit_chunk(self, data_chunk, epoch, rotation_matrices, b_hat_rtn):
@@ -227,6 +254,42 @@ class AlphaChunkFitter(ChunkFitter):
             int(SwapiL3Flags.PRELIMINARY_MAG) if self.mag_data_level == "l1d" else 0
         )
         bad_fit_flag = int(SwapiL3Flags.BAD_FIT) | preliminary_mag_bit
+        if rotation_matrices is None:
+            bad_fit_flag = int(SwapiL3Flags.EPHEMERIS_GAP) | preliminary_mag_bit
+            return dict(
+                epoch=epoch,
+                alpha_sw_density=density_nom,
+                alpha_sw_density_uncert=density_unc,
+                alpha_sw_temperature=temp_nom,
+                alpha_sw_temperature_uncert=temp_unc,
+                alpha_sw_velocity_rtn=velocity_rtn,
+                alpha_sw_velocity_covariance_rtn=velocity_cov,
+                alpha_sw_delta_v=delta_v_nom,
+                alpha_sw_delta_v_uncert=delta_v_unc,
+                alpha_sw_b_hat_rtn=b_hat_out,
+                alpha_sw_reference_proton_density=ref_density,
+                alpha_sw_reference_proton_temperature=ref_temperature,
+                alpha_sw_reference_proton_velocity_rtn=ref_velocity,
+                bad_fit_flag=bad_fit_flag,
+            )
+        if b_hat_rtn is None or not np.all(np.isfinite(b_hat_rtn)):
+            bad_fit_flag = int(SwapiL3Flags.MAG_GAP) | preliminary_mag_bit
+            return dict(
+                epoch=epoch,
+                alpha_sw_density=density_nom,
+                alpha_sw_density_uncert=density_unc,
+                alpha_sw_temperature=temp_nom,
+                alpha_sw_temperature_uncert=temp_unc,
+                alpha_sw_velocity_rtn=velocity_rtn,
+                alpha_sw_velocity_covariance_rtn=velocity_cov,
+                alpha_sw_delta_v=delta_v_nom,
+                alpha_sw_delta_v_uncert=delta_v_unc,
+                alpha_sw_b_hat_rtn=b_hat_out,
+                alpha_sw_reference_proton_density=ref_density,
+                alpha_sw_reference_proton_temperature=ref_temperature,
+                alpha_sw_reference_proton_velocity_rtn=ref_velocity,
+                bad_fit_flag=bad_fit_flag,
+            )
         try:
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
@@ -302,6 +365,14 @@ class PuiProtonChunkFitter(ChunkFitter):
         clock_angle = ufloat(np.nan, np.nan)
         deflection_angle = ufloat(np.nan, np.nan)
         quality_flag = SwapiL3Flags.NONE
+        if rotation_matrices is None:
+            quality_flag |= SwapiL3Flags.EPHEMERIS_GAP
+            return dict(
+                proton_sw_speed=speed,
+                proton_sw_clock_angle=clock_angle,
+                proton_sw_deflection_angle=deflection_angle,
+                quality_flags=quality_flag,
+            )
         try:
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))

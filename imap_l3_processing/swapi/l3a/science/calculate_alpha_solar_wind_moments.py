@@ -6,10 +6,10 @@ performed by the caller and passed in as `proton_moments`. Stage 2 here is a 3-D
 Levenberg–Marquardt over (n_α, T_α, Δv) where v_α = v_p* + Δv * B̂. The combined
 observed model is `deadtime(proton_true + alpha_true)` so deadtime acts on the sum.
 
-If the MAG direction is unavailable for a chunk (NaN b_hat), the fit returns
-NaN moments with ``bad_fit_flag |= BAD_FIT`` — there is no Parker-spiral
-fallback. MAG presence at the file level is enforced upstream in the alpha-sw
-processor branch.
+MAG presence at the file level is enforced upstream in the alpha-sw processor
+branch. Per-chunk MAG gaps are intercepted by the chunk fitter, which emits
+``MAG_GAP`` and skips the fit; the NaN-finite guard inside this function is a
+defensive fallback for direct callers.
 
 See `docs/swapi/solar-wind-moments.md` § "Alpha Particle Moments".
 """
@@ -126,10 +126,13 @@ def fit_solar_wind_alpha_moments(
     ``alpha_effective_area_scale = ε_α(t) / ε_p(t_lab)`` (note the proton-lab denominator
     even for alphas — see `solar-wind-moments.md` § "Alpha Particle Moments").
 
-    ``b_hat_rtn`` is the unit MAG direction in RTN for the chunk. If MAG data is
-    unavailable for the chunk (NaN), returns NaN moments with
-    ``bad_fit_flag |= BAD_FIT``. If the reference proton velocity is
-    non-finite or near-zero, returns NaN moments with ``bad_fit_flag |= BAD_FIT``.
+    ``b_hat_rtn`` is the unit MAG direction in RTN for the chunk. Normally the
+    chunk fitter intercepts MAG gaps upstream (emitting ``MAG_GAP``) before
+    calling this function, so the NaN-finite guard below is a defensive fallback
+    for direct callers (tests, etc.). If ``b_hat_rtn`` is still NaN when this
+    function is reached it returns NaN moments with ``bad_fit_flag |= BAD_FIT``.
+    If the reference proton velocity is non-finite or near-zero, returns NaN
+    moments with ``bad_fit_flag |= BAD_FIT``.
 
     ``rotation_matrices`` may be precomputed and reused from the Stage 1 proton fit;
     if ``None``, computed internally from ``measurement_time``.

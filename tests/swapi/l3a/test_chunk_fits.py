@@ -68,26 +68,46 @@ class TestChunkFits(TestCase):
             result["proton_sw_speed_sun_uncert"], expected_sun_speed_uncert
         )
 
-    def _stub_alpha_fit_chunk(self, mag_data_level):
-        """Drive AlphaChunkFitter.fit_chunk down the early-failure path so that
-        its bad_fit_flag is the BAD_FIT seed value OR'd with PRELIMINARY_MAG when
-        the source level is L1D. We trigger the input-validation branch by
-        passing NaN-laced count rates. _shared is normally populated by the
-        worker initializer; stub it here so the early access doesn't KeyError."""
+    def _call_alpha_fit_chunk(self, mag_data_level, rotation_matrices, b_hat_rtn):
+        """Call AlphaChunkFitter.fit_chunk with the given geometry arguments.
+        _shared is normally populated by the worker initializer; stub it here so
+        the early access doesn't KeyError."""
         _shared["swapi_response"] = Mock()
         _shared["efficiency_table"] = Mock()
         try:
             data_chunk = Mock()
             data_chunk.coincidence_count_rate = np.full((5, 72), np.nan)
             fitter = AlphaChunkFitter(mag_data=None, mag_data_level=mag_data_level)
-            return fitter.fit_chunk(data_chunk, 0, None, np.full(3, np.nan))
+            return fitter.fit_chunk(data_chunk, 0, rotation_matrices, b_hat_rtn)
         finally:
             _shared.clear()
 
-    def test_alpha_fitter_sets_preliminary_mag_when_source_is_l1d(self):
-        result = self._stub_alpha_fit_chunk(mag_data_level="l1d")
+    def test_alpha_fitter_ephemeris_gap_when_rotation_matrices_none(self):
+        """SPICE unavailable → EPHEMERIS_GAP, not BAD_FIT."""
+        result = self._call_alpha_fit_chunk("l2", None, np.full(3, np.nan))
+        self.assertTrue(result["bad_fit_flag"] & int(SwapiL3Flags.EPHEMERIS_GAP))
+        self.assertFalse(result["bad_fit_flag"] & int(SwapiL3Flags.BAD_FIT))
+        self.assertFalse(result["bad_fit_flag"] & int(SwapiL3Flags.MAG_GAP))
+
+    def test_alpha_fitter_mag_gap_when_b_hat_nan_but_geometry_valid(self):
+        """MAG data missing but SPICE OK → MAG_GAP, not BAD_FIT."""
+        rm = np.tile(np.eye(3), (5, 1, 1))
+        result = self._call_alpha_fit_chunk("l2", rm, np.full(3, np.nan))
+        self.assertTrue(result["bad_fit_flag"] & int(SwapiL3Flags.MAG_GAP))
+        self.assertFalse(result["bad_fit_flag"] & int(SwapiL3Flags.BAD_FIT))
+        self.assertFalse(result["bad_fit_flag"] & int(SwapiL3Flags.EPHEMERIS_GAP))
+
+    def test_alpha_fitter_sets_preliminary_mag_on_ephemeris_gap_when_source_is_l1d(
+        self,
+    ):
+        result = self._call_alpha_fit_chunk("l1d", None, np.full(3, np.nan))
+        self.assertTrue(result["bad_fit_flag"] & int(SwapiL3Flags.PRELIMINARY_MAG))
+
+    def test_alpha_fitter_sets_preliminary_mag_on_mag_gap_when_source_is_l1d(self):
+        rm = np.tile(np.eye(3), (5, 1, 1))
+        result = self._call_alpha_fit_chunk("l1d", rm, np.full(3, np.nan))
         self.assertTrue(result["bad_fit_flag"] & int(SwapiL3Flags.PRELIMINARY_MAG))
 
     def test_alpha_fitter_omits_preliminary_mag_when_source_is_l2(self):
-        result = self._stub_alpha_fit_chunk(mag_data_level="l2")
+        result = self._call_alpha_fit_chunk("l2", None, np.full(3, np.nan))
         self.assertFalse(result["bad_fit_flag"] & int(SwapiL3Flags.PRELIMINARY_MAG))
