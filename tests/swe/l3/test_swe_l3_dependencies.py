@@ -75,6 +75,23 @@ class TestSweL3Dependencies(unittest.TestCase):
                                                 expected_config_path)
         self.assertEqual(mock_from_file_paths.return_value, result)
 
+    @patch(f"{MODULE}.select_mag_path")
+    @patch(f"{MODULE}.download")
+    def test_fetch_dependencies_raises_if_no_mag(self, mock_download, mock_select_mag_path):
+        swe_l2_dependency = ScienceInput("imap_swe_l2_sci_20200101_v000.cdf")
+        swe_l1b_dependency = ScienceInput("imap_swe_l1b_sci_20200101_v000.cdf")
+        swapi_l3a_dependency = ScienceInput("imap_swapi_l3_proton-sw_20200101_v000.cdf")
+        config_dependency = AncillaryInput("imap_swe_config_20250101_v000.json")
+        processing_input_collection = ProcessingInputCollection(
+            swe_l2_dependency, swe_l1b_dependency, swapi_l3a_dependency, config_dependency,
+        )
+        mock_select_mag_path.return_value = (None, None)
+
+        with self.assertRaises(ValueError) as cm:
+            SweL3Dependencies.fetch_dependencies(processing_input_collection)
+
+        self.assertIn("norm-dsrf", str(cm.exception))
+
     @patch("imap_l3_processing.utils.download")
     @patch(f"{MODULE}.download")
     @patch(f"{MODULE}.SweL3Dependencies.from_file_paths")
