@@ -6,12 +6,18 @@ Mirrors the math in docs/swapi/solar-wind-moments.md.
   * ``reference_integrals_batch(grids, sws)``     — parallel across samples.
 
 Fixed integration grid:
-  elevation:  -15 to 15 deg @ 0.1° (301 pts)
-  azimuth SG: -20 to 20 deg @ 0.1° (401 pts)
-  azimuth OA: 0.1° in transition |az| ∈ [20, 30], 1° to ±150° (221 pts/side)
+  elevation:  -15 to 15 deg @ 0.05° (601 pts)
+  azimuth SG: -20 to 20 deg @ 0.05° (801 pts)
+  azimuth OA: 0.05° in transition |az| ∈ [20, 30], 0.5° to ±150° (441 pts/side)
               — split at the |az| < 20° dead band so trapezoid doesn't
                 bridge the gap.
   speed:      200 samples from 0.9 to 1.1 × central_speed
+
+The 0.05° elevation/SG-azimuth spacing was chosen to match the bilinear-
+interpolated integrand: cold plasma (vth ~10 km/s, σ_el = vth/v_b ≈ 0.4°) at
+SG passband elevation edges produces a near-cliff in the integrand, where
+the previous 0.1° trap grid undersampled the second derivative and biased
+the integral low by ~1.4% (worst-case at bulk_el just outside SG el range).
 """
 
 import math
@@ -20,12 +26,14 @@ import numpy as np
 from numba import njit, prange
 
 
-_EL = np.linspace(-15.0, 15.0, 301)
-_AZ_SG = np.linspace(-20.0, 20.0, 401)
+_EL = np.linspace(-15.0, 15.0, 601)
+_AZ_SG = np.linspace(-20.0, 20.0, 801)
 _AZ_OA_NEG = np.concatenate(
-    [np.arange(-150.0, -30.0, 1.0), np.linspace(-30.0, -20.0, 101)]
+    [np.arange(-150.0, -30.0, 0.5), np.linspace(-30.0, -20.0, 201)]
 )
-_AZ_OA_POS = np.concatenate([np.linspace(20.0, 30.0, 101), np.arange(31.0, 151.0, 1.0)])
+_AZ_OA_POS = np.concatenate(
+    [np.linspace(20.0, 30.0, 201), np.arange(30.5, 151.0, 0.5)]
+)
 _SP_RATIO = np.linspace(0.9, 1.1, 200)
 
 

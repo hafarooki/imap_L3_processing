@@ -34,7 +34,7 @@ class SWParams(NamedTuple):
 
 N_ELEVATION = 21
 N_AZIMUTH = 21
-N_SPEED = 11
+N_SPEED = 15
 
 # Gauss-Legendre quadrature nodes and weights on the standard interval [-1, 1].
 # Precomputed once at module load and rescaled to each integration window inside
@@ -54,10 +54,14 @@ EPSILON_OA = 1e-6
 EPSILON_SG = 1e-6
 
 # Speed integration half-width in units of thermal speed. The Maxwellian at
-# 5σ is exp(-12.5) ≈ 4e-6 of peak, already negligible. Wider windows waste GL
-# nodes in the tails for cold plasma where the passband is much wider than
-# the Maxwellian (the resulting GL polynomial overshoots a near-delta peak).
-SPEED_HALF_WIDTH_VTH = 5.0
+# 6σ is exp(-18) ≈ 1.5e-8 of peak, already negligible. With N_SPEED=15 GL
+# nodes the per-node spacing is ~0.8σ, sufficient for the bilinear-interpolated
+# integrand. Empirically swept k ∈ {3, 4, 5, 6, 7, 8} × N ∈ {11, 15, 21}
+# against `reference_integrals.csv`: k=6 N=15 minimizes the worst-case error
+# at high count rate (≥10⁴ Hz) by ~0.5% vs k=5 same N. k=3 fails
+# catastrophically (worst-case ~70% at >10 Hz) because it can clip the
+# Maxwellian peak when the angular geometry shifts the speed peak off-center.
+SPEED_HALF_WIDTH_VTH = 6.0
 
 # Outer edge of the vanes-vignetting (VV) sub-region of the open aperture, in
 # degrees of azimuth. The transmission table T(|φ|) is identically zero at
