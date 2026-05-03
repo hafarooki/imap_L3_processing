@@ -334,17 +334,32 @@ def fit_solar_wind_alpha_moments(
         chi2_gate = (2.0 * per_bin_now) if unphysical_now else per_bin_now
 
         candidates = []
-        # The (2,0)/(3,0) trim options exist for PUI He+ shelf escape:
-        # cases like ci=313 have a wide-Maxwellian basin where neither
-        # (1,0) nor (1,1) drop T enough to trigger the basin-transition
-        # bypass below — the high-V PUI tail is 2+ bins deep, and one
-        # bin trim leaves enough PUI bias to keep LM in the wide basin.
-        # The bypass requires both T_t < 0.7·T_now and n_t ≥ n_now, so
-        # multi-bin high-V trims are only accepted when they cross into
-        # a clearly narrower-and-denser alpha-core basin.
-        for trim_lo, trim_hi in (
-            (1, 0), (0, 1), (1, 1), (2, 0), (3, 0), (4, 0)
-        ):
+        # Multi-bin trim options have two roles:
+        #   - High-V (low-idx) trims (2,0)/(3,0)/(4,0): PUI He+ shelf
+        #     escape. ci=313 needed (4,0) to get past 4 PUI bins before
+        #     LM finds the narrow alpha-core basin.
+        #   - Low-V (high-idx) trims (0,2)/(0,3): proton-wing escape.
+        #     ci=236 has the proton model's high-V wing extending into
+        #     the alpha core region; LM accommodates it as a wider
+        #     Maxwellian. Trimming the proton-adjacent bins reveals a
+        #     much narrower-T basin.
+        # These multi-bin trims are accepted ONLY via the basin-transition
+        # bypass — never on per-bin SSE alone. Without that gate, removing
+        # alpha-core data on healthy chunks (low-V trims) drifts the fit
+        # toward smaller (n, T) artificially.
+        ALL_TRIMS = (
+            (1, 0), (0, 1), (1, 1),
+            (2, 0), (3, 0), (4, 0),
+            (0, 2), (0, 3),
+        )
+        # Low-V multi-bin trims are bypass-only because the low-V edge
+        # is alpha core for most chunks; trimming it causes the LM to
+        # underfit n on healthy chunks unless the trim genuinely flips
+        # the basin. High-V multi-bin trims target the PUI shelf which
+        # contains no alpha-core counts on most chunks, so they're safe
+        # on the regular gate.
+        BYPASS_ONLY_TRIMS = {(0, 2), (0, 3)}
+        for trim_lo, trim_hi in ALL_TRIMS:
             if len(current_window) - trim_lo - trim_hi < 5:
                 continue
             new_window = current_window[trim_lo : len(current_window) - trim_hi]
@@ -382,7 +397,11 @@ def fit_solar_wind_alpha_moments(
             # explain. The "n_t ≥ n_now" requirement is the safety gate:
             # genuinely-wrong basin transitions collapse n alongside T.
             big_drop_t = (T_t < 0.7 * T_now) and (n_t_density >= n_now)
-            gate_ok = big_drop_t or (per_bin_t < chi2_gate)
+            is_bypass_only = (trim_lo, trim_hi) in BYPASS_ONLY_TRIMS
+            if is_bypass_only:
+                gate_ok = big_drop_t
+            else:
+                gate_ok = big_drop_t or (per_bin_t < chi2_gate)
             if gate_ok and T_ok and n_ok:
                 candidates.append(
                     (per_bin_t, T_t, r_t, res_t, n_t, new_window)
