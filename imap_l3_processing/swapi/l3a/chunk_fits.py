@@ -212,6 +212,15 @@ class AlphaChunkFitter(ChunkFitter):
     def fit_chunk(self, data_chunk, epoch, rotation_matrices, b_hat_rtn):
         swapi_response = _shared["swapi_response"]
         efficiency_table = _shared["efficiency_table"]
+        density_nom = density_unc = np.nan
+        temp_nom = temp_unc = np.nan
+        delta_v_nom = delta_v_unc = np.nan
+        velocity_rtn = np.full(3, np.nan)
+        velocity_cov = np.full((3, 3), np.nan)
+        b_hat_out = np.full(3, np.nan)
+        ref_density = ref_temperature = np.nan
+        ref_velocity = np.full(3, np.nan)
+        bad_fit_flag = int(SwapiL3Flags.BAD_FIT)
         try:
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
@@ -234,43 +243,40 @@ class AlphaChunkFitter(ChunkFitter):
                 _eff_scale(efficiency_table, epoch, "proton"),
                 rotation_matrices=rotation_matrices,
             )
-            return dict(
-                epoch=epoch,
-                alpha_sw_density=mom.density.nominal_value,
-                alpha_sw_density_uncert=mom.density.std_dev,
-                alpha_sw_temperature=mom.temperature.nominal_value,
-                alpha_sw_temperature_uncert=mom.temperature.std_dev,
-                alpha_sw_velocity_rtn=mom.bulk_velocity_rtn_nominal(),
-                alpha_sw_velocity_covariance_rtn=mom.bulk_velocity_rtn_covariance(),
-                alpha_sw_delta_v=mom.delta_v.nominal_value,
-                alpha_sw_delta_v_uncert=mom.delta_v.std_dev,
-                alpha_sw_b_hat_rtn=b_hat_rtn,
-                alpha_sw_reference_proton_density=proton_moments.density.nominal_value,
-                alpha_sw_reference_proton_temperature=proton_moments.temperature.nominal_value,
-                alpha_sw_reference_proton_velocity_rtn=proton_moments.bulk_velocity_rtn_nominal(),
-                bad_fit_flag=int(mom.bad_fit_flag),
+            density_nom, density_unc = mom.density.nominal_value, mom.density.std_dev
+            temp_nom, temp_unc = (
+                mom.temperature.nominal_value,
+                mom.temperature.std_dev,
             )
+            delta_v_nom, delta_v_unc = mom.delta_v.nominal_value, mom.delta_v.std_dev
+            velocity_rtn = mom.bulk_velocity_rtn_nominal()
+            velocity_cov = mom.bulk_velocity_rtn_covariance()
+            b_hat_out = b_hat_rtn
+            ref_density = proton_moments.density.nominal_value
+            ref_temperature = proton_moments.temperature.nominal_value
+            ref_velocity = proton_moments.bulk_velocity_rtn_nominal()
+            bad_fit_flag = int(mom.bad_fit_flag)
         except Exception:
             logger.info(
                 f"Alpha moments fit exception at epoch {epoch}; using NaN fill",
                 exc_info=True,
             )
-            return dict(
-                epoch=epoch,
-                alpha_sw_density=np.nan,
-                alpha_sw_density_uncert=np.nan,
-                alpha_sw_temperature=np.nan,
-                alpha_sw_temperature_uncert=np.nan,
-                alpha_sw_velocity_rtn=np.full(3, np.nan),
-                alpha_sw_velocity_covariance_rtn=np.full((3, 3), np.nan),
-                alpha_sw_delta_v=np.nan,
-                alpha_sw_delta_v_uncert=np.nan,
-                alpha_sw_b_hat_rtn=np.full(3, np.nan),
-                alpha_sw_reference_proton_density=np.nan,
-                alpha_sw_reference_proton_temperature=np.nan,
-                alpha_sw_reference_proton_velocity_rtn=np.full(3, np.nan),
-                bad_fit_flag=int(SwapiL3Flags.BAD_FIT),
-            )
+        return dict(
+            epoch=epoch,
+            alpha_sw_density=density_nom,
+            alpha_sw_density_uncert=density_unc,
+            alpha_sw_temperature=temp_nom,
+            alpha_sw_temperature_uncert=temp_unc,
+            alpha_sw_velocity_rtn=velocity_rtn,
+            alpha_sw_velocity_covariance_rtn=velocity_cov,
+            alpha_sw_delta_v=delta_v_nom,
+            alpha_sw_delta_v_uncert=delta_v_unc,
+            alpha_sw_b_hat_rtn=b_hat_out,
+            alpha_sw_reference_proton_density=ref_density,
+            alpha_sw_reference_proton_temperature=ref_temperature,
+            alpha_sw_reference_proton_velocity_rtn=ref_velocity,
+            bad_fit_flag=bad_fit_flag,
+        )
 
 
 class PuiProtonChunkFitter(ChunkFitter):
