@@ -131,8 +131,6 @@ def fit_solar_wind_alpha_moments(
     calling this function, so the NaN-finite guard below is a defensive fallback
     for direct callers (tests, etc.). If ``b_hat_rtn`` is still NaN when this
     function is reached it returns NaN moments with ``bad_fit_flag |= BAD_FIT``.
-    If the reference proton velocity is non-finite or near-zero, returns NaN
-    moments with ``bad_fit_flag |= BAD_FIT``.
 
     ``rotation_matrices`` may be precomputed and reused from the Stage 1 proton fit;
     if ``None``, computed internally from ``measurement_time``.
@@ -150,10 +148,6 @@ def fit_solar_wind_alpha_moments(
     b_hat_rtn = np.asarray(b_hat_rtn, dtype=float)
     if not np.all(np.isfinite(b_hat_rtn)):
         return _nan_alpha_moments(SwapiL3Flags.BAD_FIT)
-
-    proton_speed = np.linalg.norm(proton_bulk_rtn)
-    if not np.isfinite(proton_speed) or proton_speed < 1e-12:
-        return _nan_alpha_moments(bad_fit_flag | SwapiL3Flags.BAD_FIT)
 
     # SPICE shared with Stage 1 if provided; otherwise compute here.
     if rotation_matrices is None:
