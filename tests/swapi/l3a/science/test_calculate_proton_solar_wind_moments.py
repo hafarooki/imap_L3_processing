@@ -557,6 +557,8 @@ class TestGetInitialGuess(unittest.TestCase):
         np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.2)
 
     def test_bulk_velocity_initial_guess(self):
+        # Legacy IG returns the (-30, 0) transverse seed; the optimizer recovers
+        # the true (vT, vN) from the spin-phase modulation downstream.
         result = self._run()
         expected_vR = math.sqrt(max(self.true_speed**2 - 30.0**2, 0.0))
         np.testing.assert_allclose(result.bulk_velocity_rtn[0], expected_vR, rtol=0.02)
@@ -1701,13 +1703,14 @@ class TestColdPlasmaTransverseRecovery(unittest.TestCase):
 
 
 class TestWrongBasinFlipCheck(unittest.TestCase):
-    """Regression tests for the spin-axis mirror flip check in _optimize.
+    """Regression tests for the K-rotation grid wrong-basin check in _optimize.
 
     The count-rate model is approximately invariant under (vT, vN) → (-vT, -vN)
-    (a 180° rotation about the spin axis), creating two chi² basins. Without
-    the dual-LM flip check, LM can converge to the wrong (higher-chi²) basin
-    depending on the initial guess sign. These tests verify that _optimize
-    always recovers the correct basin regardless of which side it starts from.
+    (a 180° rotation about the spin axis), creating two chi² basins. The K=4
+    spin-axis grid evaluates K-1=3 rotations of LM-1's bulk velocity; if the
+    best grid chi² / LM-1 chi² < _GRID_THRESHOLD, a second LM runs from the
+    grid winner. These tests verify that _optimize always recovers the correct
+    basin regardless of which side the initial guess starts from.
     """
 
     @classmethod

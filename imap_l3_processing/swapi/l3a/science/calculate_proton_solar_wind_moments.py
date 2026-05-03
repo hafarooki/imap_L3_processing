@@ -69,12 +69,15 @@ SPEED_HALF_WIDTH_VTH = 5.0
 # right at the boundary, undoing the benefit.
 VV_OUTER_DEG = 26.0
 
-# Wrong-basin detection: iterate flip+LM up to this many times, accepting a flip
-# only if it improves χ² by more than the relative tolerance. Most cases stop
-# after the first flip; pathological starts (low-density, aggressively masked IG
-# that lands LM in an off-axis third basin) need 2-3 flips to walk into the truth
-# basin. See `_optimize` and docs/swapi/solar-wind-moments.md.
-_MAX_BASIN_FLIPS = 6
+# Wrong-basin detection: K-rotation grid around the spin axis (Rodrigues,
+# K-1=3 non-zero rotations) identifies a candidate seed; if min(grid_chi)/chi_LM
+# < _GRID_THRESHOLD, ONE additional LM runs from the grid winner. The accept gate
+# (_BASIN_FLIP_REL_TOL) still applies so unhelpful grid seeds are discarded.
+# See `_optimize`, bean imap_L3_processing-2n10, and docs/swapi/solar-wind-moments.md.
+_GRID_K = 4  # Number of equally-spaced rotation angles around the spin axis; K-1=3 non-zero rotations evaluated.
+_GRID_THRESHOLD = 50.0  # min(grid_chi)/chi_LM gate for firing the second LM. Threshold tuned empirically — see bean imap_L3_processing-2n10. thr=50 is permissive enough to fire on truth-basin-reachable saddle starts; tighter thresholds (1, 5) miss 8 / 1 / 1000 chained-mirror cases.
+# Relative-tolerance gate for accepting the post-grid LM result over LM-1's chi².
+# The second LM is accepted only if chi2_grid < chi2_LM * (1 - _BASIN_FLIP_REL_TOL).
 _BASIN_FLIP_REL_TOL = 1e-3
 
 # Non-paralyzable detector deadtime (Tsoulfanidis 1995, p. 74): n = g / (1 - g*tau)
@@ -97,6 +100,12 @@ INITIAL_TEMPERATURE_FLOOR_K = (
 # first-order delta method underestimates σ when σ_xy is comparable to v_xy
 # (typical for SWAPI: bulk velocity is dominated by the spin-axis component).
 N_VELOCITY_ANGLE_MC_SAMPLES = 1000
+
+# LM xtol. Loosening from scipy default 1e-8 to 1e-3 cuts LM cost ~50% with
+# no measurable degradation on the 1000-sample synthetic benchmark (0/1000
+# wrong basin). ftol stays at its scipy default; xtol fires before ftol on
+# this problem, so loosening ftol is redundant.
+_LM_XTOL = 1e-3
 
 
 @dataclass
@@ -203,7 +212,7 @@ def fit_solar_wind_proton_moments(
     across stage 1/stage 2 fits to avoid duplicate SPICE calls."""
     from imap_l3_processing.constants import PROTON_MASS_PER_CHARGE_M_P_PER_E
 
-    # Spin axis (body +Y in RTN) for the wrong-basin flip check in _optimize.
+    # Spin axis (body +Y in RTN) for the K-rotation grid in _optimize.
     # Captured here, before the half-mean mask below may drop the bin at index 0.
     spin_axis_rtn = rotation_matrices[0, 1, :].copy()
 
@@ -244,7 +253,9 @@ def fit_solar_wind_proton_moments(
     az_trans = np.asarray(swapi_response.azimuthal_transmission, dtype=float)
     az_trans_spacing = float(swapi_response.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
 
-    # Step 2: Initial guess — Gaussian fit to count rate vs speed, anti-sunward velocity
+    # Step 2: Initial guess — radial speed and thermal width from a 1D Gaussian
+    # fit to count rate vs speed; transverse seed is the legacy (-30, 0) bias
+    # that the K-rotation grid-LM in _optimize corrects for wrong-basin transverse seeds.
     initial_guess = _get_initial_guess(
         count_rate,
         esa_voltage,
@@ -284,7 +295,7 @@ def _get_initial_guess(
 
     peak_idx = np.nanargmax(count_rate)
     try:
-        (_, bulk_speed, sigma_v), _ = scipy.optimize.curve_fit(
+        (_, bulk_speed_init, sigma_v), _ = scipy.optimize.curve_fit(
             lambda v, A, mu, sigma: A * np.exp(-((v - mu) ** 2) / (2 * sigma**2)),
             speed,
             count_rate,
@@ -292,7 +303,7 @@ def _get_initial_guess(
             bounds=([0, 0, 0], [np.inf, np.inf, np.inf]),
         )
     except RuntimeError:
-        bulk_speed = speed[peak_idx]
+        bulk_speed_init = speed[peak_idx]
         sigma_v = 50.0
 
     sigma_floor_v = (
@@ -310,12 +321,15 @@ def _get_initial_guess(
         / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
     )
 
-    # Nominal transverse seed. The mirror symmetry is in the instrument frame,
-    # not RTN, so this offset does not reliably break the basin degeneracy —
-    # the dual-LM flip check in `_optimize` handles that regardless of the
-    # initial transverse velocity.
+    # Legacy transverse seed: vT=-30, vN=0. The K-rotation grid-LM in
+    # _optimize handles cases where this lands on the wrong side of the
+    # spin-axis mirror.
     bulk_velocity_rtn = np.array(
-        [math.sqrt(max(float(bulk_speed) ** 2 - 30.0**2, 0.0)), -30.0, 0.0]
+        [
+            math.sqrt(max(float(bulk_speed_init) ** 2 - 30.0**2, 0.0)),
+            -30.0,
+            0.0,
+        ]
     )
 
     # Scale density so that the unit model count rate matches the mean observed count rate.
@@ -962,6 +976,59 @@ def _residuals_njit(
     return (model_obs - count_rate) / sigma
 
 
+def _evaluate_rotated_chi(
+    lm_result,
+    theta: float,
+    count_rate: ndarray,
+    passband_grids: numba.typed.List,
+    central_speeds: ndarray,
+    central_effective_areas: ndarray,
+    azimuthal_transmission: ndarray,
+    azimuthal_transmission_spacing: float,
+    rotation_matrices: ndarray,
+    spin_axis_rtn: ndarray,
+) -> tuple:
+    """Rotate the LM-1 bulk velocity by `theta` rad about `spin_axis_rtn` (Rodrigues),
+    evaluate the forward model with closed-form n rescale, return (chi2, v_rotated, n_opt).
+
+    The closed-form rescale: given model m at the rotated velocity and observed r,
+    optimum α = (m·r)/(m·m); χ² = sum((α·m − r)²); n_opt = exp(lm_result.x[0]) · α.
+    """
+    v_lm = lm_result.x[2:5]
+    s = spin_axis_rtn
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+    # Rodrigues: v_rot = v*cos + (s × v)*sin + s*(s·v)*(1 - cos)
+    cross = np.array(
+        [
+            s[1] * v_lm[2] - s[2] * v_lm[1],
+            s[2] * v_lm[0] - s[0] * v_lm[2],
+            s[0] * v_lm[1] - s[1] * v_lm[0],
+        ]
+    )
+    sdotv = float(np.dot(s, v_lm))
+    v_rot = v_lm * cos_t + cross * sin_t + s * sdotv * (1.0 - cos_t)
+    model_obs = apply_deadtime_correction_array(
+        _model_count_rates(
+            math.exp(lm_result.x[0]),
+            math.exp(lm_result.x[1]),
+            v_rot,
+            passband_grids,
+            central_speeds,
+            central_effective_areas,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
+            rotation_matrices,
+            PROTON_MASS_KG,
+        )
+    )
+    s2 = float(np.dot(model_obs, model_obs))
+    alpha = float(np.dot(model_obs, count_rate)) / s2 if s2 > 0.0 else 1.0
+    chi = float(np.sum((alpha * model_obs - count_rate) ** 2))
+    n_opt = alpha * math.exp(lm_result.x[0])
+    return chi, v_rot, n_opt
+
+
 def _optimize(
     count_rate: ndarray,
     passband_grids: numba.typed.List,
@@ -1006,34 +1073,64 @@ def _optimize(
             PROTON_MASS_KG,
         )
 
-    # See docs/swapi/solar-wind-moments.md for diff_step rationale.
-    result = scipy.optimize.least_squares(residuals, x0, method="lm", diff_step=1e-4)
+    # See docs/swapi/solar-wind-moments.md for diff_step rationale. xtol is
+    # loosened from scipy default; see _LM_XTOL.
+    result = scipy.optimize.least_squares(
+        residuals,
+        x0,
+        method="lm",
+        diff_step=1e-4,
+        xtol=_LM_XTOL,
+    )
 
-    # Wrong-basin detection via spin-axis mirror flip; see docs/swapi/solar-wind-moments.md.
-    # Spin axis in RTN = body-Y direction expressed in RTN coords = row 1 of R[i].
-    # 180° rotation about that axis: v' = 2(v·s)s − v.
+    # K-rotation grid around spin axis; conditional second LM from grid winner.
+    # See bean imap_L3_processing-2n10 for the design rationale and empirical sweep.
     #
-    # Iterate flip+LM until χ² stops improving. A single flip is enough when the
-    # initial LM converges to the truth basin or its direct spin-axis mirror, but
-    # a low-density / aggressively masked IG can land LM in a third off-axis
-    # basin whose mirror is also not the truth basin — chained flips walk through
-    # those connected basins until the deepest reachable one is found. Monotone
-    # in χ², so this can only equal-or-improve the single-flip result.
+    # Spin axis in RTN = body-Y direction expressed in RTN coords = row 1 of R[i].
+    # Evaluate K-1 non-zero Rodrigues rotations of LM-1's bulk velocity at angles
+    # θ_k = k·2π/K, using a closed-form n rescale for a cheap χ² estimate.
+    # If the best grid χ² / LM-1 χ² < _GRID_THRESHOLD, run ONE LM from the grid
+    # winner and accept only if χ² improves by more than _BASIN_FLIP_REL_TOL.
+    # Always-on (no verifier gate): bounded cost of K-1 forward-model evals + at
+    # most 1 additional LM. P99 fit time is bounded at ~2 LMs.
     chi2 = float(np.sum(result.fun**2))
-    for _ in range(_MAX_BASIN_FLIPS):
-        v_rtn = result.x[2:5]
-        v_flipped = 2.0 * float(np.dot(v_rtn, spin_axis_rtn)) * spin_axis_rtn - v_rtn
-        x_flipped = result.x.copy()
-        x_flipped[2:5] = v_flipped
-        result_flipped = scipy.optimize.least_squares(
-            residuals, x_flipped, method="lm", diff_step=1e-4
+    best_chi = math.inf
+    best_v = None
+    best_n = None
+    for k in range(1, _GRID_K):
+        theta = 2.0 * math.pi * k / _GRID_K
+        chi_k, v_k, n_k = _evaluate_rotated_chi(
+            result,
+            theta,
+            count_rate,
+            passband_grids,
+            central_speeds,
+            central_effective_areas,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
+            rotation_matrices,
+            spin_axis_rtn,
         )
-        chi2_flipped = float(np.sum(result_flipped.fun**2))
-        if chi2_flipped < chi2 * (1.0 - _BASIN_FLIP_REL_TOL):
-            result = result_flipped
-            chi2 = chi2_flipped
-        else:
-            break
+        if chi_k < best_chi:
+            best_chi = chi_k
+            best_v = v_k
+            best_n = n_k
+    if best_v is not None and best_chi / max(chi2, 1e-12) < _GRID_THRESHOLD:
+        x_seed = result.x.copy()
+        x_seed[2:5] = best_v
+        if best_n is not None and best_n > 0.0 and np.isfinite(best_n):
+            x_seed[0] = math.log(best_n)
+        result_grid = scipy.optimize.least_squares(
+            residuals,
+            x_seed,
+            method="lm",
+            diff_step=1e-4,
+            xtol=_LM_XTOL,
+        )
+        chi2_grid = float(np.sum(result_grid.fun**2))
+        if chi2_grid < chi2 * (1.0 - _BASIN_FLIP_REL_TOL):
+            result = result_grid
+            chi2 = chi2_grid
 
     density = float(np.exp(result.x[0]))
     temperature = float(np.exp(result.x[1]))

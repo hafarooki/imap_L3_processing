@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 χ² landscape in the (v_T, v_N) plane illustrating the two-basin problem
-solved by the post-fit flip check in `_optimize`.
+addressed by the K-rotation grid check in `_optimize`.
 
 For one representative case where LM-from-(0,0) lands in the wrong basin,
 this figure shows the χ² surface (n, T, v_R fixed at truth) with two clear
 minima — truth and its spin-axis mirror — separated by a saddle ridge through
-(0, 0). The mirror has χ² ≳ 100× the truth, so a single residual evaluation
-at the flipped solution is enough to detect the wrong-basin convergence.
+(0, 0). The mirror has χ² ≳ 100× the truth, so the 180° grid point (k=2 of
+the K=4 Rodrigues grid) detects wrong-basin convergence via the closed-form
+density rescale and fires the second LM.
 
 Output: docs/swapi/figures/wrong_basin.png
 Usage:  python docs/swapi/figure_src/plot_wrong_basin.py
@@ -28,8 +29,6 @@ import matplotlib.pyplot as plt
 
 from imap_l3_processing.constants import (
     PROTON_MASS_KG,
-    PROTON_CHARGE_OVER_MASS_C_PER_KG,
-    PROTON_CHARGE_COULOMBS,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
@@ -94,7 +93,6 @@ def main():
     at = np.asarray(sr.azimuthal_transmission, dtype=float)
     ats = float(sr.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
     rot = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
-    sc_vel = np.zeros(3)
 
     true_vel = np.array([CASE_V_R, CASE_VT, CASE_VN])
     cr_clean_true = _model_count_rates(
@@ -107,18 +105,17 @@ def main():
         at,
         ats,
         rot,
-        sc_vel,
         PROTON_MASS_KG,
     )
-    # Deadtime is now applied at the residual stage, not inside _model_count_rates.
-    # Synthesize "data" from the post-deadtime observed rate so chi² minima land at truth.
+    # _model_count_rates returns pre-deadtime rates; apply deadtime to get expected
+    # observed rates. Synthesize "data" from these so chi² minima land at truth.
     cr_clean = apply_deadtime_correction_array(cr_clean_true)
     cr = (
         np.random.default_rng(CASE_SEED)
         .poisson(np.maximum(cr_clean, 0.0))
         .astype(float)
     )
-    log_cr = np.log(np.maximum(cr, 1e-30))
+    sigma = np.ones(len(cr))
 
     print("Computing χ² grid (n, T, v_R held at truth)...")
     grid_vT = np.linspace(-80, 80, 51)
@@ -129,7 +126,8 @@ def main():
             x = np.array([np.log(CASE_DENSITY), np.log(CASE_T_EV), CASE_V_R, vT_, vN_])
             r = _residuals_njit(
                 x,
-                log_cr,
+                cr,
+                sigma,
                 tiled,
                 tiled_cs,
                 tiled_cea,

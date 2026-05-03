@@ -329,9 +329,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
             rotation_matrices=self.rot,
         )
 
-        self.assertTrue(
-            result.bad_fit_flag & int(SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK)
-        )
+        self.assertTrue(result.bad_fit_flag & int(SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK))
         self.assertTrue(np.isfinite(result.density.nominal_value))
 
 
