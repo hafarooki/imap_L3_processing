@@ -310,7 +310,6 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
         self.assertAlmostEqual(result.delta_v, self.delta_v, delta=10.0)
 
     def test_nan_b_hat_returns_bad_fit_with_nan_moments(self):
-        """No Parker-spiral fallback: NaN b_hat → BAD_FIT + NaN moments."""
         result = fit_solar_wind_alpha_moments(
             count_rate=self.obs,
             esa_voltage=self.esa_flat,
