@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
-from imap_l3_processing.models import MagL1dData
+from imap_l3_processing.models import MagData
 
 
 class TestModels(unittest.TestCase):
@@ -27,7 +27,7 @@ class TestModels(unittest.TestCase):
                                                          datetime(2020, 4, 4, 0, 17)] + extra_dates_at_end)
         expected_average = np.array([[1 / 4, 1 / 2, 1 / 4], [1 / 2, 1 / 4, 1 / 4]])
 
-        mag_data_model = MagL1dData(mag_epoch, mag_data)
+        mag_data_model = MagData(mag_epoch, mag_data)
         actual_average = mag_data_model.rebin_to(hit_data_epoch, hit_data_delta)
 
         np.testing.assert_array_equal(actual_average, expected_average)
@@ -44,7 +44,7 @@ class TestModels(unittest.TestCase):
                      datetime(2020, 4, 4, 0, 27)]
         expected_average = np.array([[0, 1 / 2, 1 / 2], [np.nan, np.nan, np.nan], [1 / 2, 1 / 2, 0]])
 
-        mag_data_model = MagL1dData(mag_epoch, mag_data)
+        mag_data_model = MagData(mag_epoch, mag_data)
         actual_average = mag_data_model.rebin_to(epoch=hit_data_epoch,
                                                  epoch_delta=hit_data_delta)
         np.testing.assert_array_equal(actual_average, expected_average)

@@ -6,11 +6,11 @@ from pathlib import Path
 from imap_data_access import download
 from imap_data_access.processing_input import ProcessingInputCollection
 
-from imap_l3_processing.models import MagL1dData
+from imap_l3_processing.models import MagData
 from imap_l3_processing.swe.l3.models import SweL2Data, SweConfiguration, SwapiL3aProtonData, SweL1bData
 from imap_l3_processing.swe.l3.utils import read_l2_swe_data, read_l3a_swapi_proton_data, read_swe_config, \
     read_l1b_swe_data
-from imap_l3_processing.utils import read_l1d_mag_data
+from imap_l3_processing.utils import read_mag_data
 
 MAG_DESPUN_L1D_DESCRIPTOR = "norm-dsrf"
 SWAPI_L3A_PROTON_DESCRIPTOR = "proton-sw"
@@ -21,7 +21,7 @@ SWE_CONFIG_DESCRIPTOR = "config"
 class SweL3Dependencies:
     swe_l2_data: SweL2Data
     swe_l1b_data: SweL1bData
-    mag_l1d_data: MagL1dData
+    mag_data: MagData
     swapi_l3a_proton_data: SwapiL3aProtonData
     configuration: SweConfiguration
 
@@ -40,12 +40,19 @@ class SweL3Dependencies:
                 d.imap_file_paths[0] for d in science_files if d.source == "swe" and d.data_type == "l1b")
         except StopIteration:
             raise ValueError(f"Missing SWE l1b dependency.")
-        try:
-            mag_dependency = next(
-                d.imap_file_paths[0] for d in science_files if d.source == "mag"
-                and d.descriptor == MAG_DESPUN_L1D_DESCRIPTOR)
-        except StopIteration:
-            raise ValueError(f"Missing MAG {MAG_DESPUN_L1D_DESCRIPTOR} dependency.")
+        mag_dependency = next(
+            (d.imap_file_paths[0] for d in science_files if d.source == "mag"
+            and d.descriptor == MAG_DESPUN_L1D_DESCRIPTOR
+            and d.data_type == "l2"), None)
+        if mag_dependency is None:
+            try:
+                mag_dependency = next(
+                    d.imap_file_paths[0] for d in science_files if d.source == "mag"
+                    and d.descriptor == MAG_DESPUN_L1D_DESCRIPTOR
+                    and d.data_type == "l1d"
+                )
+            except StopIteration:
+                raise ValueError(f"Missing MAG {MAG_DESPUN_L1D_DESCRIPTOR} dependency.")
         try:
             swapi_dependency = next(
                 d.imap_file_paths[0] for d in science_files if d.source == "swapi"
@@ -65,7 +72,7 @@ class SweL3Dependencies:
     def from_file_paths(cls, swe_l2_file_path: Path, swe_l1b_file_path: Path, mag_file_path: Path,
                         swapi_file_path: Path,
                         configuration_file_path: Path) -> SweL3Dependencies:
-        mag_l1d_data = read_l1d_mag_data(mag_file_path)
+        mag_l1d_data = read_mag_data(mag_file_path)
         swe_l1b_data = read_l1b_swe_data(swe_l1b_file_path)
         swe_l2_data = read_l2_swe_data(swe_l2_file_path)
         swapi_l3a_proton_data = read_l3a_swapi_proton_data(swapi_file_path)

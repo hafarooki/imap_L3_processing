@@ -63,7 +63,7 @@ class DataProduct(abc.ABC, Generic[D]):
 
 
 @dataclass
-class MagL1dData:
+class MagData:
     epoch: np.ndarray
     mag_data: np.ndarray
 

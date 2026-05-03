@@ -1,15 +1,3 @@
-"""Per-chunk fitting strategies for SwapiProcessor's L3a parallel pipeline.
-
-`ChunkFitter` is the strategy base class; `ProtonChunkFitter`,
-`PuiProtonChunkFitter`, and `AlphaChunkFitter` each own one science pipeline.
-`ParallelChunkRunner` precomputes geometry per chunk in the parent process and
-submits each chunk to a fork-context Pool. Geometry methods return None-filled
-tuples on SPICE gaps; `fit_chunk` handles them via try/except. Shared state
-(SWAPIResponse cache, calibration table, the fitter itself) is passed once per
-worker via `Pool` `initargs` and lives in the module-level `_shared` dict, so
-per-chunk pickling stays bounded to chunk + geometry tuple.
-"""
-
 import logging
 import multiprocessing
 import os

@@ -72,7 +72,7 @@ from imap_l3_processing.swe.swe_processor import SweProcessor
 from imap_l3_processing.ultra.models import UltraL1CPSet, UltraGlowsL3eData
 from imap_l3_processing.ultra.ultra_l3_dependencies import UltraL3Dependencies, UltraL3SpectralIndexDependencies
 from imap_l3_processing.ultra.ultra_processor import UltraProcessor
-from imap_l3_processing.utils import save_data, read_l1d_mag_data, furnish_local_spice
+from imap_l3_processing.utils import save_data, read_mag_data, furnish_local_spice
 from scripts.codice.create_fake_efficiency_ancillary import create_efficiency_lookup
 from scripts.codice.create_more_accurate_l3a_direct_event import create_more_accurate_l3a_direct_events_cdf
 from scripts.codice.create_more_accurate_l3a_direct_event_input import modify_l1a_priority_counts, \
@@ -1057,7 +1057,7 @@ if __name__ == "__main__":
             path = create_hit_direct_event_cdf()
             print(f"hit direct event data product: {path}")
         else:
-            mag_data = read_l1d_mag_data(
+            mag_data = read_mag_data(
                 r"C:\Users\Petty\Downloads\HIT Validation-20250922T131655Z-1-001\HIT Validation\imap_mag_l1d_norm-dsrf_20100106_v001.cdf")
             hit_data = read_l2_hit_data(
                 r"C:\Users\Petty\Downloads\HIT Validation-20250922T131655Z-1-001\HIT Validation\imap_hit_l2_macropixel-intensity_20100106_v001.cdf")

@@ -6,7 +6,7 @@ from unittest.mock import patch, call, Mock, sentinel
 import numpy as np
 from imap_data_access.processing_input import ScienceInput, ProcessingInputCollection, AncillaryInput
 
-from imap_l3_processing.models import MagL1dData, InputMetadata
+from imap_l3_processing.models import MagData, InputMetadata
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from imap_l3_processing.swe.l3.models import SweL2Data, SwapiL3aProtonData, SweL1bData
 from imap_l3_processing.swe.l3.models import SweL3MomentData
@@ -313,7 +313,7 @@ class TestSweProcessor(unittest.TestCase):
             settle_duration=np.array([])
         )
 
-        mag_l1d_data = MagL1dData(
+        mag_l1d_data = MagData(
             epoch=mag_epochs,
             mag_data=np.arange(7, 22).reshape(5, 3).repeat(2, axis=0)
         )
@@ -526,7 +526,7 @@ class TestSweProcessor(unittest.TestCase):
             settle_duration=np.full((num_epochs, 3), 333)
         )
 
-        mag_l1d_data = MagL1dData(
+        mag_l1d_data = MagData(
             epoch=mag_epochs,
             mag_data=np.arange(7, 22).reshape(5, 3).repeat(2, axis=0)
         )
@@ -623,7 +623,7 @@ class TestSweProcessor(unittest.TestCase):
 
         )
 
-        mag_l1d_data = MagL1dData(
+        mag_l1d_data = MagData(
             epoch=mag_epochs,
             mag_data=np.arange(7, 22).reshape(5, 3).repeat(2, axis=0)
         )
