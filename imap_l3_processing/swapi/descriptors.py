@@ -14,6 +14,4 @@ PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR = "passband-fit-coefficients"
 
 SWAPI_L3A_ALPHA_SW_DESCRIPTOR = "alpha-sw"
 
-# MAG RTN vectors for the alpha moments fitter's field-aligned-drift constraint.
-# L1D and L2 share the same descriptor — disambiguated by data_type at fetch time.
 MAG_RTN_DESCRIPTOR = "norm-rtn"

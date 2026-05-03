@@ -1,10 +1,3 @@
-"""Tests for fit_solar_wind_alpha_moments and the species-aware proton fitter pieces.
-
-Focus: the algorithmic claims in alpha-impl.md §9 — species mass parameterization,
-deadtime extraction, central-effective-area scaling, the field-aligned drift constraint,
-the signed-Δv basin flip, MAG/STALE_PROTON flag handling, and uncertainty composition.
-"""
-
 import unittest
 
 import numba
