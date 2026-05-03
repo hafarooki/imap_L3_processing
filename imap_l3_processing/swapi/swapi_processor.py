@@ -111,7 +111,7 @@ class SwapiProcessor(Processor):
         fitter = AlphaChunkFitter(dependencies.mag_data)
         result = runner.run(chunks, fitter)
         
-        if dependencies.mag_data_level == "l1d":
+        if dependencies.mag_is_preliminary:
             result["bad_fit_flag"] = result["bad_fit_flag"] | int(SwapiL3Flags.PRELIMINARY_MAG)
         
         metadata = replace(self.input_metadata, descriptor="alpha-sw")

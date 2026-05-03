@@ -40,9 +40,7 @@ class SwapiL3ADependencies:
     # Optional so descriptors that don't need it (e.g. proton-sw, pui-he) keep working
     # without a MAG file present. The alpha-sw processor branch enforces presence.
     mag_data: Optional[MagData] = None
-    # Source level of the MAG data ("l2" or "l1d"); None when no MAG is provided.
-    # Used by alpha-sw to set the PRELIMINARY_MAG quality flag on L1D-sourced runs.
-    mag_data_level: Optional[str] = None
+    mag_is_preliminary: bool = False
 
     @classmethod
     def fetch_dependencies(cls, dependencies: ProcessingInputCollection):
@@ -63,6 +61,7 @@ class SwapiL3ADependencies:
         # proton-sw / pui-he, so absence is allowed at the dependency level —
         # the alpha-sw processor branch validates presence.
         mag_path, mag_level = select_mag_path(dependencies, MAG_RTN_DESCRIPTOR)
+        mag_is_preliminary = mag_level == "l1d"
 
         return cls.from_file_paths(
             download(science_dependency_file[0]),
@@ -76,7 +75,7 @@ class SwapiL3ADependencies:
             download(central_effective_area_paths[0]),
             download(passband_fit_coefficients_paths[0]),
             mag_path,
-            mag_level,
+            mag_is_preliminary,
         )
 
     @classmethod
@@ -86,7 +85,7 @@ class SwapiL3ADependencies:
                         helium_inflow_vector_path: Path, azimuthal_transmission_path: Path,
                         central_effective_area_path: Path, passband_fit_coefficients_path: Path,
                         mag_path: Optional[Path] = None,
-                        mag_level: Optional[str] = None):
+                        mag_is_preliminary: bool = False):
         return cls(
             data=read_l2_swapi_data(CDF(str(science_dependency_path))),
             efficiency_calibration_table=EfficiencyCalibrationTable(efficiency_calibration_path),
@@ -101,5 +100,5 @@ class SwapiL3ADependencies:
             swapi_response=SWAPIResponse.from_files(
                 azimuthal_transmission_path, central_effective_area_path, passband_fit_coefficients_path),
             mag_data=read_mag_rtn_data(mag_path) if mag_path is not None else None,
-            mag_data_level=mag_level,
+            mag_is_preliminary=mag_is_preliminary,
         )
