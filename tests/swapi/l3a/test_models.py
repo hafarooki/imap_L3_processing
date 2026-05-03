@@ -64,7 +64,7 @@ class TestModels(CdfModelTestCase):
         expected_flow_deflection = np.arange(100, step=10.0)
         expected_flow_deflection_std = np.arange(1, step=0.1)
         quality_flags = np.full(20, SwapiL3Flags.NONE)
-        quality_flags[3:5] |= SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED
+        quality_flags[3:5] |= SwapiL3Flags.EPHEMERIS_GAP
         bulk_velocity_rtn_sun = np.random.rand(10, 3)
         bulk_velocity_rtn_sun_covariance = np.random.rand(10, 3, 3)
         bulk_velocity_rtn_sc = np.random.rand(10, 3)
