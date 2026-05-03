@@ -313,6 +313,12 @@ def fit_solar_wind_alpha_moments(
     # preference the greedy lowest-per-bin-SSE choice picks a tiny
     # T-drop trim that keeps the fit stuck.
     fresh_x0 = np.array([np.log(max(n0, 1e-3)), np.log(max(T0, 1e-3)), 0.0])
+    # Anchor against the pre-shrink fit, so cumulative drift across many
+    # iterations is bounded (each step's per-step n_ok ratio of 0.5 is
+    # unreachable in practice but successive 0.93×-each-step trims still
+    # cause big total collapse — cf. ci=859: T 8.4→4.5, n 0.06→0.014
+    # without bound).
+    n_initial = float(np.exp(result.x[0]))
     while len(current_window) > 5:
         T_now = float(np.exp(result.x[1]))
         chi2_now = float(np.sum(result.fun**2))
@@ -344,12 +350,20 @@ def fit_solar_wind_alpha_moments(
                 continue
             chi2_t = float(np.sum(r_t.fun**2))
             T_t = float(np.exp(r_t.x[1]))
+            n_t_density = float(np.exp(r_t.x[0]))
             per_bin_t = chi2_t / max(n_t, 1)
             # In unphysical regime require T_t < 20·T_p (so the trim
             # actually escaped the runaway-T basin); otherwise just
             # require T_t < T_now. Per-bin gated as above.
             T_ok = (T_t < 20.0 * proton_T) if unphysical_now else (T_t < T_now)
-            if per_bin_t < chi2_gate and T_ok:
+            # Density-collapse guard: cumulative n_α must stay ≥50% of
+            # the pre-shrink fit's n in the physical regime. Without this
+            # the shrink walks both T and n downward together, since
+            # smaller windows admit narrower-Gaussian smaller-n fits
+            # whose per-bin SSE is genuinely lower. The unphysical
+            # regime has n_now ≈ 0 so this ratio is meaningless — skip.
+            n_ok = unphysical_now or n_t_density >= 0.5 * n_initial
+            if per_bin_t < chi2_gate and T_ok and n_ok:
                 candidates.append(
                     (per_bin_t, T_t, r_t, res_t, n_t, new_window)
                 )
