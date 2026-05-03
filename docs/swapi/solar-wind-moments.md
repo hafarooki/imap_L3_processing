@@ -72,7 +72,7 @@ $$t_i = t_\text{epoch} + i \cdot \tfrac{12}{72}\,\text{s} = t_\text{epoch} + i \
 
 The alpha moments depend on the local magnetic field direction because the alpha-proton drift is constrained to lie along $\hat{\mathbf{B}}$. It reads the MAG RTN CDF variable `b_rtn`, then normalizes the averaged field direction before the alpha fit.
 
-The dependency accepts MAG **L2** (preferred) or **L1D** (fallback) — same descriptor `norm-rtn` for both, disambiguated by `data_type` at fetch time. MAG presence is required for the alpha-sw descriptor; the processor raises if neither L2 nor L1D is provided. Other descriptors (proton-sw, pui-he) do not consume MAG.
+The dependency accepts MAG **L2** (preferred) or **L1D** (fallback) — same descriptor `norm-rtn` for both, disambiguated by `data_type` at fetch time. MAG presence is required for the alpha-sw descriptor; the processor raises if neither L2 nor L1D is provided. When L1D is the source, every alpha-sw chunk's quality flag has the `PRELIMINARY_MAG` bit set so the product can be flagged for reprocessing once L2 is available. Other descriptors (proton-sw, pui-he) do not consume MAG.
 
 For each 5-sweep alpha chunk, the processor uses the full 60 s MAG window $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$. The in-window RTN samples are averaged directly, and the mean vector is normalized to produce $\hat{\mathbf{B}}^\text{RTN}$.
 
@@ -394,6 +394,7 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 
 - `STALE_PROTON` (= 32): Stage 1 proton fit failed (proton `bad_fit_flag != NONE`). Stage 2 returns NaN moments without trying.
 - `BAD_FIT` (= 8): reference proton velocity is nonphysical, MAG direction is unavailable for the chunk (NaN or non-unit), peak-finding failed, or optimizer did not converge.
+- `PRELIMINARY_MAG` (= 64): MAG L1D was used as the source for this run (L2 was unavailable). Set on every chunk in the run. The product is a candidate for reprocessing once MAG L2 covers the time range. See issue #13 / #70.
 
 ### Magnetic-field averaging
 

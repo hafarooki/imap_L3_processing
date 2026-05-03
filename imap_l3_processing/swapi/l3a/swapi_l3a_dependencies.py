@@ -39,6 +39,9 @@ class SwapiL3ADependencies:
     # Optional so descriptors that don't need it (e.g. proton-sw, pui-he) keep working
     # without a MAG file present. The alpha-sw processor branch enforces presence.
     mag_data: Optional[MagData] = None
+    # Source level of the MAG data ("l2" or "l1d"); None when no MAG is provided.
+    # Used by alpha-sw to set the PRELIMINARY_MAG quality flag on L1D-sourced runs.
+    mag_data_level: Optional[str] = None
 
     @classmethod
     def fetch_dependencies(cls, dependencies: ProcessingInputCollection):
@@ -58,7 +61,7 @@ class SwapiL3ADependencies:
         # Prefer L2; fall back to L1D. MAG is required for alpha-sw but not for
         # proton-sw / pui-he, so absence is allowed at the dependency level —
         # the alpha-sw processor branch validates presence.
-        mag_path = _select_mag_path(dependencies)
+        mag_path, mag_level = _select_mag_path(dependencies)
 
         return cls.from_file_paths(
             download(science_dependency_file[0]),
@@ -72,6 +75,7 @@ class SwapiL3ADependencies:
             download(central_effective_area_paths[0]),
             download(passband_fit_coefficients_paths[0]),
             mag_path,
+            mag_level,
         )
 
     @classmethod
@@ -80,7 +84,8 @@ class SwapiL3ADependencies:
                         instrument_response_path: Path, neutral_helium_path: Path, hydrogen_inflow_vector_path: Path,
                         helium_inflow_vector_path: Path, azimuthal_transmission_path: Path,
                         central_effective_area_path: Path, passband_fit_coefficients_path: Path,
-                        mag_path: Optional[Path] = None):
+                        mag_path: Optional[Path] = None,
+                        mag_level: Optional[str] = None):
         return cls(
             data=read_l2_swapi_data(CDF(str(science_dependency_path))),
             efficiency_calibration_table=EfficiencyCalibrationTable(efficiency_calibration_path),
@@ -95,14 +100,16 @@ class SwapiL3ADependencies:
             swapi_response=SWAPIResponse.from_files(
                 azimuthal_transmission_path, central_effective_area_path, passband_fit_coefficients_path),
             mag_data=read_mag_rtn_data(mag_path) if mag_path is not None else None,
+            mag_data_level=mag_level,
         )
 
 
-def _select_mag_path(dependencies: ProcessingInputCollection) -> Optional[Path]:
+def _select_mag_path(dependencies: ProcessingInputCollection) -> tuple[Optional[Path], Optional[str]]:
     """Pick a MAG RTN path from the input collection, preferring L2 over L1D.
 
     Mirrors the SWE pattern (commit afa6ce23): same descriptor name for both
-    levels, disambiguated by `data_type`. Returns None if neither is present.
+    levels, disambiguated by `data_type`. Returns (path, level) where level is
+    "l2" or "l1d"; (None, None) if neither is present.
     """
     science_files = dependencies.processing_input
     for level in ("l2", "l1d"):
@@ -114,5 +121,5 @@ def _select_mag_path(dependencies: ProcessingInputCollection) -> Optional[Path]:
             None,
         )
         if match is not None:
-            return download(match.construct_path())
-    return None
+            return download(match.construct_path()), level
+    return None, None

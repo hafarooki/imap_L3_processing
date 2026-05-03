@@ -110,7 +110,10 @@ class SwapiProcessor(Processor):
 
         return SwapiL3AlphaSolarWindData(
             replace(self.input_metadata, descriptor="alpha-sw"),
-            **runner.run(chunks, AlphaChunkFitter(dependencies.mag_data)),
+            **runner.run(
+                chunks,
+                AlphaChunkFitter(dependencies.mag_data, dependencies.mag_data_level),
+            ),
         )
 
     def process_l3a_pui(
