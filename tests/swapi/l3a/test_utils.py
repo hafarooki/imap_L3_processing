@@ -95,9 +95,10 @@ class TestUtils(TestCase):
 
         temp_cdf = CDF('temp_cdf', '')
         temp_cdf["epoch"] = [datetime(2010, 1, 1), datetime(2010, 1, 1, 0, 1)]
-        temp_cdf["b_rtn"] = np.array([[1.0, 2.0, 3.0], [99.0, -99.0, 4.0]])
-        temp_cdf["b_rtn"].attrs["VALIDMIN"] = -10.0
-        temp_cdf["b_rtn"].attrs["VALIDMAX"] = 10.0
+        temp_cdf["b_rtn"] = np.array([[1.0, 2.0, 3.0], [2.0e5, -2.0e5, 4.0]])
+        temp_cdf["b_rtn"].attrs["FILLVAL"] = -1e31
+        temp_cdf["b_rtn"].attrs["VALIDMIN"] = -1.0e5
+        temp_cdf["b_rtn"].attrs["VALIDMAX"] = 1.0e5
         temp_cdf.close()
 
         actual = read_l1d_mag_data(path)
