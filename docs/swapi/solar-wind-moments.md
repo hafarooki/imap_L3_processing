@@ -73,12 +73,12 @@ $$t_i = t_\text{epoch} + i \cdot \tfrac{12}{72}\,\text{s} = t_\text{epoch} + i \
 The alpha moments depend on the local magnetic field direction because the alpha-proton drift is constrained to lie along $\hat{\mathbf{B}}$.
 The processor reads MAG RTN samples and derives $\hat{\mathbf{B}}^\text{RTN}$ for the alpha fit.
 
-The dependency prefers MAG **L2** and falls back to **L1D** when no L2 file is available. MAG is required for alpha-sw; the processor raises if neither product is provided. When L1D is the source, every alpha-sw chunk in the run has its `PRELIMINARY_MAG` bit set so the product can be flagged for reprocessing once L2 is available. Proton-sw and pui-he do not consume MAG.
+The dependency prefers MAG **L2** and falls back to **L1D** when no L2 file is available. MAG is required for `alpha-sw`; the processor raises `ValueError` if neither product is provided, matching SWE's dependency loader behavior. When L1D is the source, every alpha-sw chunk in the run has its `PRELIMINARY_MAG` bit set so the product can be flagged for reprocessing once L2 is available. `proton-sw` and `pui-he` do not consume MAG.
 
-For each 5-sweep alpha chunk, the processor uses the full 60 s MAG window $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$.
+For each 5-sweep alpha chunk, the processor uses the full $60\,\text{s}$ MAG window $[\,t_\text{center} - 30\,\text{s},\; t_\text{center} + 30\,\text{s})$.
 The in-window RTN samples are averaged directly, and the mean vector is normalized to produce $\hat{\mathbf{B}}^\text{RTN}$.
 
-If $\hat{\mathbf{B}}^\text{RTN}$ cannot be computed (empty MAG window or fill values among the in-window samples), the chunk is flagged `MAG_GAP` and emits NaN moments.
+If $\hat{\mathbf{B}}^\text{RTN}$ cannot be computed (empty MAG window or fill values among the in-window samples), the chunk is flagged `MAG_GAP` and is assigned fill values.
 
 ## SWAPI Response Model
 
@@ -394,10 +394,10 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 
 ### Quality flags (alpha-specific)
 
-- `STALE_PROTON` (= 32): Stage 1 proton fit failed (proton `bad_fit_flag != NONE`). Stage 2 returns NaN moments without trying.
+- `STALE_PROTON` (= 32): Stage 1 proton fit failed (proton `bad_fit_flag != NONE`). Stage 2 returns fill-valued moments without trying.
 - `BAD_FIT` (= 8): fit was attempted with valid inputs but failed — reference proton velocity is nonphysical, peak-finding failed, or optimizer did not converge.
-- `EPHEMERIS_GAP` (= 4): SPICE could not provide rotation matrices for the chunk's measurement times. The chunk is NaN-filled without attempting a fit.
-- `MAG_GAP` (= 128): SPICE geometry was available but MAG data is missing or contains fill values across the chunk window. The alpha fit is skipped and moments are NaN-filled.
+- `EPHEMERIS_GAP` (= 4): SPICE could not provide rotation matrices for the chunk's measurement times. The chunk is fill-valued without attempting a fit.
+- `MAG_GAP` (= 128): SPICE geometry was available but MAG data is missing or contains fill values across the chunk window. The alpha fit is skipped and moments are fill-valued.
 - `PRELIMINARY_MAG` (= 64): MAG L1D was used as the source for this run (L2 was unavailable). Set on every chunk in the run. The product is a candidate for reprocessing once MAG L2 covers the time range.
 
 ### Known limitations

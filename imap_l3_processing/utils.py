@@ -231,10 +231,7 @@ def select_mag_path(
 
     Both MAG products share the same descriptor and are disambiguated by
     `data_type`. Returns (downloaded_path, level) where level is "l2" or
-    "l1d", or (None, None) if neither is present. Callers decide whether
-    absence is fatal — SWAPI's alpha-sw branch raises in its own
-    fetch_dependencies when MAG is absent; SWE always raises since every SWE
-    product needs MAG.
+    "l1d", or (None, None) if neither is present.
     """
     science_files = dependencies.processing_input
     for level in ("l2", "l1d"):
