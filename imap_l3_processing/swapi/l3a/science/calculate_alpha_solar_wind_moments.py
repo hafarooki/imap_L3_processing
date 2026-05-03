@@ -12,13 +12,14 @@ When magnetic data is unavailable, the fit uses the nominal Parker spiral direct
 See `docs/swapi/solar-wind-moments.md` § "Alpha Particle Moments".
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import numba
 import numpy as np
 import scipy.optimize
 from numpy import ndarray
+from uncertainties import UFloat, covariance_matrix, ufloat
 
 from imap_l3_processing.constants import (
     ALPHA_MASS_PER_CHARGE_M_P_PER_E,
@@ -30,6 +31,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     ProtonSolarWindMoments,
     _model_count_rates,
     apply_deadtime_correction_array,
+    make_correlated_velocity,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_K_FACTOR,
@@ -41,25 +43,28 @@ from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
 @dataclass
 class AlphaSolarWindMoments:
-    density: float  # cm^-3
-    temperature: float  # K
-    bulk_velocity_rtn: ndarray  # shape (3,), km/s, [R, T, N]; = v_p + Δv * B̂
-    delta_v: float  # km/s, signed; +Δv ⇔ alpha drifts along +B̂ vs proton frame
+    density: UFloat  # cm^-3
+    temperature: UFloat  # K
+    bulk_velocity_rtn: tuple[UFloat, UFloat, UFloat]  # km/s, [R, T, N]; correlated
+    delta_v: UFloat  # km/s, signed; +Δv ⇔ alpha drifts along +B̂ vs proton frame
     bad_fit_flag: int
-    density_sigma: float = np.nan
-    temperature_sigma: float = np.nan
-    delta_v_sigma: float = np.nan
-    velocity_covariance_rtn: ndarray = field(
-        default_factory=lambda: np.full((3, 3), np.nan)
-    )  # shape (3, 3), km^2/s^2; = Σ_vp + σ_Δv² B̂B̂ᵀ
+
+    def bulk_velocity_rtn_nominal(self) -> ndarray:
+        """Nominal RTN velocity vector (km/s); shape (3,)."""
+        return np.array([v.nominal_value for v in self.bulk_velocity_rtn])
+
+    def bulk_velocity_rtn_covariance(self) -> ndarray:
+        """3×3 RTN velocity covariance (km²/s²); = Σ_vp + σ_Δv² B̂B̂ᵀ."""
+        return np.array(covariance_matrix(self.bulk_velocity_rtn))
 
 
 def _nan_alpha_moments(flag: int) -> AlphaSolarWindMoments:
+    nan = ufloat(np.nan, np.nan)
     return AlphaSolarWindMoments(
-        density=np.nan,
-        temperature=np.nan,
-        bulk_velocity_rtn=np.full(3, np.nan),
-        delta_v=np.nan,
+        density=nan,
+        temperature=nan,
+        bulk_velocity_rtn=(nan, nan, nan),
+        delta_v=nan,
         bad_fit_flag=int(flag),
     )
 
@@ -132,7 +137,7 @@ def fit_solar_wind_alpha_moments(
     if int(proton_moments.bad_fit_flag) != int(SwapiL3Flags.NONE):
         return _nan_alpha_moments(SwapiL3Flags.STALE_PROTON)
 
-    proton_bulk_rtn = np.asarray(proton_moments.bulk_velocity_rtn, dtype=float)
+    proton_bulk_rtn = proton_moments.bulk_velocity_rtn_nominal()
     proton_speed = np.linalg.norm(proton_bulk_rtn)
     mag_gap_fallback = False
 
@@ -188,9 +193,9 @@ def fit_solar_wind_alpha_moments(
 
     # Frozen pre-deadtime proton model rate. Deadtime acts on (proton + alpha) below.
     proton_true_rate = _model_count_rates(
-        float(proton_moments.density),
-        float(proton_moments.temperature),
-        np.asarray(proton_moments.bulk_velocity_rtn, dtype=float),
+        proton_moments.density.nominal_value,
+        proton_moments.temperature.nominal_value,
+        proton_bulk_rtn,
         passband_grids,
         proton_central_speeds,
         proton_central_eff_areas,
@@ -205,7 +210,7 @@ def fit_solar_wind_alpha_moments(
         count_rate=count_rate,
         esa_voltage=esa_voltage,
         proton_true_rate=proton_true_rate,
-        proton_temperature=float(proton_moments.temperature),
+        proton_temperature=proton_moments.temperature.nominal_value,
         passband_grids=passband_grids,
         alpha_central_speeds=alpha_central_speeds,
         alpha_central_eff_areas=alpha_central_eff_areas,
@@ -286,20 +291,19 @@ def fit_solar_wind_alpha_moments(
 
     # Σ_vα = Σ_vp + σ_Δv² B̂B̂ᵀ (additive Δv along the 1-DOF B̂ axis).
     sigma_dv2 = max(cov_x[2, 2], 0.0)
-    velocity_covariance_rtn = np.asarray(
-        proton_moments.velocity_covariance, dtype=float
-    ) + sigma_dv2 * np.outer(b_hat_rtn, b_hat_rtn)
+    velocity_covariance_rtn = (
+        proton_moments.bulk_velocity_rtn_covariance()
+        + sigma_dv2 * np.outer(b_hat_rtn, b_hat_rtn)
+    )
 
     return AlphaSolarWindMoments(
-        density=n_a_fit,
-        temperature=T_a_fit,
-        bulk_velocity_rtn=bulk_velocity_rtn,
-        delta_v=dv_fit,
+        density=ufloat(n_a_fit, density_sigma),
+        temperature=ufloat(T_a_fit, temperature_sigma),
+        bulk_velocity_rtn=make_correlated_velocity(
+            bulk_velocity_rtn, velocity_covariance_rtn
+        ),
+        delta_v=ufloat(dv_fit, delta_v_sigma),
         bad_fit_flag=int(bad_fit_flag),
-        density_sigma=density_sigma,
-        temperature_sigma=temperature_sigma,
-        delta_v_sigma=delta_v_sigma,
-        velocity_covariance_rtn=velocity_covariance_rtn,
     )
 
 

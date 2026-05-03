@@ -391,11 +391,15 @@ class TestCalculateIntegral(unittest.TestCase):
             "median relative error vs reference_integrals.csv exceeds 0.5%",
         )
 
-        # rtol+atol: a few extreme-bulk-elevation cases trip pure 10% rtol with
-        # sub-2-Hz absolute differences. With reference and production now sharing
-        # the same masked passband, the residual gap is GL-21-nodes vs
-        # trapezoid-301-nodes integration noise, not algorithm divergence.
-        rtol, atol = 0.1, 1.0
+        # rtol+atol: production now uses the unmasked grid with the integration
+        # window truncated at the 1%-of-max threshold-crossing (`_passband_boundaries`
+        # / `_elevation_range`), while reference still integrates over the full grid
+        # range with fixed limits. For typical configurations the gap is dominated by
+        # GL-21-nodes vs trapezoid-301-nodes integration noise (median ~0.25%, P95
+        # ~2%); cold-plasma cases with the bulk at the FOV elevation edge reach ~14%
+        # because the polynomial-fit tail outside the active region carries
+        # non-negligible signal that the production window deliberately truncates.
+        rtol, atol = 0.15, 1.0
         worst = np.argmax(abs_diff - rtol * ref - atol)
         self.assertLessEqual(
             abs_diff[worst],
@@ -1544,9 +1548,8 @@ class TestGetAngularLimits(unittest.TestCase):
       SG  (region=0):  elevation ∈ [−11°, 7°],   azimuth ∈ [−20°, 20°]
       OA− (region=−1): elevation ∈ [−12°, 10°],  azimuth ∈ [−150°, −20°]
       OA+ (region=+1): elevation ∈ [−12°, 10°],  azimuth ∈ [20°, 150°]
-    Bounds are set to the bilinear-interpolation transition cells of each passband, not
-    just the active grid extent — this captures the small-but-nonzero contribution that
-    matters when bulk direction is just outside the FOV."""
+    Elevation bounds come from PassbandGrid's thresholded per-region elevation ranges,
+    not from a hard-coded instrument elevation extent."""
 
     @classmethod
     def setUpClass(cls):

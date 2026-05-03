@@ -132,10 +132,18 @@ def main():
         optimized = np.empty(n_voltages)
         reference = np.empty(n_voltages)
         swapi_response.warm_cache(esa_voltages)
+        az_trans = np.asarray(swapi_response.azimuthal_transmission, dtype=float)
+        az_trans_spacing = float(swapi_response.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
         for i, v in enumerate(esa_voltages):
             grid = swapi_response.create_passband_grid(float(v))
-            optimized[i] = calculate_integral(grid, sw)
-            reference[i] = reference_integral_fixed_limits(grid, sw)
+            cs = swapi_response.central_speed(float(v), 1.0)
+            ca = swapi_response.get_central_effective_area(float(v))
+            optimized[i] = calculate_integral(
+                grid, sw, cs, ca, az_trans, az_trans_spacing
+            )
+            reference[i] = reference_integral_fixed_limits(
+                grid, sw, cs, ca, az_trans, az_trans_spacing
+            )
 
         (h_ref,) = ax.plot(
             esa_voltages,

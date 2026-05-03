@@ -8,7 +8,10 @@ from spacepy import pycdf
 from spacepy.pycdf import CDF
 
 from imap_l3_processing.cdf.cdf_utils import read_numeric_variable
-from imap_l3_processing.constants import ONE_SECOND_IN_NANOSECONDS
+from imap_l3_processing.constants import (
+    ONE_SECOND_IN_NANOSECONDS,
+    THIRTY_SECONDS_IN_NANOSECONDS,
+)
 from imap_l3_processing.models import MagL1dData
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_processing.spice.geometry import SpiceFrame, get_rotation_matrix, imap_state
@@ -124,3 +127,15 @@ def chunk_l2_data(data: SwapiL2Data, chunk_size: int) -> Iterable[SwapiL2Data]:
             data.coincidence_count_rate[i : i + chunk_size],
             data.coincidence_count_rate_uncertainty[i : i + chunk_size],
         )
+
+
+def chunk_epoch(chunk: SwapiL2Data) -> float:
+    return chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
+
+
+def measurement_times(chunk: SwapiL2Data, bin_slice: slice) -> ndarray:
+    bins = np.arange(bin_slice.start, bin_slice.stop)
+    return (
+        chunk.sci_start_time[:, np.newaxis]
+        + bins * (12 / 72 * ONE_SECOND_IN_NANOSECONDS)
+    ).flatten()

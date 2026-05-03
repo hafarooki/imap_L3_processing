@@ -1,14 +1,8 @@
 import unittest
-from pathlib import Path
 
 import numpy as np
 import numpy.testing as npt
 
-from imap_l3_processing.constants import (
-    PROTON_MASS_KG,
-    PROTON_CHARGE_OVER_MASS_C_PER_KG,
-    PROTON_CHARGE_COULOMBS,
-)
 from imap_l3_processing.swapi.l3a.science.swapi_response import (
     SWAPIResponse,
     _TARGET_ELEVATIONS,
@@ -217,9 +211,6 @@ class TestPassbandPolynomialBoundaries(unittest.TestCase):
 
     def _check_boundaries(self, grid_values, bnd_min, bnd_max, region_name):
         cutoff = _PASSBAND_BOUNDARY_THRESHOLD * float(grid_values.max())
-        # tolerance: linear interp at boundary may sit between cutoff and the
-        # adjacent above-cutoff cell's value.
-        tol = 10 * cutoff
         for elevation in _TARGET_ELEVATIONS:
             with self.subTest(region=region_name, elevation=elevation):
                 row = grid_values[
@@ -245,15 +236,15 @@ class TestPassbandPolynomialBoundaries(unittest.TestCase):
 
                 self.assertLessEqual(
                     val_at_min,
-                    tol,
+                    cutoff,
                     msg=f"{region_name} min boundary at el={elevation} deg: "
-                    f"passband={val_at_min:.6f} > {tol:.6f} (speed ratio {min_ratio:.4f})",
+                    f"passband={val_at_min:.6f} > {cutoff:.6f} (speed ratio {min_ratio:.4f})",
                 )
                 self.assertLessEqual(
                     val_at_max,
-                    tol,
+                    cutoff,
                     msg=f"{region_name} max boundary at el={elevation} deg: "
-                    f"passband={val_at_max:.6f} > {tol:.6f} (speed ratio {max_ratio:.4f})",
+                    f"passband={val_at_max:.6f} > {cutoff:.6f} (speed ratio {max_ratio:.4f})",
                 )
 
     def test_oa_boundary_below_threshold(self):

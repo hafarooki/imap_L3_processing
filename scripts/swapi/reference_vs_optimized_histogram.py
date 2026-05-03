@@ -34,8 +34,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     SWParams,
     calculate_integral,
     N_ELEVATION,
-    N_AZIMUTH_SG,
-    N_AZIMUTH_OA,
+    N_AZIMUTH,
     N_SPEED,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR

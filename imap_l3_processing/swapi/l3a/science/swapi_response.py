@@ -10,11 +10,12 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTO
 
 _TARGET_ELEVATIONS = np.arange(-15, 15 + 0.5, 0.5)
 _TARGET_SPEED_RATIOS = np.linspace(0.9, 1.1, 101)
-# Fraction of the global grid max below which the passband is treated as zero
-# for integration-boundary purposes. The polynomial response is strictly
-# positive everywhere it is defined, so without a threshold the boundary would
-# be V-independent (set only by CSV coverage). With this threshold the
-# boundary tightens around the physically significant region and varies with V.
+# Fraction of the global grid max at which the integration window terminates
+# (per-elevation speed-ratio bounds in `_passband_boundaries`, elevation range
+# in `_elevation_range`). The polynomial response is strictly positive
+# everywhere it is defined, so without a relative cutoff the boundary would be
+# V-independent (set only by CSV coverage). With this cutoff the integration
+# tightens around the physically significant region and varies with V.
 _PASSBAND_BOUNDARY_THRESHOLD = 1e-2
 
 
@@ -39,7 +40,7 @@ class PassbandGrid(NamedTuple):
     max_SG_boundary: NDArray
     # V-dependent elevation range per region (min, max). Bound at the
     # linear-interp threshold-crossing elevation between the outermost active row
-    # (max passband > 1% of grid max) and its zero-valued inactive neighbor.
+    # (max passband > 1% of grid max) and its inactive neighbor.
     oa_elevation_range: tuple
     sg_elevation_range: tuple
 
@@ -72,7 +73,8 @@ def _build_passband_array(
 
 def eval_boundary_min(boundary: NDArray, elevations: NDArray) -> NDArray:
     """Evaluate the min (left) speed-ratio boundary at each elevation using the most
-    expansive of the two nearest stored grid points — always at or outside the passband."""
+    expansive of the two nearest stored grid points — guaranteed to bracket the
+    active passband speed range."""
     idx = np.clip(
         np.searchsorted(boundary[0], elevations, side="right") - 1,
         0,
@@ -84,7 +86,8 @@ def eval_boundary_min(boundary: NDArray, elevations: NDArray) -> NDArray:
 
 def eval_boundary_max(boundary: NDArray, elevations: NDArray) -> NDArray:
     """Evaluate the max (right) speed-ratio boundary at each elevation using the most
-    expansive of the two nearest stored grid points — always at or outside the passband."""
+    expansive of the two nearest stored grid points — guaranteed to bracket the
+    active passband speed range."""
     idx = np.clip(
         np.searchsorted(boundary[0], elevations, side="right") - 1,
         0,
@@ -98,13 +101,9 @@ def _passband_boundaries(
     grid_values: NDArray, target_elevations: NDArray, target_speed_ratios: NDArray
 ) -> tuple[NDArray, NDArray]:
     """Return (min_boundary, max_boundary) each shape (2, n_active):
-    row 0 = elevation values, row 1 = the speed-ratio at which the linearly-interpolated
-    passband within the row crosses `_PASSBAND_BOUNDARY_THRESHOLD * max(grid)`, going
-    outward from the active region. The crossing is found by linear interpolation
-    between the outermost above-threshold cell `v_a` and its below-threshold neighbor
-    `v_b`: `r_threshold = r_a ± spacing · (v_a - cutoff) / (v_a - v_b)`. Falls back
+    row 0 = elevation values, row 1 = the first speed-ratio pixel at or below
+    `_PASSBAND_BOUNDARY_THRESHOLD * max(grid)` outside the active row. Falls back
     to the edge cell's speed ratio when the active region touches the grid edge."""
-    spacing = float(target_speed_ratios[1] - target_speed_ratios[0])
     cutoff = _PASSBAND_BOUNDARY_THRESHOLD * float(grid_values.max())
     n_speed = grid_values.shape[1]
     active_elevations, min_ratios, max_ratios = [], [], []
@@ -114,23 +113,13 @@ def _passband_boundaries(
             continue
         i_lo = int(above_idx[0])
         i_hi = int(above_idx[-1])
-        v_lo = float(row[i_lo])
-        v_hi = float(row[i_hi])
         active_elevations.append(float(elev))
         if i_lo > 0:
-            v_lo_minus = float(row[i_lo - 1])
-            min_ratios.append(
-                float(target_speed_ratios[i_lo])
-                - spacing * (v_lo - cutoff) / (v_lo - v_lo_minus)
-            )
+            min_ratios.append(float(target_speed_ratios[i_lo - 1]))
         else:
             min_ratios.append(float(target_speed_ratios[i_lo]))
         if i_hi < n_speed - 1:
-            v_hi_plus = float(row[i_hi + 1])
-            max_ratios.append(
-                float(target_speed_ratios[i_hi])
-                + spacing * (v_hi - cutoff) / (v_hi - v_hi_plus)
-            )
+            max_ratios.append(float(target_speed_ratios[i_hi + 1]))
         else:
             max_ratios.append(float(target_speed_ratios[i_hi]))
     elevs = np.array(active_elevations)

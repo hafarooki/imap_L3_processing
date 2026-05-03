@@ -6,7 +6,7 @@
 - `imap_l3_processing/swapi/l3a/science/calculate_proton_solar_wind_moments.py` — Core proton fitting algorithm. `fit_solar_wind_proton_moments` implements the three-step procedure (SPICE → initial guess → Levenberg–Marquardt); `calculate_integral` is the Numba-JIT count-rate integral over elevation, azimuth, and speed.
 - `imap_l3_processing/swapi/l3a/science/calcxwulate_alpha_solar_wind_moments.py` — Alpha particle moments fitter (Stage 2 of the two-stage proton-frozen scheme). `fit_solar_wind_alpha_moments` fits $(n_\alpha, T_\alpha, \Delta v)$ with proton parameters held fixed.
 - `imap_l3_processing/swapi/l3a/science/speed_calculation.py` — ESA step layout constants (`SWAPI_SCIENCE_BINS`, `SWAPI_COARSE_SWEEP_BINS`, `SWAPI_FINE_SWEEP_BINS`), k-factor constants, `esa_voltage_to_proton_speed`/`esa_voltage_to_alpha_speed` conversions, and `get_alpha_peak_indices` for locating the alpha bump in the count-rate spectrum.
-- `imap_l3_processing/swapi/swapi_processor.py` — Production pipeline entry point. Dispatches on descriptor (`proton-sw`, `alpha-sw`, `pui-he`). Each product's processing method precomputes SPICE geometry, then distributes 5-sweep chunks across a `ProcessPoolExecutor` (fork-based multiprocessing). Module-level worker functions (`_proton_chunk_worker`, `_alpha_chunk_worker`, `_pui_proton_chunk_worker`) receive shared state (`SWAPIResponse`, `EfficiencyCalibrationTable`, MAG data) via an initializer. `_derive_proton_velocity_angles` converts fitted RTN velocity to speed, clock angle, and deflection angle in the DPS frame with delta-method uncertainty propagation.
+- `imap_l3_processing/swapi/swapi_processor.py` and `imap_l3_processing/swapi/l3a/chunk_fits.py` — Production pipeline entry points. `SwapiProcessor` dispatches on descriptor (`proton-sw`, `alpha-sw`, `pui-he`). Each product's processing method precomputes SPICE geometry, then distributes 5-sweep chunks across fork-based multiprocessing. Module-level worker functions (`proton_chunk_worker`, `alpha_chunk_worker`, `pui_proton_chunk_worker`) receive shared state (`SWAPIResponse`, `EfficiencyCalibrationTable`, MAG data) via an initializer. `derive_velocity_angles` (in `calculate_proton_solar_wind_moments.py`) converts fitted RTN velocity to spacecraft-frame speed, clock angle, and deflection angle in the DPS frame; speed σ uses the closed-form delta method, while the two angles' σ are propagated by Monte-Carlo sampling from the fitted velocity covariance. The proton worker also writes the Sun-frame bulk velocity vector and Sun-frame scalar speed.
 
 ## TODO
 
@@ -77,12 +77,12 @@ $$C(V) = \sum_s \int d^3v \; v \, f^s(\mathbf{v}) \, \mathcal{A}^s(\mathbf{v}, V
 where $f^s$ is the VDF of species $s$ and $\mathcal{A}^s$ is the effective area.
 
 The effective area is decomposed as
-$$\mathcal{A}^s(v, \theta, \phi, V) = \mathcal{A}_0^s(V) \cdot P\!\left(\dfrac{v}{v_0^s},\, \theta,\, \phi,\, V\right) \cdot T(\phi),$$
+$$\mathcal{A}^s(v, \theta, \phi, V) = \mathcal{A}_0^s(V) \cdot P\!\left(\dfrac{v}{v_0^s},\, \theta,\, \phi,\, V\right) \cdot \mathcal{T}(\phi),$$
 where:
 - $v_0^s = \sqrt{2 k^* q^s |V| / m^s}$ is the central speed;
 - $\mathcal{A}_0^s$ is the central effective area;
 - $P$ is the energy-angle passband;
-- $T$ is the azimuthal transmission factor.
+- $\mathcal{T}$ is the azimuthal transmission factor.
 
 Copies of these three functions in the form of CSV files are in `instrument_team_data/swapi`.
 
@@ -93,49 +93,50 @@ They differ primarily due to slight inaccuracy of the beam energy and orientatio
 > ![](figures/calibration_curves.png)
 > *Central effective area and azimuthal transmission.* [[src]](figure_src/plot_calibration_curves.py)
 
-$T(\phi)$ and $\mathcal{A}_0^s(V)$ are 1D functions stored in simple CSV files with a uniform grid. They are interpolated linearly for practical usage. ESA voltages outside the tabulated range are clamped to the endpoint values.
+$\mathcal{T}(\phi)$ and $\mathcal{A}_0^s(V)$ are 1D functions stored in simple CSV files with a uniform grid. They are interpolated linearly for practical usage. ESA voltages outside the tabulated range are clamped to the endpoint values.
 
 ![SWAPI passband and integration region at three beam energies](figures/passband_boundaries.png)
 > *Example passbands.* [[src]](figure_src/plot_passband_boundaries.py)
 
 $P$ for a given $V$ is represented as a `PassbandGrid` object.
-The CSV file contains polynomial fits of $\log P$ for each ($\theta$, $v/v_0$) pixel as a function of $\log(k^* |V|)$ with a separate fit for the open aperture ($|\phi| > 20°$ and sunglasses $|\phi| \leq 20°$).
-`SWAPIResponse.create_passband_grid` constructs a `PassbandGrid` for an arbitrary $V$ by interpolating these fits evaluated at $V$ onto a uniformly spaced ($\theta$, $v/v_0$) grid ($\theta = −15°$ to $15°$ in 61 points with $0.5°$ spacing, $v/v_0 = 0.9$ to $1.1$ in 101 points) and stores the result in a `PassbandGrid` struct.
-The uniform spacing is for computationally efficient interpolation.
-When $V$ falls outside the range used to fit the polynomials in the CSV, it is silently clamped to the nearest endpoint.
+The CSV file contains polynomial fits of $\log P$ for each ($\theta$, $v/v_0$) pixel as a function of $\log(k^* |V|)$. Open aperture ($|\phi| > 20°$) and sunglasses ($|\phi| \leq 20°$) have separate fits.
 
-`PassbandGrid` also keeps track of the integration contour: per-elevation speed-ratio bounds (`min_OA_boundary` / `max_OA_boundary` / `min_SG_boundary` / `max_SG_boundary`) plus a per-region elevation range (`oa_elevation_range` / `sg_elevation_range`).
-The contour is set by a threshold of 1% of the maximum.
-The boundary is the first grid point outside the above-threshold region in each row, and rows whose maximum falls below the threshold drop out entirely (tightening the elevation range too). Both the speed-ratio bounds and the elevation range are therefore $V$-dependent and recomputed inside `create_passband_grid` for every new $V$.
+`SWAPIResponse.create_passband_grid` evaluates those fits at the requested $V$ and interpolates them onto a uniform grid: $\theta = -15°$ to $15°$ in 0.5° steps, and $v/v_0 = 0.9$ to $1.1$ in 101 points. The uniform grid is used for fast interpolation inside the integrator. Voltages outside the fitted range are clamped to the nearest endpoint.
+
+`PassbandGrid` also stores the passband region used by the integrator. This includes per-elevation speed-ratio bounds (`min_OA_boundary`, `max_OA_boundary`, `min_SG_boundary`, `max_SG_boundary`) and a per-region elevation range (`oa_elevation_range`, `sg_elevation_range`).
+
+The region is set by a threshold of 1% of the grid maximum. For each elevation row with at least one above-threshold cell, the speed-ratio bounds are the first speed-ratio pixels just outside the above-threshold region. Rows with no above-threshold cell are omitted.
+
+The elevation range is anchored at the interpolated crossing where the row maximum drops below threshold. Both the speed-ratio bounds and elevation range are recomputed for every $V$, since the polynomial fits change shape with voltage.
+
+When an integration elevation falls between stored passband-bound rows, the wider neighboring interval is used. This avoids clipping the passband between rows.
+
 `SwapiProcessor` precomputes the grids for each L2 file before fitting the 5-sweep chunks.
 
 ## Solar Wind Model Count Rate Integral
-The solar wind proton velocity distribution function (VDF) is modeled as a drifting Maxwellian. In instrument coordinates, it is parameterized by bulk velocity ($v_b, \theta_b, \phi_b$), temperature ($K$), and density ($n$).
+The solar wind proton velocity distribution function (VDF) is modeled as a drifting Maxwellian. In instrument coordinates, it is parameterized by bulk velocity ($v_b, \theta_b, \phi_b$), proton temperature $T_p$ in Kelvin, and density $n$.
 The VDF is given by:
 $$f_p(\mathbf{v}) = f_p(v, \theta, \phi) = \frac{n}{(\sqrt{2\pi}\, v_\text{th})^3} \exp\!\left(-\frac{v^2 + v_b^2 - 2 v\, v_b \cos\alpha(\theta, \phi)}{2 v_\text{th}^2}\right),$$
-where $\cos\alpha = \sin\theta_b \sin\theta + \cos\theta_b \cos\theta \cos(\phi - \phi_b)$ and $v_\text{th} = \sqrt{k_B T/m_p}$.
+where $\theta$ is elevation, $\phi$ is azimuth, $\cos\alpha = \sin\theta_b \sin\theta + \cos\theta_b \cos\theta \cos(\phi - \phi_b)$, and $v_\text{th} = \sqrt{k_B T_p/m_p}$.
 
 Substituting into the count rate integral in spherical velocity coordinates $(v, \theta, \phi)$:
-$$C(V) = \frac{n\, \mathcal{A}_0(V)}{(\sqrt{2\pi}\, v_\text{th})^3} \sum_\text{region} \int \cos\theta\, d\theta \int T(\phi)\, d\phi \int v^3\, P\!\left(\tfrac{v}{v_0}, \theta\right) \exp\!\left(-\frac{v^2 + v_b^2 - 2vv_b\cos\alpha}{2v_\text{th}^2}\right) dv.$$
+$$C(V) = \frac{n\, \mathcal{A}_0(V)}{(\sqrt{2\pi}\, v_\text{th})^3} \sum_\text{region} \int \cos\theta\, d\theta \int \mathcal{T}(\phi)\, d\phi \int v^3\, P\!\left(\tfrac{v}{v_0}, \theta\right) \exp\!\left(-\frac{v^2 + v_b^2 - 2vv_b\cos\alpha}{2v_\text{th}^2}\right) dv.$$
+The $v^3\cos\theta$ factor comes from the velocity-space volume element $v^2\cos\theta\,dv\,d\theta\,d\phi$ times the particle speed $v$ in the flux term.
 
 The sum runs over three azimuth regions: sunglasses (SG, $|\phi| \leq 20°$), left open aperture (OA, $-150° < \phi < -20°$), and right open aperture ($20° < \phi < 150°$).
 They are integrated separately so that only one passband is used for each integral and because the integral will generally have separate peaks in each of these regions due to the vanes at $\pm 20^\circ$.
 
 ### Angular limits
 
-For each region, the $(\theta, \phi)$ integration window is built from an angular radius $\Delta\alpha$ around the bulk direction, then clamped to the region's geometric extent in $\phi$ and the V-dependent elevation range of the region's passband in $\theta$. Special treatment is given for the open aperture region's integration limit.
+For each azimuth region, the angular cutoff $\Delta\alpha$ is chosen from the VDF angular falloff at the passband central speed $v_0$:
+$$\Delta\alpha = \frac{180}{\pi}\arccos\!\left(\mathrm{clamp}\!\left(\frac{v_\text{th}^2 \ln\varepsilon}{v_0 v_b} + 1;\; -1,\; 1\right)\right),$$
+with $\varepsilon_\text{SG} = \varepsilon_\text{OA} = 10^{-6}$. If the VDF is broad enough that the arccos argument would leave $[-1, 1]$, the clamp makes $\Delta\alpha = 180^\circ$.
 
-#### Angular radius
+The implementation uses this angular cutoff as a rectangular half-extent in elevation and azimuth:
+$$[\theta_b - \Delta\alpha,\; \theta_b + \Delta\alpha] \times [\phi_b - \Delta\alpha,\; \phi_b + \Delta\alpha].$$
+This rectangle is conservative: it contains the angular disk of radius $\Delta\alpha$ around the bulk direction.
 
-The VDF can be split into a speed factor and an angular factor (using $|\mathbf{v} - \mathbf{v}_b|^2 = (v - v_b)^2 + 2 v v_b (1 - \cos\alpha)$):
-$$f(v, \alpha) \propto \exp\!\left(-\frac{(v - v_b)^2}{2 v_\text{th}^2}\right)\,\exp\!\left(\frac{v\,v_b\,(\cos\alpha - 1)}{v_\text{th}^2}\right),$$
-where $\alpha$ is the angular distance from the bulk direction. $\Delta\alpha$ is defined as the value of $\alpha$ at which the angular factor drops to $\varepsilon$, evaluated at $v = v_0$ (the passband central speed, where the radial integrand is largest):
-$$\Delta\alpha = \arccos\!\left(\mathrm{clamp}\!\left(\frac{v_\text{th}^2 \ln\varepsilon}{v_0 v_b} + 1;\; -1,\; 1\right)\right),$$
-with $\varepsilon_\text{SG} = \varepsilon_\text{OA} = 10^{-6}$. For $v_0 \approx v_b$ this reduces to $\Delta\alpha \approx \sigma_\alpha\,\sqrt{-2\ln\varepsilon}$, where $\sigma_\alpha = v_\text{th}/v_b$ is the natural angular thermal width — about $5.26\,\sigma_\alpha$ at $\varepsilon = 10^{-6}$. Aside from potential numerical instability, the clamp is needed only for when $v_\text{th}$ is large enough relative to $\sqrt{v_0 v_b}$ to drive the cosine argument out of $[-1, 1]$, in which case $\Delta\alpha = 180^\circ$ and the entire region is integrated.
-
-#### Per-region clamping
-
-$\Delta\alpha$ is applied as a half-extent independently in $\theta$ and $\phi$ — a conservative choice, since the rectangle $[\theta_b \pm \Delta\alpha] \times [\phi_b \pm \Delta\alpha]$ contains the spherical disk of radius $\Delta\alpha$. The window is then clamped per region:
+The window is then clamped to the passband elevation range for the region and to that region's azimuth span:
 
 | Region | Azimuth Range |
 |--------|----------------|
@@ -143,47 +144,50 @@ $\Delta\alpha$ is applied as a half-extent independently in $\theta$ and $\phi$ 
 | OA−    | $[-150°,\; -20°]$ |
 | OA+    | $[20°,\; 150°]$ |
 
-Azimuth is clamped to the geometric boundaries in the table above; elevation is clamped to the region's $V$-dependent passband elevation range.
-If the gaussian window falls entirely outside either clamp — $[\theta_b \pm \Delta\alpha]$ outside the elevation range, or $[\phi_b \pm \Delta\alpha]$ outside the azimuth range — both clamped endpoints collapse to the same boundary and that dimension has zero width, so the region is skipped entirely.
-This is primarily useful in that it skips the the open aperture integration most of the time, since the open aperture has no significant contribution to the total count rate under most solar wind conditions.
+If either clamped dimension has zero width, that region is skipped.
 
-#### OA azimuth: integrand-aware trim
+For OA only, the azimuth window is trimmed once more using the product of the VDF and azimuthal transmission. `_trim_oa_azimuth_by_integrand` samples 64 points of $f(v_0, \theta_b', \phi)\mathcal{T}(\phi)$ across the clamped OA azimuth window, where $\theta_b'$ is $\theta_b$ clamped into the OA elevation range. It keeps the portion above $10^{-6}$ of its maximum and expands by one sample on each side.
 
-For OA, the gaussian-only $\Delta\alpha$ above is replaced by a transmission-aware scan (`_trim_oa_azimuth_by_integrand`). Motivation: $T(\phi)$ is essentially zero from $20°$ to $25°$ and only rises to its plateau by $30°$, so the standard $\Delta\alpha \approx 5.26\,\sigma_\alpha$ window routinely opens a 1°–10° sliver of OA where the integrand $\rho \times T \approx 0$ — wasting integration nodes on a dead zone. Conversely, when $\phi_b$ sits past $\sim 15°$, the OA window must extend well past $\Delta\alpha$ to capture the high-$T$ region where the gaussian tail times full transmission still contributes.
-
-The trim works in three steps:
-
-1. **Scan** $\rho(\phi) \cdot T(\phi)$ at $(\theta = \mathrm{clip}(\theta_b, \theta_\text{lo}, \theta_\text{hi}),\; v = v_0)$ across the full OA passband ($[20°, 150°]$ for OA+, $[-150°, -20°]$ for OA−), at adaptive spacing $\Delta\phi_\text{scan} = \mathrm{clip}(\sigma_\alpha / 2,\; 0.1°,\; 1°)$. Spacing tracks the gaussian width so cold-plasma peaks (sub-degree wide) aren't missed by a coarse grid. Clipping $\theta_b$ into the active elevation range puts the scan at the in-passband peak in the elevation direction.
-2. **Skip** the OA region entirely if $\max(\rho T) < 10^{-9}$ — the gaussian tail is too far from any $\phi$ with meaningful transmission.
-3. **Anchor** the integration window at the OA inner boundary ($\pm 20°$, on the SG side) and trim only the *far* end at the threshold $\rho T > 10^{-3} \times \max$. Anchoring is essential: $T(\pm 20°) = 0$ by construction, so the rising-edge peak (at $\sim \pm 21°$ for $\phi_b$ near zero) sits between the boundary and the first scan grid point that exceeds threshold; trimming the boundary side would cut off real signal.
-
-For typical solar wind at $T \sim 100{,}000$ K and $|\phi_b| < 6°$, the trim collapses the OA window to a few degrees adjacent to the SG/OA transition. For high-deflection cases ($|\phi_b| > 15°$), the scan finds the peak at $\phi \sim 25°$–$30°$ and the trim returns essentially the same window as the gaussian-only $\Delta\alpha$ would. Median chunk fit time drops from ~963 ms (gaussian-only $\Delta\alpha$ feeding 41 OA azimuth nodes) to ~175 ms — a ~5.5× speedup with no loss of accuracy on the reference-integral histogram (max ratio error stays at 10% for low-rate edge cases, identical to the un-trimmed integrator).
+After this trim, OA is skipped when the heuristic upper estimate
+$$\hat{C}_\text{OA} = \mathcal{A}_0(V)\,v_0^3\,\Delta\theta\,\Delta v\,\int_{\phi_\text{lo}}^{\phi_\text{hi}} \mathcal{T}(\phi)\,g(\phi)\,d\phi$$
+falls below $\max(0.1\;\text{Hz},\; 10^{-3} C_\text{SG})$. Here $g(\phi) = f(v_0, \theta_b', \phi)$, $\Delta\theta$ is the clamped OA elevation width in radians, and $\Delta v = (r_\text{max}(0) - r_\text{min}(0))v_0$ is the OA passband speed width at $\theta = 0^\circ$.
 
 ### Speed limits
 
-For each elevation node, the speed integration window is the intersection of the Maxwellian's effective support and the passband's per-elevation speed-ratio support:
-$$v_\text{min}(\theta) = \mathrm{clip}\!\left(v_b - 10v_\text{th};\; r_\text{min}(\theta)\,v_0,\; r_\text{max}(\theta)\,v_0\right), \qquad v_\text{max}(\theta) = \mathrm{clip}\!\left(v_b + 10v_\text{th};\; r_\text{min}(\theta)\,v_0,\; r_\text{max}(\theta)\,v_0\right).$$
-The $\pm 10\,v_\text{th}$ window is essentially the full Maxwellian support — the integrand at $10\sigma$ is below $e^{-50} \sim 10^{-22}$. When the Maxwellian and the passband don't overlap at a given elevation, both clamped endpoints fall to the same boundary and that elevation contributes nothing.
+For each Gauss-Legendre elevation node, the speed integral only needs to cover speeds where both of these are true:
 
-#### Boundary data
+1. The VDF is non-negligible.
+2. The SWAPI passband is nonzero at that elevation.
 
-The per-elevation speed-ratio bounds $r_\text{min}(\theta)$, $r_\text{max}(\theta)$ are stored as the `min_*_boundary` and `max_*_boundary` arrays in `PassbandGrid` (each of shape $(2, n_\text{active})$: row 0 elevations, row 1 speed-ratio bounds). They are constructed in `_passband_boundaries`:
+The VDF speed interval is taken to be
+$$[v_b - \Delta v_\text{VDF},\; v_b + \Delta v_\text{VDF}], \qquad \Delta v_\text{VDF} = 10v_\text{th},$$
+where $v_b = |\mathbf{v}_b|$ and $v_\text{th}$ is the thermal speed. For the Maxwellian VDF used here, this interval includes essentially all of the distribution; at $10\sigma$ the radial factor is below $e^{-50} \sim 10^{-22}$.
 
-1. Mask passband cells below $1\%$ of the grid maximum (`_PASSBAND_BOUNDARY_THRESHOLD = 1e-2`) to zero.
-2. For each elevation row containing at least one above-threshold cell, record the speed ratio one grid step ($\Delta r = 0.002$) beyond the first/last above-threshold cell as $r_\text{min}$, $r_\text{max}$.
-3. Drop elevations with no above-threshold cells; these are also excluded from `*_elevation_range`.
+The passband speed range is stored as speed-ratio bounds relative to the central passband speed $v_0$:
+$$[r_\text{min}(\theta)v_0,\; r_\text{max}(\theta)v_0].$$
+Here $r_\text{min}(\theta)$ and $r_\text{max}(\theta)$ depend on both elevation and aperture region (SG or OA). They describe where the passband at that elevation remains above the integration cutoff.
 
-The number of active elevations may differ between SG and OA (and varies with $V$ within a region). All four boundary arrays are V-dependent — they are recomputed inside `_build_passband_grid` for every voltage, since each cell's polynomial response varies with $V$ and the relative-threshold cutoff captures different cells at different voltages.
+The integration limits are the intersection of those two windows:
+$$v_\text{lo}(\theta) = \max\!\left(v_b - \Delta v_\text{VDF},\; r_\text{min}(\theta)v_0\right),$$
+$$v_\text{hi}(\theta) = \min\!\left(v_b + \Delta v_\text{VDF},\; r_\text{max}(\theta)v_0\right).$$
 
-#### Expanding lookup
+#### Quadrature behavior
 
-`_eval_boundary` evaluates $r_\text{min}(\theta)$ or $r_\text{max}(\theta)$ at GL elevation nodes. For a query elevation between two stored rows it does **not** linearly interpolate: it returns the more expansive of the two bounds (`min` of the two min-boundaries, `max` of the two max-boundaries). This guarantees the integration window brackets the full above-threshold passband at every GL elevation node, at the cost of a small over-integration of zero-valued cells in the gap between stored rows. Linear interpolation would produce a tighter window but could exclude above-threshold cells in the gap, biasing the integral low. The numpy-side equivalents `eval_boundary_min` / `eval_boundary_max` (used by tests and the reference integrator) implement the same rule.
+`calculate_integral` evaluates each region as nested Gauss-Legendre quadratures in elevation, azimuth, and speed:
+$$(N_\text{elev}, N_\text{az}, N_\text{speed}) = (21,\;21,\;11).$$
+SG and OA use the same azimuth-node count; the OA window is already tightened by the transmission-aware trim.
 
-The integral is evaluated as nested elevation $\to$ azimuth $\to$ speed loops with Gauss-Legendre quadrature in every dimension at $(N_\text{elev}, N_\text{az,SG}, N_\text{az,OA}, N_\text{speed}) = (21, 21, 21, 11)$. OA azimuth nodes are now equal in count to SG since the transmission-aware trim above produces a tighter integration window — 21 nodes over the trimmed range gives equivalent or better accuracy than the previous 41 nodes over the wider gaussian-only window. The per-elevation row $v^3 P(v/v_0, \theta)$ is precomputed once and reused across all azimuths (azimuth enters only through the Maxwellian). The passband is renormalized at runtime so that $P(1, 0°, V) = 1$ (`PassbandGrid` stores the raw polynomial-evaluated SIMION values). JIT-compiled with Numba. See `calculate_integral(PassbandGrid, SWParams, central_speed, central_effective_area, azimuthal_transmission, transmission_spacing)`.
+The loop order is elevation → azimuth → speed. The implementation computes terms in the outermost loop where they are constant:
+
+| Loop level | Work done once at that level |
+|------------|------------------------------|
+| Elevation $\theta$ | Evaluate passband speed bounds, compute $v_\text{lo}$ and $v_\text{hi}$, skip the elevation if they do not overlap, and precompute $v^3P(v/v_0,\theta)/P(1,0^\circ,V)$ for the speed nodes. |
+| Azimuth $\phi$ | Interpolate azimuthal transmission once and reuse it for all speed nodes at that azimuth. |
+| Speed $v$ | Evaluate the Maxwellian term and accumulate the weighted integrand. |
 
 ### Integrator Validation
 
-Representative model spectra below exercise the integrator's edges. The off-axis azimuth case ($\phi_b = 18°$) is the worst overall (18.8%): the bulk sits adjacent to the SG/OA transition where the azimuthal transmission rises five orders of magnitude across 10°, and the optimized integrator cannot resolve that transition as densely as the reference's 0.1° spacing.
+Representative model spectra below exercise the integrator's edges. Most configurations stay within $\sim 1.5\%$ of the reference; the cold-plasma case ($T = 11{,}605$ K, on-axis) reaches $\sim 13\%$ at the spectrum peak because the polynomial-fit passband tail outside the 1%-of-max threshold-crossing carries non-negligible signal that the production integrator deliberately truncates while the fixed-limit reference does not.
 
 ![Production vs ground-truth spectra for six representative SW configurations](figures/spectra.png)
 
@@ -191,7 +195,7 @@ Representative model spectra below exercise the integrator's edges. The off-axis
 
 The optimized integrator is validated against a high-resolution fixed-limit reference (`reference_integral_fixed_limits`) over 10000 random solar-wind configurations (`reference_integrals.csv`). Each configuration is evaluated at the ESA voltage whose central proton speed equals its `bulk_speed`. The histogram below bins the resulting (optimized / reference) ratio, stacked by reference count rate.
 
-High-rate cases ($\geq 10^3$ Hz) cluster within $\pm 1\%$ of unity. The tail at ratio $< 0.5$ is configurations with reference $< 0.1$ Hz where the bulk direction sits many sigma outside the FOV — both integrators round to ~0, well below the noise floor.
+Median $|$ratio $-1|$ is $\sim 0.4\%$. High-rate cases ($\geq 10^3$ Hz) cluster within a few percent of unity. The tail at ratio $< 0.5$ is configurations with reference $< 0.1$ Hz where the bulk direction sits many sigma outside the FOV — both integrators round to ~0, well below the noise floor.
 
 ![Optimized / reference ratio histogram, stacked by reference count rate](figures/reference_vs_optimized_histogram.png)
 
@@ -281,22 +285,36 @@ $$|\mathbf{v}| = |\mathbf{u}|, \qquad \phi_c = \arctan2(u_1,\, u_0) \bmod 360°,
 The velocity covariance is rotated into DPS:
 $$\Sigma_\text{DPS} = R_\text{RTN\to DPS}\,\Sigma_v\,R_\text{RTN\to DPS}^\top, \qquad \Sigma_v = \Sigma_x[2\!:\!5,\,2\!:\!5].$$
 
-Gaussian propagation then gives:
-$$\sigma_{|\mathbf{v}|} = \sqrt{\mathbf{g}_s^\top \Sigma_\text{DPS}\, \mathbf{g}_s}, \quad \mathbf{g}_s = \frac{\mathbf{u}}{|\mathbf{u}|},$$
-$$\sigma_{\phi_c} = \sqrt{\mathbf{g}_c^\top \Sigma_\text{DPS}\, \mathbf{g}_c}, \quad \mathbf{g}_c = \frac{1}{u_{xy}^2}\begin{pmatrix}-u_1\\u_0\\0\end{pmatrix},$$
-$$\sigma_{\phi_d} = \sqrt{\mathbf{g}_d^\top \Sigma_\text{DPS}\, \mathbf{g}_d}, \quad \mathbf{g}_d = \frac{1}{|\mathbf{u}|^2}\begin{pmatrix}-\dfrac{u_0 u_2}{u_{xy}}\\-\dfrac{u_1 u_2}{u_{xy}}\\u_{xy}\end{pmatrix}.$$
+**Speed σ** uses first-order Gaussian propagation:
+$$\sigma_{|\mathbf{v}|} = \sqrt{\mathbf{g}_s^\top \Sigma_\text{DPS}\, \mathbf{g}_s}, \quad \mathbf{g}_s = \frac{\mathbf{u}}{|\mathbf{u}|}.$$
+The linearization is essentially exact whenever $|\mathbf{u}| \gg \sigma$ (always true for SWAPI's bulk speeds vs. the fitted scatter), so MC would only add sampling noise.
 
-These uncertainties reflect the actual residual scatter through the $s^2$ scaling, which absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, temporal variability within the fit window).
+**Clock and deflection angle σ** are propagated by Monte Carlo. The angle gradients,
+$$\mathbf{g}_c = \frac{1}{u_{xy}^2}\begin{pmatrix}-u_1\\u_0\\0\end{pmatrix}, \qquad \mathbf{g}_d = \frac{1}{|\mathbf{u}|^2}\begin{pmatrix}-u_0 u_2 / u_{xy}\\-u_1 u_2 / u_{xy}\\u_{xy}\end{pmatrix},$$
+diverge as $u_{xy} \to 0$. For the typical SWAPI regime — bulk velocity dominated by the spin-axis component, so $u_{xy} \sim \sigma_{xy}$ — the first-order Taylor expansion blows up and underestimates the true σ by tens of percent (verified empirically in `scripts/swapi/compare_angle_propagation.py`: cold-aligned plasma has +49% bias on σ$_{\phi_c}$ and +46% on σ$_{\phi_d}$ vs. ground truth, with σ$_{\phi_c}$ exceeding the uniform-distribution bound of $\approx 104°$). Instead, we draw `N_VELOCITY_ANGLE_MC_SAMPLES = 1000` samples
+$$\mathbf{u}_i \sim \mathcal{N}(\mathbf{u},\, \Sigma_\text{DPS}), \qquad i = 1, \dots, N,$$
+recompute $(\phi_c^{(i)}, \phi_d^{(i)})$ per sample, and take the sample standard deviations. Clock-angle σ uses residuals wrapped to $(-180°, 180°]$ relative to the nominal $\phi_c$ so the $0°/360°$ branch cut doesn't artificially inflate the spread:
+$$\Delta\phi_c^{(i)} = ((\phi_c^{(i)} - \phi_c + 180°) \bmod 360°) - 180°, \qquad \sigma_{\phi_c} = \mathrm{std}(\Delta\phi_c).$$
+Deflection σ is the plain sample std (range $[0°, 180°]$, no branch cut). At $N = 1000$ the residual sampling noise on σ is ${\sim}3\text{--}5\%$, far smaller than the bias being corrected. The RNG is seeded per-call (`np.random.default_rng(0)`) for deterministic outputs.
 
-When $u_{xy} = 0$ exactly, $\mathbf{g}_c$ and $\mathbf{g}_d$ are undefined; the processor sets both $\sigma_{\phi_c}$ and $\sigma_{\phi_d}$ to NaN in that case.
+These uncertainties reflect the actual residual scatter through the $s^2$ scaling on $\Sigma_x$ (covariance of all five fitted parameters before slicing out $\Sigma_v$), which absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, temporal variability within the fit window).
 
-### Inertial bulk velocity (`proton_sw_bulk_velocity_rtn_sun`)
+When $\Sigma_\text{DPS}$ is non-finite (failed fit), all three σ are NaN.
+
+### Inertial bulk velocity and speed
 
 The optimizer returns $\mathbf{v}_b^\text{SC}$ in the spacecraft RTN frame. To recover the plasma velocity in the sun's inertial rest frame the spacecraft velocity is added back:
 $$\mathbf{v}_b^\text{sun} = \mathbf{v}_b^\text{SC} + \mathbf{v}_\text{sc}^\text{RTN},$$
 where $\mathbf{v}_\text{sc}^\text{RTN}$ (km/s) is obtained at the chunk center epoch from `imap_state` in ECLIPJ2000 and rotated into RTN:
 $$\mathbf{v}_\text{sc}^\text{RTN} = M_{\text{ECL} \rightarrow \text{RTN}} \, \mathbf{v}_\text{sc}^\text{ECL}.$$
-This 3-vector is stored as `proton_sw_bulk_velocity_rtn_sun` (shape $N \times 3$, units km/s) in the proton L3A CDF. No uncertainty is attached — $\mathbf{v}_\text{sc}^\text{RTN}$ is SPICE-derived and treated as exact.
+This 3-vector is stored as `proton_sw_bulk_velocity_rtn_sun` (shape $N \times 3$, units km/s) in the proton L3A CDF. Its covariance is stored as `proton_sw_bulk_velocity_rtn_sun_covariance`. Since $\mathbf{v}_\text{sc}^\text{RTN}$ is SPICE-derived and treated as exact, the Sun-frame vector covariance is the fitted spacecraft-frame velocity covariance:
+$$\Sigma_v^\text{sun} = \Sigma_v^\text{SC}.$$
+
+The scalar CDF variable `proton_sw_speed` remains the magnitude of the fitted spacecraft-frame velocity. The separate scalar variable `proton_sw_speed_sun` is the magnitude of the Sun-frame vector:
+$$v_\text{sun} = \left|\mathbf{v}_b^\text{SC} + \mathbf{v}_\text{sc}^\text{RTN}\right|.$$
+Its uncertainty, `proton_sw_speed_sun_uncert`, is propagated with the `uncertainties` package from the correlated fitted velocity components in `result.bulk_velocity_rtn`, after adding the exact spacecraft-velocity offset:
+$$\sigma_{v_\text{sun}} = \mathrm{std}\!\left(\sqrt{\sum_j \left(v_{b,j}^\text{SC} + v_{\text{sc},j}^\text{RTN}\right)^2}\right).$$
+Equivalently, this is the first-order Gaussian propagation $\sqrt{\mathbf{g}_\text{sun}^\top \Sigma_v \mathbf{g}_\text{sun}}$ with $\mathbf{g}_\text{sun} = \mathbf{v}_b^\text{sun}/|\mathbf{v}_b^\text{sun}|$, but the implementation uses the correlated `UFloat` components directly rather than recomputing from `bulk_velocity_rtn_covariance()`.
 
 ## Alpha Particle Moments
 

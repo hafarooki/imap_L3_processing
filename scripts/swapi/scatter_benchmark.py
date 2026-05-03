@@ -121,13 +121,12 @@ def main():
     ax.legend()
     from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
         N_ELEVATION,
-        N_AZIMUTH_SG,
+        N_AZIMUTH,
         N_SPEED,
-        N_AZIMUTH_OA_TARGET_SPACING_DEG,
     )
 
     ax.set_title(
-        f"N_el={N_ELEVATION}  N_az_sg={N_AZIMUTH_SG}  oa_dx={N_AZIMUTH_OA_TARGET_SPACING_DEG}°  N_sp={N_SPEED}\n"
+        f"N_el={N_ELEVATION}  N_az={N_AZIMUTH}  N_sp={N_SPEED}\n"
         f"max|err|={np.abs(rel_errors).max():.1%}   "
         f"median={np.median(np.abs(rel_errors)):.1%}   "
         f"p95={np.percentile(np.abs(rel_errors), 95):.1%}"

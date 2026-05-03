@@ -1,12 +1,14 @@
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import numba
 import numpy as np
 import scipy.optimize
 from numpy import ndarray
-from uncertainties import ufloat
+import uncertainties.umath as umath
+import uncertainties.unumpy as unp
+from uncertainties import UFloat, correlated_values, covariance_matrix, ufloat
 
 from imap_l3_processing.constants import (
     BOLTZMANN_CONSTANT_JOULES_PER_KELVIN,
@@ -33,8 +35,7 @@ class SWParams(NamedTuple):
 
 
 N_ELEVATION = 21
-N_AZIMUTH_SG = 21
-N_AZIMUTH_OA = 21
+N_AZIMUTH = 21
 N_SPEED = 11
 
 # Gauss-Legendre quadrature nodes and weights on the standard interval [-1, 1].
@@ -43,21 +44,13 @@ N_SPEED = 11
 _GL_NODES_ELEVATION, _GL_WEIGHTS_ELEVATION = np.polynomial.legendre.leggauss(
     N_ELEVATION
 )
-_GL_NODES_AZIMUTH_SG, _GL_WEIGHTS_AZIMUTH_SG = np.polynomial.legendre.leggauss(
-    N_AZIMUTH_SG
-)
-_GL_NODES_AZIMUTH_OA, _GL_WEIGHTS_AZIMUTH_OA = np.polynomial.legendre.leggauss(
-    N_AZIMUTH_OA
-)
+_GL_NODES_AZIMUTH, _GL_WEIGHTS_AZIMUTH = np.polynomial.legendre.leggauss(N_AZIMUTH)
 _GL_NODES_SPEED, _GL_WEIGHTS_SPEED = np.polynomial.legendre.leggauss(N_SPEED)
 
-# OA azimuth integration: a scan of `density × transmission` at the in-passband
-# elevation peak across the full OA range finds where the integrand is non-
-# negligible. Then the fixed-N GL above runs over that trimmed range. The
-# previous gaussian-only `angular_width` was wasteful because OA transmission is
-# essentially zero from 20°–25° — the typical proton at |bulk_az| < 6° opened a
-# 1° OA sliver entirely in the dead zone. See `_trim_oa_azimuth_by_integrand`.
-OA_SCAN_THRESHOLD = 1e-3  # trim where g < threshold × max(g)
+# OA azimuth integration: the gaussian Δα window is refined by scanning
+# `density × T` and trimming both ends where it falls below threshold.
+# See `_trim_oa_azimuth_by_integrand`.
+OA_SCAN_THRESHOLD = 1e-6  # trim where g < threshold × max(g)
 
 EPSILON_OA = 1e-6
 EPSILON_SG = 1e-6
@@ -76,53 +69,97 @@ INITIAL_TEMPERATURE_FLOOR_K = (
     PROTON_CHARGE_COULOMBS / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
 )
 
+# Number of Monte Carlo samples used by `derive_velocity_angles` to propagate
+# the velocity covariance through the nonlinear speed/clock/deflection-angle
+# transforms. The angle gradients scale as 1/v_xy² and 1/(s²·v_xy), so the
+# first-order delta method underestimates σ when σ_xy is comparable to v_xy
+# (typical for SWAPI: bulk velocity is dominated by the spin-axis component).
+N_VELOCITY_ANGLE_MC_SAMPLES = 1000
+
 
 @dataclass
 class ProtonSolarWindMoments:
-    density: float  # cm^-3
-    temperature: float  # K
-    bulk_velocity_rtn: ndarray  # shape (3,), km/s, [R, T, N]; inertial frame
+    density: UFloat  # cm^-3
+    temperature: UFloat  # K
+    bulk_velocity_rtn: tuple[UFloat, UFloat, UFloat]  # km/s, [R, T, N]; correlated
     bad_fit_flag: int
-    density_sigma: float = np.nan
-    temperature_sigma: float = np.nan
-    velocity_covariance: ndarray = field(
-        default_factory=lambda: np.full((3, 3), np.nan)
-    )  # shape (3, 3), km^2/s^2; covariance of [vR, vT, vN]
+
+    def bulk_velocity_rtn_nominal(self) -> ndarray:
+        """Nominal RTN velocity vector (km/s); shape (3,)."""
+        return np.array([v.nominal_value for v in self.bulk_velocity_rtn])
+
+    def bulk_velocity_rtn_covariance(self) -> ndarray:
+        """3×3 RTN velocity covariance (km²/s²)."""
+        return np.array(covariance_matrix(self.bulk_velocity_rtn))
+
+
+def make_correlated_velocity(
+    v_mean: ndarray, v_cov: ndarray
+) -> tuple[UFloat, UFloat, UFloat]:
+    """Build a correlated 3-tuple of UFloats from (mean, covariance). Falls
+    back to independent NaN-σ UFloats if the covariance is non-finite or
+    `correlated_values` rejects it (LinAlg failures, NaN fills, etc.)."""
+    if np.all(np.isfinite(v_cov)):
+        try:
+            return tuple(correlated_values(v_mean, v_cov))
+        except Exception:
+            pass
+    return tuple(ufloat(float(v), np.nan) for v in v_mean)
 
 
 def derive_velocity_angles(
     fitting_result: "ProtonSolarWindMoments",
     dsrf_to_rtn,
 ) -> tuple:
-    """Return (speed, clock_angle, deflection_angle) as ufloats in the DPS frame."""
+    """Return (speed, clock_angle, deflection_angle) as ufloats in the DPS frame.
+
+    Speed uncertainty is propagated automatically by the ``uncertainties``
+    package (first-order delta method via ``umath.sqrt(Σ xᵢ²)``), which is
+    essentially exact whenever ``|u| >> σ``. Clock and deflection angles, by contrast, have
+    arctan2/arccos gradients that scale as ``1/v_xy²`` and ``1/(s²·v_xy)``,
+    which underestimate σ severely whenever ``σ_xy`` is comparable to
+    ``v_xy`` — the typical SWAPI regime, since the bulk velocity is
+    dominated by the spin-axis component. Their σ are computed by drawing
+    ``N_VELOCITY_ANGLE_MC_SAMPLES`` velocity samples from
+    ``MultivariateNormal(u, cov)`` and applying the transforms per-sample.
+    Clock-angle σ uses residuals wrapped to (-180°, 180°] so the 0°/360°
+    branch cut doesn't inflate the spread.
+    """
     R = dsrf_to_rtn.T
-    u = R @ (fitting_result.bulk_velocity_rtn)
+    u_unc = R @ np.array(fitting_result.bulk_velocity_rtn)
+    u = unp.nominal_values(u_unc)
+    cov_DPS = np.array(covariance_matrix(u_unc))
 
-    speed = float(np.linalg.norm(u))
-    speed2 = speed**2
-    vxy2 = float(u[0] ** 2 + u[1] ** 2)
-    vxy = float(np.sqrt(vxy2))
+    speed_nom = float(np.linalg.norm(u))
+    clock_nom = float(np.degrees(np.arctan2(u[1], u[0])) % 360)
+    defl_nom = float(np.degrees(np.arccos(-u[2] / speed_nom)))
 
-    cov_DPS = R @ fitting_result.velocity_covariance @ R.T
-
-    g_speed = u / speed
-    speed_sigma = float(np.sqrt(g_speed @ cov_DPS @ g_speed))
-
-    if vxy2 > 0:
-        g_clock = np.array([-u[1] / vxy2, u[0] / vxy2, 0.0])
-        clock_sigma = float(np.degrees(np.sqrt(g_clock @ cov_DPS @ g_clock)))
-        g_defl = np.array(
-            [u[0] * u[2] / (speed2 * vxy), u[1] * u[2] / (speed2 * vxy), -vxy / speed2]
+    if not np.all(np.isfinite(cov_DPS)):
+        return (
+            ufloat(speed_nom, np.nan),
+            ufloat(clock_nom, np.nan),
+            ufloat(defl_nom, np.nan),
         )
-        defl_sigma = float(np.degrees(np.sqrt(g_defl @ cov_DPS @ g_defl)))
-    else:
-        clock_sigma = np.nan
-        defl_sigma = np.nan
+
+    speed = umath.sqrt(sum(x**2 for x in u_unc))
+
+    rng = np.random.default_rng(0)
+    samples = rng.multivariate_normal(
+        u, cov_DPS, size=N_VELOCITY_ANGLE_MC_SAMPLES, check_valid="ignore"
+    )
+
+    clocks = np.degrees(np.arctan2(samples[:, 1], samples[:, 0])) % 360.0
+    clock_resid = ((clocks - clock_nom + 180.0) % 360.0) - 180.0
+    clock_sigma = float(np.std(clock_resid, ddof=1))
+
+    sample_speeds = np.linalg.norm(samples, axis=1)
+    defls = np.degrees(np.arccos(np.clip(-samples[:, 2] / sample_speeds, -1.0, 1.0)))
+    defl_sigma = float(np.std(defls, ddof=1))
 
     return (
-        ufloat(speed, speed_sigma),
-        ufloat(np.degrees(np.arctan2(u[1], u[0])) % 360, clock_sigma),
-        ufloat(np.degrees(np.arccos(-u[2] / speed)), defl_sigma),
+        speed,
+        ufloat(clock_nom, clock_sigma),
+        ufloat(defl_nom, defl_sigma),
     )
 
 
@@ -350,6 +387,167 @@ def apply_deadtime_correction_array(true_rates: ndarray) -> ndarray:
     return true_rates / (1.0 + SWAPI_DEADTIME_S * true_rates)
 
 
+@numba.njit(nogil=True, inline="always")
+def _density_area_norm(sw_params: SWParams, central_effective_area: float) -> float:
+    """A_eff · n / (√2π v_th)³ · (km→cm). Multiplied by a phase-space integral in
+    (km/s × rad²) units, gives a count rate in Hz."""
+    return (
+        central_effective_area
+        * sw_params.density
+        * (np.sqrt(2 * np.pi) * sw_params.thermal_speed) ** -3
+        * 1e5
+    )
+
+
+@numba.njit(fastmath=True, nogil=True)
+def _integrate_region(
+    grid: PassbandGrid,
+    sw_params: SWParams,
+    central_speed: float,
+    central_effective_area: float,
+    azimuthal_transmission: ndarray,
+    azimuthal_transmission_spacing: float,
+    is_sunglasses: bool,
+    min_elevation: float,
+    max_elevation: float,
+    min_azimuth: float,
+    max_azimuth: float,
+):
+    sin_bulk_elevation = math.sin((math.pi / 180) * sw_params.bulk_elevation)
+    cos_bulk_elevation = math.cos((math.pi / 180) * sw_params.bulk_elevation)
+
+    passband_norm = interpolate_passband(
+        grid, is_sunglasses, elevation=0, speed_ratio=1.0
+    )
+
+    half_el = 0.5 * (max_elevation - min_elevation)
+    mid_el = 0.5 * (max_elevation + min_elevation)
+    elevation_points = mid_el + half_el * _GL_NODES_ELEVATION
+    elevation_weights = half_el * _GL_WEIGHTS_ELEVATION
+
+    half_az = 0.5 * (max_azimuth - min_azimuth)
+    mid_az = 0.5 * (max_azimuth + min_azimuth)
+    azimuth_points = mid_az + half_az * _GL_NODES_AZIMUTH
+    azimuth_weights = half_az * _GL_WEIGHTS_AZIMUTH
+
+    interpolated_transmission = np.array(
+        [
+            _interpolate_transmission(
+                azimuthal_transmission, azimuthal_transmission_spacing, x
+            )
+            for x in azimuth_points
+        ]
+    )
+
+    elevation_integral = 0.0
+    for i_elevation, elevation in enumerate(elevation_points):
+        cos_elevation = math.cos((math.pi / 180) * elevation)
+
+        passband_lower_speed = central_speed * _eval_boundary(
+            grid, is_sunglasses, elevation, True
+        )
+        passband_upper_speed = central_speed * _eval_boundary(
+            grid, is_sunglasses, elevation, False
+        )
+
+        min_speed, max_speed = _dynamic_limits(
+            sw_params.bulk_speed,
+            sw_params.thermal_speed * 10,
+            passband_lower_speed,
+            passband_upper_speed,
+        )
+
+        if max_speed <= min_speed:
+            continue
+
+        half_sp = 0.5 * (max_speed - min_speed)
+        mid_sp = 0.5 * (max_speed + min_speed)
+        speed_points = mid_sp + half_sp * _GL_NODES_SPEED
+        speed_weights = half_sp * _GL_WEIGHTS_SPEED
+
+        passband_times_speed3_row = (
+            np.array(
+                [
+                    x**3
+                    * interpolate_passband(
+                        grid, is_sunglasses, elevation, x / central_speed
+                    )
+                    for x in speed_points
+                ]
+            )
+            / passband_norm
+        )
+
+        sin_elevation = math.sin((math.pi / 180) * elevation)
+        azimuth_integral = 0.0
+        for i_azimuth, azimuth in enumerate(azimuth_points):
+            cos_angle = (
+                sin_bulk_elevation * sin_elevation
+                + cos_bulk_elevation
+                * cos_elevation
+                * math.cos((math.pi / 180) * (azimuth - sw_params.bulk_azimuth))
+            )
+
+            speed_integral = 0.0
+            for i_speed, speed in enumerate(speed_points):
+                speed_integral += (
+                    speed_weights[i_speed]
+                    * passband_times_speed3_row[i_speed]
+                    * _exponential_term(sw_params, cos_angle, speed)
+                )
+
+            azimuth_integral += (
+                azimuth_weights[i_azimuth]
+                * interpolated_transmission[i_azimuth]
+                * speed_integral
+            )
+
+        elevation_integral += (
+            elevation_weights[i_elevation] * cos_elevation * azimuth_integral
+        )
+
+    return (
+        elevation_integral
+        * (math.pi / 180) ** 2  # deg^2 -> rad^2
+        * _density_area_norm(sw_params, central_effective_area)
+    )
+
+
+OA_SKIP_FRACTION = 1e-3
+
+
+KM_TO_CM = 1e5
+
+
+@numba.njit(nogil=True)
+def _oa_rate_upper_bound(
+    grid: PassbandGrid,
+    central_speed: float,
+    central_effective_area: float,
+    integral_Tg: float,
+    min_elevation: float,
+    max_elevation: float,
+) -> float:
+    """Heuristic upper estimate of the OA region rate (Hz):
+        Ĉ_OA = A₀ · v₀³ · Δθ · Δv · ∫ T(φ) g(φ) dφ
+    bounding cos(θ) ≤ 1 (giving Δθ) and v³ P(v/v₀, θ) ≤ v₀³ supported on the
+    passband (giving Δv = (r_max(0) - r_min(0))·v₀ at θ = 0°). The azimuth
+    integral is supplied by `_trim_oa_azimuth_by_integrand` with full Maxwellian
+    normalization (i.e. g(φ) = f(v₀, θ_b', φ))."""
+    delta_theta_rad = (math.pi / 180.0) * (max_elevation - min_elevation)
+    delta_v = central_speed * (
+        _eval_boundary(grid, False, 0.0, False) - _eval_boundary(grid, False, 0.0, True)
+    )
+    return (
+        central_effective_area
+        * central_speed**3
+        * delta_theta_rad
+        * delta_v
+        * integral_Tg
+        * KM_TO_CM
+    )
+
+
 @numba.njit(fastmath=True, nogil=True)
 def calculate_integral(
     grid: PassbandGrid,
@@ -359,155 +557,73 @@ def calculate_integral(
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
 ):
-    """Pre-deadtime model count rate at one ESA voltage step.
+    """Pre-deadtime model count rate at one ESA voltage step."""
 
-    The V-only `grid` carries passband-shape arrays + boundaries; species/V/time-dependent
-    quantities are passed as scalars (`central_speed`, `central_effective_area`) plus the
-    constant azimuthal transmission table. `central_effective_area` should already include
-    any species/time efficiency correction (e.g. ε_species(t)/ε_p(t_lab) × A_lab(V))."""
-    sin_bulk_elevation = math.sin((math.pi / 180) * sw_params.bulk_elevation)
-    cos_bulk_elevation = math.cos((math.pi / 180) * sw_params.bulk_elevation)
-
-    count_rate = 0.0
-
-    for region in (0, -1, +1):
-        is_sunglasses = region == 0
-        # Normalization point: speed_ratio = central_speed / central_speed = 1.
-        passband_norm = interpolate_passband(
-            grid, is_sunglasses, elevation=0, speed_ratio=1.0
+    # SG first — used as the reference for the OA skip decision.
+    min_el, max_el, min_az, max_az = _get_angular_limits(
+        sw_params, 0, grid, central_speed
+    )
+    sg_rate = 0.0
+    if max_el > min_el and max_az > min_az:
+        sg_rate = _integrate_region(
+            grid,
+            sw_params,
+            central_speed,
+            central_effective_area,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
+            True,
+            min_el,
+            max_el,
+            min_az,
+            max_az,
         )
 
-        min_elevation, max_elevation, min_azimuth, max_azimuth = _get_angular_limits(
+    count_rate = sg_rate
+
+    for region in (-1, +1):
+        min_el, max_el, min_az, max_az = _get_angular_limits(
             sw_params, region, grid, central_speed
         )
-
-        # skip region if completely out of FOV
-        if max_elevation <= min_elevation or max_azimuth <= min_azimuth:
+        if max_el <= min_el or max_az <= min_az:
             continue
 
-        # For OA, replace the gaussian-only azimuth bounds with a transmission-aware
-        # scan. The original [bulk_az − width, bulk_az + width] clamp wastes nodes
-        # in the OA dead zone (T < 1e-3 from 20°–25°). The scan estimates
-        # density × T at the elevation peak inside the OA passband, sweeping
-        # azimuth, and trims to where the integrand exceeds OA_SCAN_THRESHOLD × max.
-        if not is_sunglasses:
-            min_azimuth, max_azimuth = _trim_oa_azimuth_by_integrand(
-                sw_params,
-                region,
-                central_speed,
-                min_elevation,
-                max_elevation,
-                azimuthal_transmission,
-                azimuthal_transmission_spacing,
-            )
-            if max_azimuth <= min_azimuth:
-                continue
-
-        # TODO choose speed points dynamically for each elevation by zero-trimming;
-        # must fit a linear model to the minimum and maximum point for integration
-
-        # Gauss-Legendre points/weights, transformed from [-1, 1] to the integration window.
-        half_el = 0.5 * (max_elevation - min_elevation)
-        mid_el = 0.5 * (max_elevation + min_elevation)
-        elevation_points = mid_el + half_el * _GL_NODES_ELEVATION
-        elevation_weights = half_el * _GL_WEIGHTS_ELEVATION
-
-        if is_sunglasses:
-            az_nodes = _GL_NODES_AZIMUTH_SG
-            az_weights = _GL_WEIGHTS_AZIMUTH_SG
-        else:
-            az_nodes = _GL_NODES_AZIMUTH_OA
-            az_weights = _GL_WEIGHTS_AZIMUTH_OA
-        half_az = 0.5 * (max_azimuth - min_azimuth)
-        mid_az = 0.5 * (max_azimuth + min_azimuth)
-        azimuth_points = mid_az + half_az * az_nodes
-        azimuth_weights = half_az * az_weights
-
-        interpolated_transmission = np.array(
-            [
-                _interpolate_transmission(
-                    azimuthal_transmission, azimuthal_transmission_spacing, x
-                )
-                for x in azimuth_points
-            ]
+        min_az, max_az, integral_Tg = _trim_oa_azimuth_by_integrand(
+            sw_params,
+            central_speed,
+            min_el,
+            max_el,
+            min_az,
+            max_az,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
         )
+        if max_az <= min_az:
+            continue
 
-        elevation_integral = 0
-        for i_elevation, elevation in enumerate(elevation_points):
-            sin_elevation = math.sin((math.pi / 180) * elevation)
-            cos_elevation = math.cos((math.pi / 180) * elevation)
+        oa_upper_bound = _oa_rate_upper_bound(
+            grid,
+            central_speed,
+            central_effective_area,
+            integral_Tg,
+            min_el,
+            max_el,
+        )
+        if oa_upper_bound < max(0.1, OA_SKIP_FRACTION * sg_rate):
+            continue
 
-            passband_lower_speed = central_speed * _eval_boundary(
-                grid, is_sunglasses, elevation, True
-            )
-            passband_upper_speed = central_speed * _eval_boundary(
-                grid, is_sunglasses, elevation, False
-            )
-
-            min_speed, max_speed = _dynamic_limits(
-                sw_params.bulk_speed,
-                sw_params.thermal_speed * 10,
-                passband_lower_speed,
-                passband_upper_speed,
-            )
-
-            # skip if out of passband
-            if max_speed <= min_speed:
-                continue
-
-            half_sp = 0.5 * (max_speed - min_speed)
-            mid_sp = 0.5 * (max_speed + min_speed)
-            speed_points = mid_sp + half_sp * _GL_NODES_SPEED
-            speed_weights = half_sp * _GL_WEIGHTS_SPEED
-
-            # TODO create array outside of loop and just update it; or just flip azimuth and speed integrals
-            passband_times_speed3_row = (
-                np.array(
-                    [
-                        x**3
-                        * interpolate_passband(
-                            grid, is_sunglasses, elevation, x / central_speed
-                        )
-                        for x in speed_points
-                    ]
-                )
-                / passband_norm
-            )
-
-            azimuth_integral = 0
-            for i_azimuth, azimuth in enumerate(azimuth_points):
-                cos_angle = (
-                    sin_bulk_elevation * sin_elevation
-                    + cos_bulk_elevation
-                    * cos_elevation
-                    * np.cos((math.pi / 180) * (azimuth - sw_params.bulk_azimuth))
-                )
-
-                speed_integral = 0.0
-                for i_speed, speed in enumerate(speed_points):
-                    speed_integral += (
-                        speed_weights[i_speed]
-                        * passband_times_speed3_row[i_speed]
-                        * _exponential_term(sw_params, cos_angle, speed)
-                    )
-
-                azimuth_integral += (
-                    azimuth_weights[i_azimuth]
-                    * interpolated_transmission[i_azimuth]
-                    * speed_integral
-                )
-
-            elevation_integral += (
-                elevation_weights[i_elevation] * cos_elevation * azimuth_integral
-            )
-
-        count_rate += (
-            elevation_integral
-            * central_effective_area
-            * sw_params.density
-            * (np.sqrt(2 * np.pi) * sw_params.thermal_speed) ** -3
-            * 1e5  # km/cm/s -> 1/s
-            * (math.pi / 180) ** 2  # deg^2 -> rad^2
+        count_rate += _integrate_region(
+            grid,
+            sw_params,
+            central_speed,
+            central_effective_area,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
+            False,
+            min_el,
+            max_el,
+            min_az,
+            max_az,
         )
 
     return count_rate
@@ -596,109 +712,75 @@ def _get_angular_limits(
     return min_elevation, max_elevation, min_azimuth, max_azimuth
 
 
-OA_FULL_AZ_LO = 20.0
-OA_FULL_AZ_HI = 150.0
-OA_SCAN_SPACING_MAX_DEG = 1.0  # ceiling — coarse for typical (T~100,000 K)
-OA_SCAN_SPACING_MIN_DEG = 0.1  # floor — fine for cold-plasma extremes
-OA_SKIP_ABS_THRESHOLD = 1e-9  # max of density × T below this → skip OA region
+N_OA_SCAN = 64
+OA_SKIP_ABS_THRESHOLD = 1e-9
 
 
 @numba.njit(nogil=True)
 def _trim_oa_azimuth_by_integrand(
     sw_params: SWParams,
-    region: int,
     central_speed: float,
     min_elevation: float,
     max_elevation: float,
+    gaussian_az_lo: float,
+    gaussian_az_hi: float,
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
 ):
-    """Find the OA azimuth subrange where the integrand is non-negligible.
+    """Trim the OA azimuth window by walking both ends inward until the
+    integrand exceeds threshold. Returns `(0.0, 0.0, 0.0)` to skip the region.
+    Third return value is ∫ T(φ) g(φ) dφ over the trimmed window in radians,
+    where g(φ) = f(v₀, θ_b', φ) is the full Maxwellian (with normalization)."""
+    if gaussian_az_hi <= gaussian_az_lo:
+        return 0.0, 0.0, 0.0
 
-    Scans `density × T` at (elevation=peak-within-passband, speed=central_speed)
-    on a grid across the full OA passband. Spacing is adapted to the gaussian
-    angular width σ_ang (= thermal_speed / bulk_speed) so cold plasma peaks
-    aren't missed by a coarse sample.
+    azimuths = np.linspace(gaussian_az_lo, gaussian_az_hi, N_OA_SCAN)
+    scan_el = _clamp(sw_params.bulk_elevation, min_elevation, max_elevation)
 
-    Returns `(0.0, 0.0)` to signal "skip OA region entirely"."""
-    if region == +1:
-        scan_lo, scan_hi = OA_FULL_AZ_LO, OA_FULL_AZ_HI
-    else:
-        scan_lo, scan_hi = -OA_FULL_AZ_HI, -OA_FULL_AZ_LO
+    deg2rad = math.pi / 180.0
+    sin_be = math.sin(deg2rad * sw_params.bulk_elevation)
+    cos_be = math.cos(deg2rad * sw_params.bulk_elevation)
+    sin_se = math.sin(deg2rad * scan_el)
+    cos_se = math.cos(deg2rad * scan_el)
 
-    # Adaptive resolution: ~half of σ_ang so the scan resolves the gaussian peak
-    # in azimuth even when it's < 1° wide.
-    sigma_ang_deg = (180.0 / math.pi) * sw_params.thermal_speed / sw_params.bulk_speed
-    spacing = 0.5 * sigma_ang_deg
-    if spacing < OA_SCAN_SPACING_MIN_DEG:
-        spacing = OA_SCAN_SPACING_MIN_DEG
-    elif spacing > OA_SCAN_SPACING_MAX_DEG:
-        spacing = OA_SCAN_SPACING_MAX_DEG
-    n_scan = int(math.ceil((scan_hi - scan_lo) / spacing)) + 1
-    if n_scan < 2:
-        n_scan = 2
-
-    # Pick the elevation closest to bulk_el that's inside the integration window.
-    # That's where density (gaussian peak vs el at fixed az) is maximal.
-    scan_el = sw_params.bulk_elevation
-    if scan_el < min_elevation:
-        scan_el = min_elevation
-    elif scan_el > max_elevation:
-        scan_el = max_elevation
-
-    sin_be = math.sin((math.pi / 180) * sw_params.bulk_elevation)
-    cos_be = math.cos((math.pi / 180) * sw_params.bulk_elevation)
-    sin_se = math.sin((math.pi / 180) * scan_el)
-    cos_se = math.cos((math.pi / 180) * scan_el)
-
-    bulk_az = sw_params.bulk_azimuth
-    bs = sw_params.bulk_speed
-    cs = central_speed
-    inv_2thermal2 = 1.0 / (2.0 * sw_params.thermal_speed**2)
-
-    g = np.empty(n_scan)
-    g_max = 0.0
-    step = (scan_hi - scan_lo) / (n_scan - 1)
-    for i in range(n_scan):
-        az = scan_lo + i * step
-        cos_da = math.cos((math.pi / 180) * (az - bulk_az))
-        cos_angle = sin_be * sin_se + cos_be * cos_se * cos_da
-        d2 = cs * cs + bs * bs - 2.0 * cs * bs * cos_angle
-        density = math.exp(-d2 * inv_2thermal2)
-        T = _interpolate_transmission(
-            azimuthal_transmission, azimuthal_transmission_spacing, az
+    cos_da = np.cos(deg2rad * (azimuths - sw_params.bulk_azimuth))
+    cos_angle = sin_be * sin_se + cos_be * cos_se * cos_da
+    d2 = (
+        central_speed**2
+        + sw_params.bulk_speed**2
+        - 2.0 * central_speed * sw_params.bulk_speed * cos_angle
+    )
+    kT = np.exp(-d2 / (2.0 * sw_params.thermal_speed**2))
+    for i in range(N_OA_SCAN):
+        kT[i] *= _interpolate_transmission(
+            azimuthal_transmission, azimuthal_transmission_spacing, azimuths[i]
         )
-        gi = density * T
-        g[i] = gi
-        if gi > g_max:
-            g_max = gi
 
-    if g_max < OA_SKIP_ABS_THRESHOLD:
-        return 0.0, 0.0
+    kT_max = np.max(kT)
+    if kT_max < OA_SKIP_ABS_THRESHOLD:
+        return 0.0, 0.0, 0.0
 
-    threshold_val = OA_SCAN_THRESHOLD * g_max
-    # Always anchor to the OA inner boundary (SG/OA transition at ±20°): T = 0
-    # there, so g(boundary) is below threshold even when the peak is right next
-    # to it. Trimming the boundary side cuts off the rising-edge contribution.
-    # Trim only the FAR end, where density has decayed.
-    if region == +1:
-        az_lo = scan_lo  # = 20°
-        az_hi = scan_lo
-        for i in range(n_scan - 1, -1, -1):
-            if g[i] > threshold_val:
-                az_hi = scan_lo + i * step
-                break
-    else:
-        az_hi = scan_hi  # = -20°
-        az_lo = scan_hi
-        for i in range(n_scan):
-            if g[i] > threshold_val:
-                az_lo = scan_lo + i * step
-                break
+    threshold_val = OA_SCAN_THRESHOLD * kT_max
 
-    if az_hi <= az_lo:
-        return 0.0, 0.0
-    return az_lo, az_hi
+    lo_i = 0
+    for i in range(N_OA_SCAN):
+        if kT[i] > threshold_val:
+            lo_i = max(i - 1, 0)
+            break
+
+    hi_i = N_OA_SCAN - 1
+    for i in range(N_OA_SCAN - 1, -1, -1):
+        if kT[i] > threshold_val:
+            hi_i = min(i + 1, N_OA_SCAN - 1)
+            break
+
+    dphi_rad = (azimuths[1] - azimuths[0]) * deg2rad
+    maxwellian_norm = (
+        sw_params.density / (np.sqrt(2.0 * np.pi) * sw_params.thermal_speed) ** 3
+    )
+    integral_Tg = np.trapezoid(kT[lo_i : hi_i + 1], dx=dphi_rad) * maxwellian_norm
+
+    return azimuths[lo_i], azimuths[hi_i], integral_Tg
 
 
 @numba.njit(nogil=True)
@@ -901,11 +983,10 @@ def _optimize(
         velocity_covariance = np.full((3, 3), np.nan)
 
     return ProtonSolarWindMoments(
-        density=density,
-        temperature=temperature,
-        bulk_velocity_rtn=bulk_velocity_rtn,
+        density=ufloat(density, density_sigma),
+        temperature=ufloat(temperature, temperature_sigma),
+        bulk_velocity_rtn=make_correlated_velocity(
+            bulk_velocity_rtn, velocity_covariance
+        ),
         bad_fit_flag=bad_fit_flag,
-        density_sigma=density_sigma,
-        temperature_sigma=temperature_sigma,
-        velocity_covariance=velocity_covariance,
     )

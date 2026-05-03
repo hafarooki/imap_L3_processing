@@ -549,7 +549,8 @@ class TestSwapiProcessor(TestCase):
         mock_spicepy.ktotal.return_value = 0
         mock_get_swapi_geometry.return_value = np.tile(np.eye(3), (100, 1, 1))
         mock_get_swapi_dsrf_to_rtn.return_value = np.eye(3).reshape(1, 3, 3)
-        mock_get_spacecraft_velocity_rtn.return_value = np.zeros(3)
+        sc_velocity_rtn = np.array([10.0, -3.0, 2.0])
+        mock_get_spacecraft_velocity_rtn.return_value = sc_velocity_rtn
 
         returned_bulk_velocity_rtn = np.array([400.0, 10.0, 5.0])
         returned_density = 5.0
@@ -652,18 +653,26 @@ class TestSwapiProcessor(TestCase):
         )
         mock_chunk_l2_data.assert_has_calls([call(swapi_l3a_dependencies.data, 5)])
 
-        (
-            actual_proton_metadata,
-            actual_proton_epoch,
-            actual_proton_sw_speed,
-            actual_proton_sw_temperature,
-            actual_proton_sw_density,
-            actual_proton_sw_clock_angle,
-            actual_proton_sw_deflection_angle,
-            actual_quality_flags,
-            actual_proton_sw_bulk_velocity_rtn_sun,
-            actual_proton_sw_bulk_velocity_rtn_sc,
-        ) = mock_proton_solar_wind_data_constructor.call_args.args
+        (actual_proton_metadata,) = (
+            mock_proton_solar_wind_data_constructor.call_args.args
+        )
+        actual_proton_fields = mock_proton_solar_wind_data_constructor.call_args.kwargs
+        actual_proton_epoch = actual_proton_fields["epoch"]
+        actual_proton_sw_speed = actual_proton_fields["proton_sw_speed"]
+        actual_proton_sw_speed_sun = actual_proton_fields["proton_sw_speed_sun"]
+        actual_proton_sw_temperature = actual_proton_fields["proton_sw_temperature"]
+        actual_proton_sw_density = actual_proton_fields["proton_sw_density"]
+        actual_proton_sw_clock_angle = actual_proton_fields["proton_sw_clock_angle"]
+        actual_proton_sw_deflection_angle = actual_proton_fields[
+            "proton_sw_deflection_angle"
+        ]
+        actual_quality_flags = actual_proton_fields["quality_flags"]
+        actual_proton_sw_bulk_velocity_rtn_sun = actual_proton_fields[
+            "proton_sw_bulk_velocity_rtn_sun"
+        ]
+        actual_proton_sw_bulk_velocity_rtn_sc = actual_proton_fields[
+            "proton_sw_bulk_velocity_rtn_sc"
+        ]
 
         self.assertEqual(expected_proton_metadata, actual_proton_metadata)
         np.testing.assert_array_equal(
@@ -673,7 +682,11 @@ class TestSwapiProcessor(TestCase):
         )
 
         expected_speed = np.linalg.norm(returned_bulk_velocity_rtn)
+        expected_sun_speed = np.linalg.norm(
+            returned_bulk_velocity_rtn + sc_velocity_rtn
+        )
         self.assertAlmostEqual(actual_proton_sw_speed[0].nominal_value, expected_speed)
+        self.assertAlmostEqual(actual_proton_sw_speed_sun[0], expected_sun_speed)
         self.assertAlmostEqual(
             actual_proton_sw_temperature[0].nominal_value, returned_temperature
         )
@@ -697,7 +710,11 @@ class TestSwapiProcessor(TestCase):
             np.array([SwapiL3Flags.NONE]), actual_quality_flags, strict=True
         )
         np.testing.assert_allclose(
-            actual_proton_sw_bulk_velocity_rtn_sun[0], returned_bulk_velocity_rtn
+            actual_proton_sw_bulk_velocity_rtn_sun[0],
+            returned_bulk_velocity_rtn + sc_velocity_rtn,
+        )
+        np.testing.assert_allclose(
+            actual_proton_sw_bulk_velocity_rtn_sc[0], returned_bulk_velocity_rtn
         )
 
         mock_manager.add_global_attribute.assert_has_calls(
@@ -828,9 +845,9 @@ class TestSwapiProcessor(TestCase):
         swapi_processor = SwapiProcessor(dependencies, input_metadata)
         swapi_processor.process()
 
-        (_, _, _, _, _, _, _, actual_quality_flags, _, _) = (
-            mock_proton_solar_wind_data_constructor.call_args.args
-        )
+        actual_quality_flags = mock_proton_solar_wind_data_constructor.call_args.kwargs[
+            "quality_flags"
+        ]
         np.testing.assert_array_equal(
             np.array([SwapiL3Flags.HI_CHI_SQ]), actual_quality_flags, strict=True
         )

@@ -15,6 +15,8 @@ EPOCH_CDF_VAR_NAME = "epoch"
 EPOCH_DELTA_CDF_VAR_NAME = "epoch_delta"
 PROTON_SOLAR_WIND_SPEED_CDF_VAR_NAME = "proton_sw_speed"
 PROTON_SOLAR_WIND_SPEED_UNCERTAINTY_CDF_VAR_NAME = "proton_sw_speed_uncert"
+PROTON_SOLAR_WIND_SPEED_SUN_CDF_VAR_NAME = "proton_sw_speed_sun"
+PROTON_SOLAR_WIND_SPEED_SUN_UNCERTAINTY_CDF_VAR_NAME = "proton_sw_speed_sun_uncert"
 PROTON_SOLAR_WIND_TEMPERATURE_CDF_VAR_NAME = "proton_sw_temperature"
 PROTON_SOLAR_WIND_TEMPERATURE_UNCERTAINTY_CDF_VAR_NAME = "proton_sw_temperature_uncert"
 PROTON_SOLAR_WIND_DENSITY_CDF_VAR_NAME = "proton_sw_density"
@@ -28,7 +30,13 @@ PROTON_SOLAR_WIND_DEFLECTION_ANGLE_UNCERTAINTY_CDF_VAR_NAME = (
     "proton_sw_deflection_angle_uncert"
 )
 PROTON_SOLAR_WIND_BULK_VELOCITY_RTN_SUN_CDF_VAR_NAME = "proton_sw_bulk_velocity_rtn_sun"
+PROTON_SOLAR_WIND_BULK_VELOCITY_RTN_SUN_COVARIANCE_CDF_VAR_NAME = (
+    "proton_sw_bulk_velocity_rtn_sun_covariance"
+)
 PROTON_SOLAR_WIND_BULK_VELOCITY_RTN_SC_CDF_VAR_NAME = "proton_sw_bulk_velocity_rtn_sc"
+PROTON_SOLAR_WIND_BULK_VELOCITY_RTN_SC_COVARIANCE_CDF_VAR_NAME = (
+    "proton_sw_bulk_velocity_rtn_sc_covariance"
+)
 
 ALPHA_SOLAR_WIND_DENSITY_CDF_VAR_NAME = "alpha_sw_density"
 ALPHA_SOLAR_WIND_DENSITY_UNCERTAINTY_CDF_VAR_NAME = "alpha_sw_density_uncert"
@@ -67,74 +75,93 @@ SWAPI_QUALITY_FLAGS_CDF_VAR_NAME = "swp_flags"
 
 @dataclass
 class SwapiL3ProtonSolarWindData(DataProduct):
-    epoch: np.ndarray[float]
-    proton_sw_speed: np.ndarray[float]
-    proton_sw_temperature: np.ndarray[float]
-    proton_sw_density: np.ndarray[float]
-    proton_sw_clock_angle: np.ndarray[float]
-    proton_sw_deflection_angle: np.ndarray[float]
+    epoch: np.ndarray
+    proton_sw_speed: np.ndarray
+    proton_sw_speed_uncert: np.ndarray
+    proton_sw_speed_sun: np.ndarray
+    proton_sw_speed_sun_uncert: np.ndarray
+    proton_sw_temperature: np.ndarray
+    proton_sw_temperature_uncert: np.ndarray
+    proton_sw_density: np.ndarray
+    proton_sw_density_uncert: np.ndarray
+    proton_sw_clock_angle: np.ndarray
+    proton_sw_clock_angle_uncert: np.ndarray
+    proton_sw_deflection_angle: np.ndarray
+    proton_sw_deflection_angle_uncert: np.ndarray
+    proton_sw_bulk_velocity_rtn_sun: np.ndarray  # shape (N, 3), km/s, inertial RTN
+    proton_sw_bulk_velocity_rtn_sun_covariance: np.ndarray  # shape (N, 3, 3), km²/s²
+    proton_sw_bulk_velocity_rtn_sc: (
+        np.ndarray
+    )  # shape (N, 3), km/s, RTN in SC rest frame
+    proton_sw_bulk_velocity_rtn_sc_covariance: np.ndarray  # shape (N, 3, 3), km²/s²
     quality_flags: np.ndarray[SwapiL3Flags]
-    proton_sw_bulk_velocity_rtn_sun: np.ndarray[
-        float
-    ]  # shape (N, 3), km/s, inertial RTN
-    proton_sw_bulk_velocity_rtn_sc: np.ndarray[
-        float
-    ]  # shape (N, 3), km/s, RTN in SC rest frame
 
     def to_data_product_variables(self) -> list[DataProductVariable]:
         return [
             DataProductVariable(EPOCH_CDF_VAR_NAME, self.epoch),
             DataProductVariable(
-                PROTON_SOLAR_WIND_SPEED_CDF_VAR_NAME,
-                nominal_values(self.proton_sw_speed),
+                PROTON_SOLAR_WIND_SPEED_CDF_VAR_NAME, self.proton_sw_speed
             ),
             DataProductVariable(
                 PROTON_SOLAR_WIND_SPEED_UNCERTAINTY_CDF_VAR_NAME,
-                std_devs(self.proton_sw_speed),
+                self.proton_sw_speed_uncert,
+            ),
+            DataProductVariable(
+                PROTON_SOLAR_WIND_SPEED_SUN_CDF_VAR_NAME,
+                self.proton_sw_speed_sun,
+            ),
+            DataProductVariable(
+                PROTON_SOLAR_WIND_SPEED_SUN_UNCERTAINTY_CDF_VAR_NAME,
+                self.proton_sw_speed_sun_uncert,
             ),
             DataProductVariable(
                 EPOCH_DELTA_CDF_VAR_NAME,
                 np.full_like(self.epoch, THIRTY_SECONDS_IN_NANOSECONDS),
             ),
             DataProductVariable(
-                PROTON_SOLAR_WIND_TEMPERATURE_CDF_VAR_NAME,
-                nominal_values(self.proton_sw_temperature),
+                PROTON_SOLAR_WIND_TEMPERATURE_CDF_VAR_NAME, self.proton_sw_temperature
             ),
             DataProductVariable(
                 PROTON_SOLAR_WIND_TEMPERATURE_UNCERTAINTY_CDF_VAR_NAME,
-                std_devs(self.proton_sw_temperature),
+                self.proton_sw_temperature_uncert,
             ),
             DataProductVariable(
-                PROTON_SOLAR_WIND_DENSITY_CDF_VAR_NAME,
-                nominal_values(self.proton_sw_density),
+                PROTON_SOLAR_WIND_DENSITY_CDF_VAR_NAME, self.proton_sw_density
             ),
             DataProductVariable(
                 PROTON_SOLAR_WIND_DENSITY_UNCERTAINTY_CDF_VAR_NAME,
-                std_devs(self.proton_sw_density),
+                self.proton_sw_density_uncert,
             ),
             DataProductVariable(
-                PROTON_SOLAR_WIND_CLOCK_ANGLE_CDF_VAR_NAME,
-                nominal_values(self.proton_sw_clock_angle),
+                PROTON_SOLAR_WIND_CLOCK_ANGLE_CDF_VAR_NAME, self.proton_sw_clock_angle
             ),
             DataProductVariable(
                 PROTON_SOLAR_WIND_CLOCK_ANGLE_UNCERTAINTY_CDF_VAR_NAME,
-                std_devs(self.proton_sw_clock_angle),
+                self.proton_sw_clock_angle_uncert,
             ),
             DataProductVariable(
                 PROTON_SOLAR_WIND_DEFLECTION_ANGLE_CDF_VAR_NAME,
-                nominal_values(self.proton_sw_deflection_angle),
+                self.proton_sw_deflection_angle,
             ),
             DataProductVariable(
                 PROTON_SOLAR_WIND_DEFLECTION_ANGLE_UNCERTAINTY_CDF_VAR_NAME,
-                std_devs(self.proton_sw_deflection_angle),
+                self.proton_sw_deflection_angle_uncert,
             ),
             DataProductVariable(
                 PROTON_SOLAR_WIND_BULK_VELOCITY_RTN_SUN_CDF_VAR_NAME,
                 self.proton_sw_bulk_velocity_rtn_sun,
             ),
             DataProductVariable(
+                PROTON_SOLAR_WIND_BULK_VELOCITY_RTN_SUN_COVARIANCE_CDF_VAR_NAME,
+                self.proton_sw_bulk_velocity_rtn_sun_covariance,
+            ),
+            DataProductVariable(
                 PROTON_SOLAR_WIND_BULK_VELOCITY_RTN_SC_CDF_VAR_NAME,
                 self.proton_sw_bulk_velocity_rtn_sc,
+            ),
+            DataProductVariable(
+                PROTON_SOLAR_WIND_BULK_VELOCITY_RTN_SC_COVARIANCE_CDF_VAR_NAME,
+                self.proton_sw_bulk_velocity_rtn_sc_covariance,
             ),
             DataProductVariable(SWAPI_QUALITY_FLAGS_CDF_VAR_NAME, self.quality_flags),
         ]

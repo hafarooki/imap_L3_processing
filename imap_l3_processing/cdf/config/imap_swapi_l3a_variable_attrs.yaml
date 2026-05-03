@@ -279,6 +279,41 @@ proton_sw_speed_uncert:
   VALIDMAX: 10000
   FILLVAL: -1.000000e+31
   LABLAXIS: H+ SW speed uncertainty
+proton_sw_speed_sun:
+  NAME: proton_sw_speed_sun
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Speed of proton solar wind in the sun's rest frame
+  DEPEND_0: epoch
+  VAR_TYPE: data
+  RECORD_VARYING: RV
+  DISPLAY_TYPE: time_series
+  VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
+  FIELDNAM: Proton Solar Wind Speed Sun
+  FORMAT: F19.3
+  LABLAXIS: H+ SW speed sun
+  UNITS: km/s
+  VALIDMIN: 0
+  VALIDMAX: 10000
+  FILLVAL: -1.000000e+31
+  SCALETYP: linear
+  DELTA_PLUS_VAR: proton_sw_speed_sun_uncert
+  DELTA_MINUS_VAR: proton_sw_speed_sun_uncert
+  SCALEMIN: 0
+  SCALEMAX: 1000
+proton_sw_speed_sun_uncert:
+  NAME: proton_sw_speed_sun_uncert
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Proton solar wind speed uncertainty in the sun's rest frame
+  DEPEND_0: epoch
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Proton Solar Wind Speed Sun Uncertainty
+  FORMAT: F19.3
+  UNITS: km/s
+  VALIDMIN: 0
+  VALIDMAX: 10000
+  FILLVAL: -1.000000e+31
+  LABLAXIS: H+ SW speed sun uncertainty
 proton_sw_temperature:
   NAME: proton_sw_temperature
   DATA_TYPE: CDF_REAL4
@@ -436,6 +471,20 @@ proton_sw_bulk_velocity_rtn_sun:
   VALIDMIN: -2000
   VALIDMAX: 2000
   FILLVAL: -1.000000e+31
+proton_sw_bulk_velocity_rtn_sun_covariance:
+  NAME: proton_sw_bulk_velocity_rtn_sun_covariance
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Proton solar wind bulk velocity covariance in inertial RTN (sun's rest frame)
+  DEPEND_0: epoch
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Proton SW Bulk Velocity RTN Sun Covariance
+  FORMAT: F19.3
+  LABLAXIS: H+ SW bulk velocity RTN sun covariance
+  UNITS: km!E2!N/s!E2!N
+  VALIDMIN: 0
+  VALIDMAX: 1.0e+8
+  FILLVAL: -1.000000e+31
 proton_sw_bulk_velocity_rtn_sc:
   NAME: proton_sw_bulk_velocity_rtn_sc
   DATA_TYPE: CDF_REAL4
@@ -452,6 +501,20 @@ proton_sw_bulk_velocity_rtn_sc:
   UNITS: km/s
   VALIDMIN: -2000
   VALIDMAX: 2000
+  FILLVAL: -1.000000e+31
+proton_sw_bulk_velocity_rtn_sc_covariance:
+  NAME: proton_sw_bulk_velocity_rtn_sc_covariance
+  DATA_TYPE: CDF_REAL4
+  CATDESC: Proton solar wind bulk velocity covariance in RTN (spacecraft rest frame)
+  DEPEND_0: epoch
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+  FIELDNAM: Proton SW Bulk Velocity RTN SC Covariance
+  FORMAT: F19.3
+  LABLAXIS: H+ SW bulk velocity RTN SC covariance
+  UNITS: km!E2!N/s!E2!N
+  VALIDMIN: 0
+  VALIDMAX: 1.0e+8
   FILLVAL: -1.000000e+31
 alpha_sw_speed:
   NAME: alpha_sw_speed
