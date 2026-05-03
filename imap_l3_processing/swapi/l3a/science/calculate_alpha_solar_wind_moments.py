@@ -312,6 +312,7 @@ def fit_solar_wind_alpha_moments(
     # side reveals the cool physical basin (T_α≈5–7·T_p). Without this
     # preference the greedy lowest-per-bin-SSE choice picks a tiny
     # T-drop trim that keeps the fit stuck.
+    fresh_x0 = np.array([np.log(max(n0, 1e-3)), np.log(max(T0, 1e-3)), 0.0])
     while len(current_window) > 5:
         T_now = float(np.exp(result.x[1]))
         chi2_now = float(np.sum(result.fun**2))
@@ -321,8 +322,13 @@ def fit_solar_wind_alpha_moments(
             if len(current_window) - trim_lo - trim_hi < 5:
                 continue
             new_window = current_window[trim_lo : len(current_window) - trim_hi]
+            # Start the trim's LM from the fresh initial guess rather than
+            # from the previous-window fit's parameters; if the previous
+            # fit is in a wrong basin (T_α huge), restarting LM from there
+            # tends to keep it stuck. The fresh T₀=4·T_p start lets each
+            # candidate converge independently.
             try:
-                r_t, res_t, n_t = _run_lm(new_window, result.x)
+                r_t, res_t, n_t = _run_lm(new_window, fresh_x0)
             except (RuntimeError, ValueError):
                 continue
             chi2_t = float(np.sum(r_t.fun**2))
@@ -479,7 +485,7 @@ def _walk_to_local_minima(
     residual: ndarray,
     original_peak_idx: ndarray,
     *,
-    min_bins: int = 5,
+    min_bins: int = 9,
 ) -> ndarray:
     """Pick the residual maximum inside `original_peak_idx`, then walk
     outward on each side while the residual is strictly decreasing. Stop at
@@ -487,9 +493,11 @@ def _walk_to_local_minima(
     alpha-core lobe; any secondary bump (e.g., a PUI plateau on the high-V
     side) is left out by construction.
 
-    Pads back up to `min_bins` symmetrically inside the original window if
-    the walk produces a too-narrow lobe (a 3-DOF LM is under-constrained on
-    fewer than ~5 bins)."""
+    Pads back up to ``min_bins`` symmetrically inside the original window
+    if the walk produces a too-narrow lobe. The default 9-bin floor
+    keeps the window from being trimmed past the small noise wiggles
+    that can hide the alpha core's low-V slope; the downstream
+    chi²-shrink loop will re-tighten when the data warrants it."""
     indices = np.sort(np.asarray(original_peak_idx))
     if len(indices) <= min_bins:
         return indices
