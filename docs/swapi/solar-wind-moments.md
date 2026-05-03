@@ -23,7 +23,7 @@
       > Daily repointing data gaps
       > High temperature (but still report speed and maybe pressure, too)
 - [ ] Handle the padded SWAPI vs unpadded MAG data temporal mismatch
-- [ ] Use L2 or L1D depending on what's available https://github.com/IMAP-Science-Operations-Center/imap_L3_processing/issues/13
+- [x] Use L2 or L1D depending on what's available https://github.com/IMAP-Science-Operations-Center/imap_L3_processing/issues/13
 - [ ] Investigate the degeneracy in clock angle at 8:11 on 2026-02-04
 
 ## Input Data
