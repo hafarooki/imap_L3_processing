@@ -10,7 +10,7 @@ from imap_l3_processing.models import MagData
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_l3_processing.swapi.l3a.utils import (
     chunk_l2_data,
-    compute_b_hat_rtn,
+    compute_direction_of_mean_magnetic_field_over_chunk,
     read_mag_rtn_data,
     read_l2_swapi_data,
 )
@@ -108,7 +108,7 @@ class TestUtils(TestCase):
             np.array([[1.0, 2.0, 3.0], [np.nan, np.nan, 4.0]]),
         )
 
-    def test_compute_b_hat_rtn_averages_rtn_samples_directly(self):
+    def test_compute_direction_of_mean_magnetic_field_over_chunk_averages_samples_directly(self):
         mag_data = MagData(
             epoch=np.array([0, 6, 10, 20]),
             mag_data=np.array(
@@ -121,6 +121,6 @@ class TestUtils(TestCase):
             ),
         )
 
-        actual = compute_b_hat_rtn(mag_data, 10, 5)
+        actual = compute_direction_of_mean_magnetic_field_over_chunk(mag_data, 10, 5)
 
         np.testing.assert_allclose(actual, np.array([1.0, 1.0, 0.0]) / np.sqrt(2.0))

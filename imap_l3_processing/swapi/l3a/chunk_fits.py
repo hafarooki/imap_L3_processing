@@ -40,7 +40,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
 )
 from imap_l3_processing.swapi.l3a.utils import (
     chunk_epoch,
-    compute_b_hat_rtn,
+    compute_direction_of_mean_magnetic_field_over_chunk,
     get_spacecraft_velocity_rtn,
     get_swapi_geometry,
     measurement_times,
@@ -230,8 +230,7 @@ class AlphaChunkFitter(ChunkFitter):
                 "SPICE gap in alpha geometry, NaN-filling chunk", exc_info=True
             )
             rm = None
-        # compute_b_hat_rtn returns NaN arrays on MAG gaps — does not raise.
-        b_hat = compute_b_hat_rtn(
+        b_hat = compute_direction_of_mean_magnetic_field_over_chunk(
             self.mag_data, int(epoch), int(THIRTY_SECONDS_IN_NANOSECONDS)
         )
         return (epoch, rm, b_hat)
