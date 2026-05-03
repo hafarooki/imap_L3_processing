@@ -129,8 +129,10 @@ Substituting into the count rate integral in spherical velocity coordinates $(v,
 $$C(V) = \frac{n\, \mathcal{A}_0(V)}{(\sqrt{2\pi}\, v_\text{th})^3} \sum_\text{region} \int \cos\theta\, d\theta \int \mathcal{T}(\phi)\, d\phi \int v^3\, P\!\left(\tfrac{v}{v_0}, \theta\right) \exp\!\left(-\frac{v^2 + v_b^2 - 2vv_b\cos\alpha}{2v_\text{th}^2}\right) dv.$$
 The $v^3\cos\theta$ factor comes from the velocity-space volume element $v^2\cos\theta\,dv\,d\theta\,d\phi$ times the particle speed $v$ in the flux term.
 
-The sum runs over three azimuth regions: sunglasses (SG, $|\phi| \leq 20°$), left open aperture (OA, $-150° < \phi < -20°$), and right open aperture ($20° < \phi < 150°$).
+The sum runs over five azimuth regions: sunglasses (SG, $|\phi| \leq 20°$), and the open aperture split into a vanes-vignetting (VV) sub-region adjacent to each vane ($20° < |\phi| \leq 26°$) plus a full-transmission OA sub-region ($26° < |\phi| < 150°$).
 They are integrated separately so that only one passband is used for each integral and because the integral will generally have separate peaks in each of these regions due to the vanes at $\pm 20^\circ$.
+
+Splitting the open aperture at $\pm 26°$ anchors a Gauss-Legendre boundary at the inflection of $\mathcal{T}(\phi)$, which is identically zero at $|\phi| = 20°$ (vanes fully blocking) and rises smoothly to $\sim 1$ by $|\phi| \approx 30°$. Without the split, the steep rise sits in the interior of one wide GL window and is poorly resolved. The $26°$ cut was chosen by sweeping $23°$–$30°$ against `reference_integrals.csv` (best high-rate failure count); $27°$ puts the steepest $d\mathcal{T}/d\phi$ point right at the boundary, undoing the benefit. The constant `VV_OUTER_DEG` in `calculate_proton_solar_wind_moments.py` controls the cut.
 
 ### Angular limits
 
@@ -147,16 +149,20 @@ The window is then clamped to the passband elevation range for the region and to
 | Region | Azimuth Range |
 |--------|----------------|
 | SG     | $[-20°,\; 20°]$ |
-| OA−    | $[-150°,\; -20°]$ |
-| OA+    | $[20°,\; 150°]$ |
+| VV−    | $[-26°,\; -20°]$ |
+| VV+    | $[20°,\; 26°]$ |
+| OA−    | $[-150°,\; -26°]$ |
+| OA+    | $[26°,\; 150°]$ |
 
 If either clamped dimension has zero width, that region is skipped.
 
-For OA only, the azimuth window is trimmed once more using the product of the VDF and azimuthal transmission. `_trim_oa_azimuth_by_integrand` samples 64 points of $f(v_0, \theta_b', \phi)\mathcal{T}(\phi)$ across the clamped OA azimuth window, where $\theta_b'$ is $\theta_b$ clamped into the OA elevation range. It keeps the portion above $10^{-6}$ of its maximum and expands by one sample on each side.
+For OA± only, the azimuth window is trimmed once more using the product of the VDF and azimuthal transmission. `_trim_oa_azimuth_by_integrand` samples 64 points of $f(v_0, \theta_b', \phi)\mathcal{T}(\phi)$ across the clamped OA azimuth window, where $\theta_b'$ is $\theta_b$ clamped into the OA elevation range. It keeps the portion above $10^{-6}$ of its maximum and expands by one sample on each side.
 
-After this trim, OA is skipped when the heuristic upper estimate
+After this trim, OA± is skipped when the heuristic upper estimate
 $$\hat{C}_\text{OA} = \mathcal{A}_0(V)\,v_0^3\,\Delta\theta\,\Delta v\,\int_{\phi_\text{lo}}^{\phi_\text{hi}} \mathcal{T}(\phi)\,g(\phi)\,d\phi$$
 falls below $\max(0.1\;\text{Hz},\; 10^{-3} C_\text{SG})$. Here $g(\phi) = f(v_0, \theta_b', \phi)$, $\Delta\theta$ is the clamped OA elevation width in radians, and $\Delta v = (r_\text{max}(0) - r_\text{min}(0))v_0$ is the OA passband speed width at $\theta = 0^\circ$.
+
+The VV± regions are not trimmed or skipped: they are bounded ($\leq 6°$ wide), $\mathcal{T}(\phi)$ is small (peak $\sim 0.05$) but rises steeply, and a few GL nodes resolve them cheaply.
 
 ### Speed limits
 
