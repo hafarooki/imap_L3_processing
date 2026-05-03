@@ -88,10 +88,12 @@ def compute_b_hat_rtn(
     """Average B over the chunk window in RTN, returning the unit direction.
 
     `b_rtn` samples are already in RTN. Samples in
-    `[center - delta, center + delta)` are averaged directly and normalized.
+    `[center - delta, center + delta)` are averaged componentwise and the mean
+    vector is then normalized — i.e. the returned direction is the direction
+    of the vector average, not the average of per-sample unit directions.
     Returns NaN when no samples fall in the window or the in-window samples
-    include non-finite values. The alpha fitter's downstream unit-norm check
-    rejects any remaining pathological vectors as `BAD_FIT`."""
+    include non-finite values. A zero-magnitude average propagates as inf/NaN
+    through the normalization and is caught by the alpha fitter's NaN guard."""
     start = chunk_epoch_center_tt2000_ns - chunk_epoch_delta_ns
     end = chunk_epoch_center_tt2000_ns + chunk_epoch_delta_ns
     left = np.searchsorted(mag_data.epoch, start, side="left")
