@@ -59,6 +59,16 @@ EPSILON_SG = 1e-6
 # the Maxwellian (the resulting GL polynomial overshoots a near-delta peak).
 SPEED_HALF_WIDTH_VTH = 5.0
 
+# Outer edge of the vanes-vignetting (VV) sub-region of the open aperture, in
+# degrees of azimuth. The transmission table T(|φ|) is identically zero at
+# |φ|=20° (vanes fully blocking) and rises smoothly to ~1 by |φ|≈30°. Splitting
+# the OA azimuth integration at ±VV_OUTER_DEG anchors the GL boundary
+# clustering at the inflection of T(φ) so the steep rise is well resolved.
+# VV_OUTER_DEG=26 was chosen by sweeping 23–30 against `reference_integrals.csv`
+# (best high-rate failure count). Going to 27° puts the steepest dT/dφ point
+# right at the boundary, undoing the benefit.
+VV_OUTER_DEG = 26.0
+
 # Wrong-basin detection: iterate flip+LM up to this many times, accepting a flip
 # only if it improves χ² by more than the relative tolerance. Most cases stop
 # after the first flip; pathological starts (low-density, aggressively masked IG
@@ -571,7 +581,14 @@ def calculate_integral(
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
 ):
-    """Pre-deadtime model count rate at one ESA voltage step."""
+    """Pre-deadtime model count rate at one ESA voltage step.
+
+    Five-region azimuth scheme (see `_get_angular_limits` for region codes):
+        SG | VV- | OA- | VV+ | OA+
+    The OA azimuth integration is split at ±VV_OUTER_DEG so the steep T(φ)
+    rise (the vanes-vignetting transition between |φ|=20° and ~30°) is
+    captured by GL boundary clustering inside the VV regions, instead of
+    being smeared across a single wide OA window."""
 
     # SG first — used as the reference for the OA skip decision.
     min_el, max_el, min_az, max_az = _get_angular_limits(
@@ -595,6 +612,30 @@ def calculate_integral(
 
     count_rate = sg_rate
 
+    # VV± regions: small OA azimuth bands [-VV_OUTER, -20] and [20, VV_OUTER].
+    # T is small (≤~0.05) but rises steeply; a few GL nodes here resolve it
+    # well. No trim or skip — these regions are bounded and cheap.
+    for region in (-2, +2):
+        min_el, max_el, min_az, max_az = _get_angular_limits(
+            sw_params, region, grid, central_speed
+        )
+        if max_el <= min_el or max_az <= min_az:
+            continue
+        count_rate += _integrate_region(
+            grid,
+            sw_params,
+            central_speed,
+            central_effective_area,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
+            False,
+            min_el,
+            max_el,
+            min_az,
+            max_az,
+        )
+
+    # OA± regions: full-transmission azimuth bands beyond ±VV_OUTER.
     for region in (-1, +1):
         min_el, max_el, min_az, max_az = _get_angular_limits(
             sw_params, region, grid, central_speed
@@ -688,6 +729,15 @@ def _exponential_term(sw_params: SWParams, cos_angle: float, speed: float) -> fl
 def _get_angular_limits(
     sw_params: SWParams, region: int, grid: PassbandGrid, central_speed: float
 ):
+    """Per-region azimuth/elevation integration window.
+
+    Region codes:
+      0  → SG    az ∈ [-20, +20]            (sunglasses passband)
+     -2  → VV-  az ∈ [-VV_OUTER, -20]       (open-aperture passband, vanes-vignetting band)
+     +2  → VV+  az ∈ [+20, +VV_OUTER]       (open-aperture passband, vanes-vignetting band)
+     -1  → OA-  az ∈ [-150, -VV_OUTER]      (open-aperture passband, full transmission)
+     +1  → OA+  az ∈ [+VV_OUTER, +150]      (open-aperture passband, full transmission)
+    """
     epsilon = EPSILON_SG if region == 0 else EPSILON_OA
 
     angular_width = (180 / np.pi) * np.arccos(
@@ -714,13 +764,21 @@ def _get_angular_limits(
         min_elevation, max_elevation = _dynamic_limits(
             sw_params.bulk_elevation, angular_width, oa_lo, oa_hi
         )
-        if region == -1:
+        if region == -2:
             min_azimuth, max_azimuth = _dynamic_limits(
-                sw_params.bulk_azimuth, angular_width, -150.0, -20.0
+                sw_params.bulk_azimuth, angular_width, -VV_OUTER_DEG, -20.0
+            )
+        elif region == +2:
+            min_azimuth, max_azimuth = _dynamic_limits(
+                sw_params.bulk_azimuth, angular_width, 20.0, VV_OUTER_DEG
+            )
+        elif region == -1:
+            min_azimuth, max_azimuth = _dynamic_limits(
+                sw_params.bulk_azimuth, angular_width, -150.0, -VV_OUTER_DEG
             )
         else:
             min_azimuth, max_azimuth = _dynamic_limits(
-                sw_params.bulk_azimuth, angular_width, 20.0, 150.0
+                sw_params.bulk_azimuth, angular_width, VV_OUTER_DEG, 150.0
             )
 
     return min_elevation, max_elevation, min_azimuth, max_azimuth
