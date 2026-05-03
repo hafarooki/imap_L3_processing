@@ -100,25 +100,58 @@ class TestSwapiL3ADependencies(unittest.TestCase):
 
     @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.SwapiL3ADependencies.from_file_paths")
     @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.download")
-    def test_fetch_dependencies_uses_optional_mag_rtn_dependency(self, mock_download, mock_from_file_paths):
+    def test_fetch_dependencies_prefers_mag_l2_over_l1d(self, mock_download, mock_from_file_paths):
+        mag_l2_input = ScienceInput("imap_mag_l2_norm-rtn_20100105_v010.cdf")
+        mag_l1d_input = ScienceInput("imap_mag_l1d_norm-rtn_20100105_v010.cdf")
+        expected_mag_path = mag_l2_input.imap_file_paths[0].construct_path()
+
         input_collection = Mock()
-        mag_path = Path("imap/mag/l1d/2010/01/imap_mag_l1d_norm-rtn_20100105_v010.cdf")
-
-        def get_file_paths(source, descriptor):
-            if source == "mag":
-                self.assertEqual(MAG_RTN_L1D_DESCRIPTOR, descriptor)
-                return [mag_path]
-            return [Path(f"{source}_{descriptor}")]
-
+        input_collection.processing_input = [mag_l2_input, mag_l1d_input]
+        input_collection.get_file_paths.side_effect = (
+            lambda source, descriptor: [Path(f"{source}_{descriptor}")]
+        )
         mock_download.side_effect = lambda path: f"downloaded:{path}"
-        input_collection.get_file_paths.side_effect = get_file_paths
 
         SwapiL3ADependencies.fetch_dependencies(input_collection)
 
         self.assertEqual(
             mock_from_file_paths.call_args.args[-1],
-            f"downloaded:{mag_path}",
+            f"downloaded:{expected_mag_path}",
         )
+
+    @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.SwapiL3ADependencies.from_file_paths")
+    @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.download")
+    def test_fetch_dependencies_falls_back_to_mag_l1d(self, mock_download, mock_from_file_paths):
+        mag_l1d_input = ScienceInput("imap_mag_l1d_norm-rtn_20100105_v010.cdf")
+        expected_mag_path = mag_l1d_input.imap_file_paths[0].construct_path()
+
+        input_collection = Mock()
+        input_collection.processing_input = [mag_l1d_input]
+        input_collection.get_file_paths.side_effect = (
+            lambda source, descriptor: [Path(f"{source}_{descriptor}")]
+        )
+        mock_download.side_effect = lambda path: f"downloaded:{path}"
+
+        SwapiL3ADependencies.fetch_dependencies(input_collection)
+
+        self.assertEqual(
+            mock_from_file_paths.call_args.args[-1],
+            f"downloaded:{expected_mag_path}",
+        )
+
+    @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.SwapiL3ADependencies.from_file_paths")
+    @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.download")
+    def test_fetch_dependencies_mag_absent(self, mock_download, mock_from_file_paths):
+        input_collection = Mock()
+        input_collection.processing_input = []
+        input_collection.get_file_paths.side_effect = (
+            lambda source, descriptor: [Path(f"{source}_{descriptor}")]
+        )
+        mock_download.side_effect = lambda path: f"downloaded:{path}"
+
+        SwapiL3ADependencies.fetch_dependencies(input_collection)
+
+        self.assertIsNone(mock_from_file_paths.call_args.args[-1])
 
     @patch('imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.CDF')
     @patch('imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.InflowVector.from_file')

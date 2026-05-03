@@ -55,10 +55,20 @@ class SwapiL3ADependencies:
         passband_fit_coefficients_paths = dependencies.get_file_paths(source='swapi', descriptor=PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR)
         # @formatter:on
 
-        # MAG L1D is required for alpha-sw moments but not for proton-sw / pui-he. Make
+        # MAG is required for alpha-sw moments but not for proton-sw / pui-he. Make
         # it optional at the dependency level — caller will validate per-descriptor.
-        mag_paths = dependencies.get_file_paths(source='mag', descriptor=MAG_RTN_L1D_DESCRIPTOR)
-        mag_path = download(mag_paths[0]) if mag_paths else None
+        # Prefer MAG L2 when available, fall back to L1D otherwise.
+        science_files = dependencies.processing_input
+        mag_dependency = next(
+            (d.imap_file_paths[0] for d in science_files if d.source == "mag"
+             and d.descriptor == MAG_RTN_L1D_DESCRIPTOR
+             and d.data_type == "l2"), None)
+        if mag_dependency is None:
+            mag_dependency = next(
+                (d.imap_file_paths[0] for d in science_files if d.source == "mag"
+                 and d.descriptor == MAG_RTN_L1D_DESCRIPTOR
+                 and d.data_type == "l1d"), None)
+        mag_path = download(mag_dependency.construct_path()) if mag_dependency is not None else None
 
         return cls.from_file_paths(
             download(science_dependency_file[0]),
