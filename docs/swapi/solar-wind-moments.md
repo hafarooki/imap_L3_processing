@@ -73,7 +73,7 @@ $$t_i = t_\text{epoch} + i \cdot \tfrac{12}{72}\,\text{s} = t_\text{epoch} + i \
 The alpha moments depend on the local magnetic field direction because the alpha-proton drift is constrained to lie along $\hat{\mathbf{B}}$.
 It reads the MAG RTN CDF variable `b_rtn`, then normalizes the averaged field and uses the direction of the average for the alpha fit.
 
-The dependency accepts MAG **L2** (preferred) or **L1D** (fallback), following the same selection pattern SWE uses for its MAG dependency (introduced upstream in commit `afa6ce23`).
+The dependency accepts MAG **L2** (preferred) or **L1D** (fallback), following the same selection pattern SWE uses for its MAG dependency.
 Both products share the descriptor `norm-rtn`, so when resolving the MAG input the dependency loader scans the `ProcessingInput` entries twice — first for `data_type == "l2"`, then `"l1d"` — and downloads whichever matches first.
 MAG presence is required for the alpha-sw descriptor; the processor raises if neither L2 nor L1D is provided.
 When L1D is the source, every alpha-sw chunk's quality flag has the `PRELIMINARY_MAG` bit set so the product can be flagged for reprocessing once L2 is available.
