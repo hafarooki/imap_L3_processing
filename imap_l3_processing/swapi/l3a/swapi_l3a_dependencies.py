@@ -36,9 +36,6 @@ class SwapiL3ADependencies:
     hydrogen_inflow_vector: InflowVector
     helium_inflow_vector: InflowVector
     swapi_response: SWAPIResponse
-    # MAG RTN vectors for the alpha moments fitter's field-aligned-drift constraint.
-    # Optional so descriptors that don't need it (e.g. proton-sw, pui-he) keep working
-    # without a MAG file present. The alpha-sw processor branch enforces presence.
     mag_data: Optional[MagData] = None
     mag_is_preliminary: bool = False
 
