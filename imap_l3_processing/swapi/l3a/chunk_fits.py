@@ -215,12 +215,6 @@ class AlphaChunkFitter(ChunkFitter):
     def __init__(self, mag_data):
         self.mag_data = mag_data
 
-    def __getstate__(self):
-        # mag_data is consumed parent-side in precompute_geometry to derive
-        # b_hat per chunk; workers only ever read b_hat from the geometry tuple.
-        # Drop the full MAG arrays from pickle so they don't ride into each worker.
-        return {**self.__dict__, "mag_data": None}
-
     def precompute_geometry(self, chunk):
         epoch = chunk_epoch(chunk)
         try:
@@ -360,7 +354,6 @@ class PuiProtonChunkFitter(ChunkFitter):
 
 
 def _nan_alpha_record(epoch, bad_fit_flag):
-    """Return an all-NaN alpha chunk dict with the given flag."""
     return dict(
         epoch=epoch,
         alpha_sw_density=np.nan,
