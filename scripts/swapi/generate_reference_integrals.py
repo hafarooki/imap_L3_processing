@@ -10,7 +10,7 @@ Fixed integration limits:
   elevation:  -15 to 15 deg at 0.1 deg (301 pts)
   azimuth SG: -20 to 20 deg at 0.1 deg (401 pts)
   azimuth OA: 0.1 deg in transition |az| ∈ [20, 30], 1 deg in bulk to ±150 (221 pts/side)
-  speed: 50 samples from 0.9 to 1.1 × central_speed
+  speed: 200 samples from 0.9 to 1.1 × central_speed
 
 Solar wind parameter ranges (10000 samples, seed=42):
   bulk_speed:      200–2000 km/s   (uniform)

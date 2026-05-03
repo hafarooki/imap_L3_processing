@@ -11,7 +11,7 @@ Fixed integration grid:
   azimuth OA: 0.1° in transition |az| ∈ [20, 30], 1° to ±150° (221 pts/side)
               — split at the |az| < 20° dead band so trapezoid doesn't
                 bridge the gap.
-  speed:      50 samples from 0.9 to 1.1 × central_speed
+  speed:      200 samples from 0.9 to 1.1 × central_speed
 """
 
 import math
@@ -26,7 +26,7 @@ _AZ_OA_NEG = np.concatenate(
     [np.arange(-150.0, -30.0, 1.0), np.linspace(-30.0, -20.0, 101)]
 )
 _AZ_OA_POS = np.concatenate([np.linspace(20.0, 30.0, 101), np.arange(31.0, 151.0, 1.0)])
-_SP_RATIO = np.linspace(0.9, 1.1, 50)
+_SP_RATIO = np.linspace(0.9, 1.1, 200)
 
 
 def _trap_weights(x):
