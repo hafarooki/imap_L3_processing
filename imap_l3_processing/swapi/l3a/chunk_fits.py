@@ -256,40 +256,10 @@ class AlphaChunkFitter(ChunkFitter):
         bad_fit_flag = int(SwapiL3Flags.BAD_FIT) | preliminary_mag_bit
         if rotation_matrices is None:
             bad_fit_flag = int(SwapiL3Flags.EPHEMERIS_GAP) | preliminary_mag_bit
-            return dict(
-                epoch=epoch,
-                alpha_sw_density=density_nom,
-                alpha_sw_density_uncert=density_unc,
-                alpha_sw_temperature=temp_nom,
-                alpha_sw_temperature_uncert=temp_unc,
-                alpha_sw_velocity_rtn=velocity_rtn,
-                alpha_sw_velocity_covariance_rtn=velocity_cov,
-                alpha_sw_delta_v=delta_v_nom,
-                alpha_sw_delta_v_uncert=delta_v_unc,
-                alpha_sw_b_hat_rtn=b_hat_out,
-                alpha_sw_reference_proton_density=ref_density,
-                alpha_sw_reference_proton_temperature=ref_temperature,
-                alpha_sw_reference_proton_velocity_rtn=ref_velocity,
-                bad_fit_flag=bad_fit_flag,
-            )
+            return _nan_alpha_record(epoch, bad_fit_flag)
         if b_hat_rtn is None or not np.all(np.isfinite(b_hat_rtn)):
             bad_fit_flag = int(SwapiL3Flags.MAG_GAP) | preliminary_mag_bit
-            return dict(
-                epoch=epoch,
-                alpha_sw_density=density_nom,
-                alpha_sw_density_uncert=density_unc,
-                alpha_sw_temperature=temp_nom,
-                alpha_sw_temperature_uncert=temp_unc,
-                alpha_sw_velocity_rtn=velocity_rtn,
-                alpha_sw_velocity_covariance_rtn=velocity_cov,
-                alpha_sw_delta_v=delta_v_nom,
-                alpha_sw_delta_v_uncert=delta_v_unc,
-                alpha_sw_b_hat_rtn=b_hat_out,
-                alpha_sw_reference_proton_density=ref_density,
-                alpha_sw_reference_proton_temperature=ref_temperature,
-                alpha_sw_reference_proton_velocity_rtn=ref_velocity,
-                bad_fit_flag=bad_fit_flag,
-            )
+            return _nan_alpha_record(epoch, bad_fit_flag)
         try:
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
@@ -394,6 +364,26 @@ class PuiProtonChunkFitter(ChunkFitter):
             proton_sw_deflection_angle=deflection_angle,
             quality_flags=quality_flag,
         )
+
+
+def _nan_alpha_record(epoch, bad_fit_flag):
+    """Return an all-NaN alpha chunk dict with the given flag."""
+    return dict(
+        epoch=epoch,
+        alpha_sw_density=np.nan,
+        alpha_sw_density_uncert=np.nan,
+        alpha_sw_temperature=np.nan,
+        alpha_sw_temperature_uncert=np.nan,
+        alpha_sw_velocity_rtn=np.full(3, np.nan),
+        alpha_sw_velocity_covariance_rtn=np.full((3, 3), np.nan),
+        alpha_sw_delta_v=np.nan,
+        alpha_sw_delta_v_uncert=np.nan,
+        alpha_sw_b_hat_rtn=np.full(3, np.nan),
+        alpha_sw_reference_proton_density=np.nan,
+        alpha_sw_reference_proton_temperature=np.nan,
+        alpha_sw_reference_proton_velocity_rtn=np.full(3, np.nan),
+        bad_fit_flag=bad_fit_flag,
+    )
 
 
 def _eff_scale(efficiency_table, epoch, kind):
