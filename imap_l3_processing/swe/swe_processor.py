@@ -513,7 +513,7 @@ class SweProcessor(Processor):
                                                                            maximum_distance=swapi_max_distance)
 
         closest_flags = swapi_l3a_proton_data.swp_flags[swapi_indices].astype(int, copy=True)
-        swe_flags = np.where(closest_flags & SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED, SweL3Flags.FALLBACK_SWAPI_SPEED, SweL3Flags.NONE)
+        swe_flags = np.where(closest_flags & SwapiL3Flags.BAD_FIT, SweL3Flags.FALLBACK_SWAPI_SPEED, SweL3Flags.NONE)
 
         counts = dependencies.swe_l1b_data.count_rates * (swe_l2_data.acquisition_duration[..., np.newaxis] / 1e6)
 

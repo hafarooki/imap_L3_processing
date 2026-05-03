@@ -6,12 +6,12 @@ from unittest import TestCase
 import numpy as np
 from spacepy.pycdf import CDF
 
-from imap_l3_processing.models import MagL1dData
+from imap_l3_processing.models import MagData
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_l3_processing.swapi.l3a.utils import (
     chunk_l2_data,
-    compute_b_hat_rtn,
-    read_l1d_mag_data,
+    compute_direction_of_mean_magnetic_field_over_chunk,
+    read_mag_rtn_data,
     read_l2_swapi_data,
 )
 
@@ -88,7 +88,7 @@ class TestUtils(TestCase):
         np.testing.assert_array_equal(np.array([2, 2, np.nan, 2, 2, 2, 2, 2]),
                                       actual_swapi_l2_data.coincidence_count_rate_uncertainty)
 
-    def test_reading_l1d_mag_data_reads_b_rtn(self):
+    def test_reading_mag_rtn_data_reads_b_rtn(self):
         path = Path('temp_cdf.cdf')
         if path.exists():
             os.remove(path)
@@ -101,15 +101,15 @@ class TestUtils(TestCase):
         temp_cdf["b_rtn"].attrs["VALIDMAX"] = 1.0e5
         temp_cdf.close()
 
-        actual = read_l1d_mag_data(path)
+        actual = read_mag_rtn_data(path)
 
         np.testing.assert_allclose(
             actual.mag_data,
             np.array([[1.0, 2.0, 3.0], [np.nan, np.nan, 4.0]]),
         )
 
-    def test_compute_b_hat_rtn_averages_rtn_samples_directly(self):
-        mag_data = MagL1dData(
+    def test_compute_direction_of_mean_magnetic_field_over_chunk_averages_samples_directly(self):
+        mag_data = MagData(
             epoch=np.array([0, 6, 10, 20]),
             mag_data=np.array(
                 [
@@ -121,6 +121,6 @@ class TestUtils(TestCase):
             ),
         )
 
-        actual = compute_b_hat_rtn(mag_data, 10, 5)
+        actual = compute_direction_of_mean_magnetic_field_over_chunk(mag_data, 10, 5)
 
         np.testing.assert_allclose(actual, np.array([1.0, 1.0, 0.0]) / np.sqrt(2.0))

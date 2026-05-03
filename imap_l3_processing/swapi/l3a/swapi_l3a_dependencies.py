@@ -6,18 +6,19 @@ from imap_data_access import download
 from imap_data_access.processing_input import ProcessingInputCollection
 from spacepy.pycdf import CDF
 
-from imap_l3_processing.models import MagL1dData
+from imap_l3_processing.models import MagData
 from imap_l3_processing.swapi.descriptors import SWAPI_L2_DESCRIPTOR, \
     GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR, INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR, \
     DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR, EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR, HYDROGEN_INFLOW_VECTOR_DESCRIPTOR, \
     HELIUM_INFLOW_VECTOR_DESCRIPTOR, AZIMUTHAL_TRANSMISSION_DESCRIPTOR, \
     CENTRAL_EFFECTIVE_AREA_DESCRIPTOR, PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR, \
-    MAG_RTN_L1D_DESCRIPTOR
+    MAG_RTN_DESCRIPTOR
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_l3_processing.swapi.l3a.science.density_of_neutral_helium_lookup_table import \
     DensityOfNeutralHeliumLookupTable
 from imap_l3_processing.swapi.l3a.science.inflow_vector import InflowVector
-from imap_l3_processing.swapi.l3a.utils import read_l2_swapi_data, read_l1d_mag_data
+from imap_l3_processing.swapi.l3a.utils import read_l2_swapi_data, read_mag_rtn_data
+from imap_l3_processing.utils import select_mag_path
 from imap_l3_processing.swapi.l3b.science.efficiency_calibration_table import EfficiencyCalibrationTable
 from imap_l3_processing.swapi.l3b.science.geometric_factor_calibration_table import GeometricFactorCalibrationTable
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
@@ -35,10 +36,8 @@ class SwapiL3ADependencies:
     hydrogen_inflow_vector: InflowVector
     helium_inflow_vector: InflowVector
     swapi_response: SWAPIResponse
-    # MAG L1D RTN vectors for the alpha moments fitter's field-aligned-drift constraint.
-    # Optional so descriptors that don't need it (e.g. proton-sw, pui-he) keep working
-    # without a MAG file present.
-    mag_l1d_data: Optional[MagL1dData] = None
+    mag_data: Optional[MagData] = None
+    mag_is_preliminary: bool = False
 
     @classmethod
     def fetch_dependencies(cls, dependencies: ProcessingInputCollection):
@@ -55,10 +54,8 @@ class SwapiL3ADependencies:
         passband_fit_coefficients_paths = dependencies.get_file_paths(source='swapi', descriptor=PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR)
         # @formatter:on
 
-        # MAG L1D is required for alpha-sw moments but not for proton-sw / pui-he. Make
-        # it optional at the dependency level — caller will validate per-descriptor.
-        mag_paths = dependencies.get_file_paths(source='mag', descriptor=MAG_RTN_L1D_DESCRIPTOR)
-        mag_path = download(mag_paths[0]) if mag_paths else None
+        mag_path, mag_level = select_mag_path(dependencies, MAG_RTN_DESCRIPTOR)
+        mag_is_preliminary = mag_level == "l1d"
 
         return cls.from_file_paths(
             download(science_dependency_file[0]),
@@ -72,6 +69,7 @@ class SwapiL3ADependencies:
             download(central_effective_area_paths[0]),
             download(passband_fit_coefficients_paths[0]),
             mag_path,
+            mag_is_preliminary,
         )
 
     @classmethod
@@ -80,7 +78,8 @@ class SwapiL3ADependencies:
                         instrument_response_path: Path, neutral_helium_path: Path, hydrogen_inflow_vector_path: Path,
                         helium_inflow_vector_path: Path, azimuthal_transmission_path: Path,
                         central_effective_area_path: Path, passband_fit_coefficients_path: Path,
-                        mag_l1d_path: Optional[Path] = None):
+                        mag_path: Optional[Path] = None,
+                        mag_is_preliminary: bool = False):
         return cls(
             data=read_l2_swapi_data(CDF(str(science_dependency_path))),
             efficiency_calibration_table=EfficiencyCalibrationTable(efficiency_calibration_path),
@@ -94,5 +93,6 @@ class SwapiL3ADependencies:
             helium_inflow_vector=InflowVector.from_file(helium_inflow_vector_path),
             swapi_response=SWAPIResponse.from_files(
                 azimuthal_transmission_path, central_effective_area_path, passband_fit_coefficients_path),
-            mag_l1d_data=read_l1d_mag_data(mag_l1d_path) if mag_l1d_path is not None else None,
+            mag_data=read_mag_rtn_data(mag_path) if mag_path is not None else None,
+            mag_is_preliminary=mag_is_preliminary,
         )

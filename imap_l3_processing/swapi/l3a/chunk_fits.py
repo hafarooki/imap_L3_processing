@@ -24,7 +24,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
 )
 from imap_l3_processing.swapi.l3a.utils import (
     chunk_epoch,
-    compute_b_hat_rtn,
+    compute_direction_of_mean_magnetic_field_over_chunk,
     get_spacecraft_velocity_rtn,
     get_swapi_geometry,
     measurement_times,
@@ -112,6 +112,12 @@ class ProtonChunkFitter(ChunkFitter):
         velocity_covariance = np.full((3, 3), np.nan)
         quality_flag = SwapiL3Flags.NONE
         try:
+            if rotation_matrices is None:
+                quality_flag |= SwapiL3Flags.EPHEMERIS_GAP
+                raise ValueError("Missing rotation matrices")
+            if sc_velocity_rtn is None:
+                quality_flag |= SwapiL3Flags.EPHEMERIS_GAP
+                raise ValueError("Missing spacecraft velocity")
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
             ):
@@ -174,30 +180,24 @@ class ProtonChunkFitter(ChunkFitter):
 
 
 class AlphaChunkFitter(ChunkFitter):
-    def __init__(self, mag_l1d_data):
-        self.mag_l1d_data = mag_l1d_data
-
-    def __getstate__(self):
-        # mag_l1d_data is consumed parent-side in precompute_geometry to derive
-        # b_hat per chunk; workers only ever read b_hat from the geometry tuple.
-        # Drop the full MAG arrays from pickle so they don't ride into each worker.
-        return {**self.__dict__, "mag_l1d_data": None}
+    def __init__(self, mag_data):
+        self.mag_data = mag_data
 
     def precompute_geometry(self, chunk):
         epoch = chunk_epoch(chunk)
         try:
             rm = get_swapi_geometry(measurement_times(chunk, SWAPI_COARSE_SWEEP_BINS))
-            b_hat = compute_b_hat_rtn(
-                self.mag_l1d_data, int(epoch), int(THIRTY_SECONDS_IN_NANOSECONDS)
-            )
         except Exception:
             logger.warning(
-                "Geometry gap in alpha fit, NaN-filling chunk", exc_info=True
+                "SPICE gap in alpha geometry, NaN-filling chunk", exc_info=True
             )
-            rm = b_hat = None
+            rm = None
+        b_hat = compute_direction_of_mean_magnetic_field_over_chunk(
+            self.mag_data, int(epoch), int(THIRTY_SECONDS_IN_NANOSECONDS)
+        )
         return (epoch, rm, b_hat)
 
-    def fit_chunk(self, data_chunk, epoch, rotation_matrices, b_hat_rtn):
+    def fit_chunk(self, data_chunk, epoch, rotation_matrices, magnetic_field_direction):
         swapi_response = _shared["swapi_response"]
         efficiency_table = _shared["efficiency_table"]
         density_nom = density_unc = np.nan
@@ -210,6 +210,14 @@ class AlphaChunkFitter(ChunkFitter):
         ref_velocity = np.full(3, np.nan)
         bad_fit_flag = int(SwapiL3Flags.BAD_FIT)
         try:
+            if rotation_matrices is None:
+                bad_fit_flag = int(SwapiL3Flags.EPHEMERIS_GAP)
+                raise ValueError("Missing rotation matrices")
+            if magnetic_field_direction is None or not np.all(
+                np.isfinite(magnetic_field_direction)
+            ):
+                bad_fit_flag = int(SwapiL3Flags.MAG_GAP)
+                raise ValueError("Missing or non-finite magnetic_field_direction")
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
             ):
@@ -226,7 +234,7 @@ class AlphaChunkFitter(ChunkFitter):
                 times,
                 swapi_response,
                 proton_moments,
-                b_hat_rtn,
+                magnetic_field_direction,
                 _eff_scale(efficiency_table, epoch, "alpha"),
                 _eff_scale(efficiency_table, epoch, "proton"),
                 rotation_matrices=rotation_matrices,
@@ -239,7 +247,7 @@ class AlphaChunkFitter(ChunkFitter):
             delta_v_nom, delta_v_unc = mom.delta_v.nominal_value, mom.delta_v.std_dev
             velocity_rtn = mom.bulk_velocity_rtn_nominal()
             velocity_cov = mom.bulk_velocity_rtn_covariance()
-            b_hat_out = b_hat_rtn
+            b_hat_out = magnetic_field_direction
             ref_density = proton_moments.density.nominal_value
             ref_temperature = proton_moments.temperature.nominal_value
             ref_velocity = proton_moments.bulk_velocity_rtn_nominal()
@@ -285,6 +293,9 @@ class PuiProtonChunkFitter(ChunkFitter):
         deflection_angle = ufloat(np.nan, np.nan)
         quality_flag = SwapiL3Flags.NONE
         try:
+            if rotation_matrices is None:
+                quality_flag |= SwapiL3Flags.EPHEMERIS_GAP
+                raise ValueError("Missing rotation matrices")
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
             ):

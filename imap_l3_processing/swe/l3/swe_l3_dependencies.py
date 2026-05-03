@@ -10,7 +10,7 @@ from imap_l3_processing.models import MagData
 from imap_l3_processing.swe.l3.models import SweL2Data, SweConfiguration, SwapiL3aProtonData, SweL1bData
 from imap_l3_processing.swe.l3.utils import read_l2_swe_data, read_l3a_swapi_proton_data, read_swe_config, \
     read_l1b_swe_data
-from imap_l3_processing.utils import read_mag_data
+from imap_l3_processing.utils import read_mag_data, select_mag_path
 
 MAG_DESPUN_L1D_DESCRIPTOR = "norm-dsrf"
 SWAPI_L3A_PROTON_DESCRIPTOR = "proton-sw"
@@ -40,19 +40,9 @@ class SweL3Dependencies:
                 d.imap_file_paths[0] for d in science_files if d.source == "swe" and d.data_type == "l1b")
         except StopIteration:
             raise ValueError(f"Missing SWE l1b dependency.")
-        mag_dependency = next(
-            (d.imap_file_paths[0] for d in science_files if d.source == "mag"
-            and d.descriptor == MAG_DESPUN_L1D_DESCRIPTOR
-            and d.data_type == "l2"), None)
-        if mag_dependency is None:
-            try:
-                mag_dependency = next(
-                    d.imap_file_paths[0] for d in science_files if d.source == "mag"
-                    and d.descriptor == MAG_DESPUN_L1D_DESCRIPTOR
-                    and d.data_type == "l1d"
-                )
-            except StopIteration:
-                raise ValueError(f"Missing MAG {MAG_DESPUN_L1D_DESCRIPTOR} dependency.")
+        mag_file, _ = select_mag_path(dependencies, MAG_DESPUN_L1D_DESCRIPTOR)
+        if mag_file is None:
+            raise ValueError(f"Missing MAG {MAG_DESPUN_L1D_DESCRIPTOR} dependency.")
         try:
             swapi_dependency = next(
                 d.imap_file_paths[0] for d in science_files if d.source == "swapi"
@@ -62,7 +52,6 @@ class SweL3Dependencies:
 
         swe_l2_file = download(swe_l2_dependency.construct_path())
         swe_l1b_file = download(swe_l1b_dependency.construct_path())
-        mag_file = download(mag_dependency.construct_path())
         swapi_file = download(swapi_dependency.construct_path())
         swe_config = download(swe_config_dependency)
 

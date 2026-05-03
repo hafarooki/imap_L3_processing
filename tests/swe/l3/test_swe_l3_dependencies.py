@@ -37,9 +37,10 @@ class TestSweL3Dependencies(unittest.TestCase):
         self.assertEqual(mock_read_swapi_data.return_value, result.swapi_l3a_proton_data)
         self.assertEqual(mock_read_swe_config.return_value, result.configuration)
 
+    @patch("imap_l3_processing.utils.download")
     @patch(f"{MODULE}.download")
     @patch(f"{MODULE}.SweL3Dependencies.from_file_paths")
-    def test_fetch_dependencies(self, mock_from_file_paths, mock_download_dependency):
+    def test_fetch_dependencies(self, mock_from_file_paths, mock_download_dependency, mock_utils_download):
         swe_l2_dependency = ScienceInput("imap_swe_l2_sci_20200101_v000.cdf")
         swe_l1b_dependency = ScienceInput("imap_swe_l1b_sci_20200101_v000.cdf")
         mag_l1d_dependency = ScienceInput("imap_mag_l1d_norm-dsrf_20200101_v000.cdf")
@@ -55,27 +56,46 @@ class TestSweL3Dependencies(unittest.TestCase):
         expected_mag_path = Mock()
         expected_swapi_path = Mock()
         expected_config_path = Mock()
-        mock_download_dependency.side_effect = [expected_swe_path, expected_swe_l1b_path, expected_mag_path,
+        mock_download_dependency.side_effect = [expected_swe_path, expected_swe_l1b_path,
                                                 expected_swapi_path,
                                                 expected_config_path]
+        mock_utils_download.return_value = expected_mag_path
 
         result = SweL3Dependencies.fetch_dependencies(processing_input_collection)
 
         mock_download_dependency.assert_has_calls([call(swe_l2_dependency.imap_file_paths[0].construct_path()),
                                                    call(swe_l1b_dependency.imap_file_paths[0].construct_path()),
-                                                   call(mag_l1d_dependency.imap_file_paths[0].construct_path()),
                                                    call(swapi_l3a_dependency.imap_file_paths[0].construct_path()),
                                                    call(config_dependency.imap_file_paths[0].construct_path())],
                                                   any_order=False)
+        mock_utils_download.assert_called_once_with(mag_l1d_dependency.imap_file_paths[0].construct_path())
 
         mock_from_file_paths.assert_called_with(expected_swe_path, expected_swe_l1b_path, expected_mag_path,
                                                 expected_swapi_path,
                                                 expected_config_path)
         self.assertEqual(mock_from_file_paths.return_value, result)
 
+    @patch(f"{MODULE}.select_mag_path")
+    @patch(f"{MODULE}.download")
+    def test_fetch_dependencies_raises_if_no_mag(self, mock_download, mock_select_mag_path):
+        swe_l2_dependency = ScienceInput("imap_swe_l2_sci_20200101_v000.cdf")
+        swe_l1b_dependency = ScienceInput("imap_swe_l1b_sci_20200101_v000.cdf")
+        swapi_l3a_dependency = ScienceInput("imap_swapi_l3_proton-sw_20200101_v000.cdf")
+        config_dependency = AncillaryInput("imap_swe_config_20250101_v000.json")
+        processing_input_collection = ProcessingInputCollection(
+            swe_l2_dependency, swe_l1b_dependency, swapi_l3a_dependency, config_dependency,
+        )
+        mock_select_mag_path.return_value = (None, None)
+
+        with self.assertRaises(ValueError) as cm:
+            SweL3Dependencies.fetch_dependencies(processing_input_collection)
+
+        self.assertIn("norm-dsrf", str(cm.exception))
+
+    @patch("imap_l3_processing.utils.download")
     @patch(f"{MODULE}.download")
     @patch(f"{MODULE}.SweL3Dependencies.from_file_paths")
-    def test_fetch_dependencies_prioritizes_mag_l2_data(self, mock_from_file_paths, mock_download):
+    def test_fetch_dependencies_prioritizes_mag_l2_data(self, mock_from_file_paths, mock_download, mock_utils_download):
         swe_l2_dependency = ScienceInput("imap_swe_l2_sci_20200101_v000.cdf")
         swe_l1b_dependency = ScienceInput("imap_swe_l1b_sci_20200101_v000.cdf")
         mag_l1d_dependency = ScienceInput("imap_mag_l1d_norm-dsrf_20200101_v000.cdf")
@@ -100,19 +120,19 @@ class TestSweL3Dependencies(unittest.TestCase):
         mock_download.side_effect = [
             expected_swe_path,
             expected_swe_l1b_path,
-            expected_mag_path,
             expected_swapi_path,
             expected_config_path,
         ]
+        mock_utils_download.return_value = expected_mag_path
 
         result = SweL3Dependencies.fetch_dependencies(processing_input_collection)
 
         mock_download.assert_has_calls([call(swe_l2_dependency.imap_file_paths[0].construct_path()),
                                         call(swe_l1b_dependency.imap_file_paths[0].construct_path()),
-                                        call(mag_l2_dependency.imap_file_paths[0].construct_path()),
                                         call(swapi_l3a_dependency.imap_file_paths[0].construct_path()),
                                         call(config_dependency.imap_file_paths[0].construct_path())],
                                        any_order=False)
+        mock_utils_download.assert_called_once_with(mag_l2_dependency.imap_file_paths[0].construct_path())
 
         mock_from_file_paths.assert_called_with(
             expected_swe_path,

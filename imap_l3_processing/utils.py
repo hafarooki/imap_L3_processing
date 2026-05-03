@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 import imap_data_access
 import requests
 import spiceypy
-from imap_data_access import ScienceFilePath
+from imap_data_access import ScienceFilePath, download
 from imap_data_access.processing_input import ProcessingInputCollection
 from requests import RequestException
 from spacepy.pycdf import CDF
@@ -221,6 +221,30 @@ def read_mag_data(cdf_path: Union[str, Path]) -> MagData:
         return MagData(
             epoch=cdf['epoch'][...],
             mag_data=read_numeric_variable(cdf["b_dsrf"])[:, :3])
+
+
+def select_mag_path(
+    dependencies: ProcessingInputCollection,
+    descriptor: str,
+) -> tuple[Optional[Path], Optional[str]]:
+    """Pick a MAG path preferring L2 over L1D for a given descriptor.
+
+    Both MAG products share the same descriptor and are disambiguated by
+    `data_type`. Returns (downloaded_path, level) where level is "l2" or
+    "l1d", or (None, None) if neither is present.
+    """
+    science_files = dependencies.processing_input
+    for level in ("l2", "l1d"):
+        match = next(
+            (d.imap_file_paths[0] for d in science_files
+             if d.source == "mag"
+             and d.descriptor == descriptor
+             and d.data_type == level),
+            None,
+        )
+        if match is not None:
+            return download(match.construct_path()), level
+    return None, None
 
 
 L1CPointingSet = TypeVar("L1CPointingSet", bound=Union[InputRectangularPointingSet, UltraL1CPSet])

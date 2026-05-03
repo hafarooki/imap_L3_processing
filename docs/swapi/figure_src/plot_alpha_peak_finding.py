@@ -84,7 +84,7 @@ def _plot_case(axes_top, axes_bot, sr, f, title):
     proton_velocity_rtn = f["proton_velocity_rtn"]
     proton_eff_scale = float(f["proton_eff_scale"])
     alpha_eff_scale = float(f["alpha_eff_scale"])
-    b_hat_rtn = f["b_hat_rtn"]
+    magnetic_field_direction = f["b_hat_rtn"]
     cr_flat = f["cr_flat"]  # (310,)
 
     # Build passband grids and model arrays
@@ -131,7 +131,7 @@ def _plot_case(axes_top, axes_bot, sr, f, title):
         measurement_time=np.zeros(len(esa_flat)),  # unused: rotation_matrices provided
         swapi_response=sr,
         proton_moments=proton_moments_obj,
-        b_hat_rtn=b_hat_rtn,
+        magnetic_field_direction=magnetic_field_direction,
         alpha_effective_area_scale=alpha_eff_scale,
         proton_effective_area_scale=proton_eff_scale,
         rotation_matrices=rotation_matrices,
