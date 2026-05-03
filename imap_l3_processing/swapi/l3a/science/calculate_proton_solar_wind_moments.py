@@ -73,15 +73,8 @@ SPEED_HALF_WIDTH_VTH = 6.0
 # right at the boundary, undoing the benefit.
 VV_OUTER_DEG = 26.0
 
-# Wrong-basin detection: K-rotation grid around the spin axis (Rodrigues,
-# K-1=3 non-zero rotations) identifies a candidate seed; if min(grid_chi)/chi_LM
-# < _GRID_THRESHOLD, ONE additional LM runs from the grid winner. The accept gate
-# (_BASIN_FLIP_REL_TOL) still applies so unhelpful grid seeds are discarded.
-# See `_optimize`, bean imap_L3_processing-2n10, and docs/swapi/solar-wind-moments.md.
-_GRID_K = 4  # Number of equally-spaced rotation angles around the spin axis; K-1=3 non-zero rotations evaluated.
-_GRID_THRESHOLD = 50.0  # min(grid_chi)/chi_LM gate for firing the second LM. Threshold tuned empirically — see bean imap_L3_processing-2n10. thr=50 is permissive enough to fire on truth-basin-reachable saddle starts; tighter thresholds (1, 5) miss 8 / 1 / 1000 chained-mirror cases.
-# Relative-tolerance gate for accepting the post-grid LM result over LM-1's chi².
-# The second LM is accepted only if chi2_grid < chi2_LM * (1 - _BASIN_FLIP_REL_TOL).
+_GRID_K = 4
+_GRID_THRESHOLD = 50.0
 _BASIN_FLIP_REL_TOL = 1e-3
 
 # Non-paralyzable detector deadtime (Tsoulfanidis 1995, p. 74): n = g / (1 - g*tau)
@@ -105,10 +98,7 @@ INITIAL_TEMPERATURE_FLOOR_K = (
 # (typical for SWAPI: bulk velocity is dominated by the spin-axis component).
 N_VELOCITY_ANGLE_MC_SAMPLES = 1000
 
-# LM xtol. Loosening from scipy default 1e-8 to 1e-3 cuts LM cost ~50% with
-# no measurable degradation on the 1000-sample synthetic benchmark (0/1000
-# wrong basin). ftol stays at its scipy default; xtol fires before ftol on
-# this problem, so loosening ftol is redundant.
+# Loosened from scipy default; xtol fires before ftol on this problem so loosening ftol is redundant.
 _LM_XTOL = 1e-3
 
 
@@ -216,7 +206,6 @@ def fit_solar_wind_proton_moments(
     across stage 1/stage 2 fits to avoid duplicate SPICE calls."""
     from imap_l3_processing.constants import PROTON_MASS_PER_CHARGE_M_P_PER_E
 
-    # Spin axis (body +Y in RTN) for the K-rotation grid in _optimize.
     # Captured here, before the half-mean mask below may drop the bin at index 0.
     spin_axis_rtn = rotation_matrices[0, 1, :].copy()
 
@@ -257,9 +246,6 @@ def fit_solar_wind_proton_moments(
     az_trans = np.asarray(swapi_response.azimuthal_transmission, dtype=float)
     az_trans_spacing = float(swapi_response.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
 
-    # Step 2: Initial guess — radial speed and thermal width from a 1D Gaussian
-    # fit to count rate vs speed; transverse seed is the legacy (-30, 0) bias
-    # that the K-rotation grid-LM in _optimize corrects for wrong-basin transverse seeds.
     initial_guess = _get_initial_guess(
         count_rate,
         esa_voltage,
@@ -325,9 +311,6 @@ def _get_initial_guess(
         / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
     )
 
-    # Legacy transverse seed: vT=-30, vN=0. The K-rotation grid-LM in
-    # _optimize handles cases where this lands on the wrong side of the
-    # spin-axis mirror.
     bulk_velocity_rtn = np.array(
         [
             math.sqrt(max(float(bulk_speed_init) ** 2 - 30.0**2, 0.0)),
@@ -992,17 +975,10 @@ def _evaluate_rotated_chi(
     rotation_matrices: ndarray,
     spin_axis_rtn: ndarray,
 ) -> tuple:
-    """Rotate the LM-1 bulk velocity by `theta` rad about `spin_axis_rtn` (Rodrigues),
-    evaluate the forward model with closed-form n rescale, return (chi2, v_rotated, n_opt).
-
-    The closed-form rescale: given model m at the rotated velocity and observed r,
-    optimum α = (m·r)/(m·m); χ² = sum((α·m − r)²); n_opt = exp(lm_result.x[0]) · α.
-    """
     v_lm = lm_result.x[2:5]
     s = spin_axis_rtn
     cos_t = math.cos(theta)
     sin_t = math.sin(theta)
-    # Rodrigues: v_rot = v*cos + (s × v)*sin + s*(s·v)*(1 - cos)
     cross = np.array(
         [
             s[1] * v_lm[2] - s[2] * v_lm[1],
@@ -1087,16 +1063,6 @@ def _optimize(
         xtol=_LM_XTOL,
     )
 
-    # K-rotation grid around spin axis; conditional second LM from grid winner.
-    # See bean imap_L3_processing-2n10 for the design rationale and empirical sweep.
-    #
-    # Spin axis in RTN = body-Y direction expressed in RTN coords = row 1 of R[i].
-    # Evaluate K-1 non-zero Rodrigues rotations of LM-1's bulk velocity at angles
-    # θ_k = k·2π/K, using a closed-form n rescale for a cheap χ² estimate.
-    # If the best grid χ² / LM-1 χ² < _GRID_THRESHOLD, run ONE LM from the grid
-    # winner and accept only if χ² improves by more than _BASIN_FLIP_REL_TOL.
-    # Always-on (no verifier gate): bounded cost of K-1 forward-model evals + at
-    # most 1 additional LM. P99 fit time is bounded at ~2 LMs.
     chi2 = float(np.sum(result.fun**2))
     best_chi = math.inf
     best_v = None

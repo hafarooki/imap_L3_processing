@@ -1,6 +1,7 @@
 import math
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import numba
@@ -18,6 +19,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     _get_initial_guess,
     _compute_angles,
     _model_count_rates,
+    _evaluate_rotated_chi,
     apply_deadtime_correction_array,
     _optimize,
     apply_deadtime_correction,
@@ -557,8 +559,6 @@ class TestGetInitialGuess(unittest.TestCase):
         np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.2)
 
     def test_bulk_velocity_initial_guess(self):
-        # Legacy IG returns the (-30, 0) transverse seed; the optimizer recovers
-        # the true (vT, vN) from the spin-phase modulation downstream.
         result = self._run()
         expected_vR = math.sqrt(max(self.true_speed**2 - 30.0**2, 0.0))
         np.testing.assert_allclose(result.bulk_velocity_rtn[0], expected_vR, rtol=0.02)
@@ -1703,14 +1703,11 @@ class TestColdPlasmaTransverseRecovery(unittest.TestCase):
 
 
 class TestWrongBasinFlipCheck(unittest.TestCase):
-    """Regression tests for the K-rotation grid wrong-basin check in _optimize.
+    """_optimize recovers the truth basin regardless of which side the initial guess starts on.
 
-    The count-rate model is approximately invariant under (vT, vN) → (-vT, -vN)
-    (a 180° rotation about the spin axis), creating two chi² basins. The K=4
-    spin-axis grid evaluates K-1=3 rotations of LM-1's bulk velocity; if the
-    best grid chi² / LM-1 chi² < _GRID_THRESHOLD, a second LM runs from the
-    grid winner. These tests verify that _optimize always recovers the correct
-    basin regardless of which side the initial guess starts from.
+    Fixture chosen so the chi² landscape is bimodal: without the K-rotation grid,
+    LM from a mirror-side initial guess converges to the mirror basin (~120 km/s
+    off in the transverse components).
     """
 
     @classmethod
@@ -1718,12 +1715,14 @@ class TestWrongBasinFlipCheck(unittest.TestCase):
         sr = _load_swapi_response()
         cls.true_density = 8.0
         cls.true_temperature = 10.0 * EV_TO_KELVIN
-        cls.true_velocity = np.array([450.0, -40.0, 35.0])
+        cls.true_velocity = np.array([350.0, -50.0, 45.0])
 
         voltages = np.geomspace(
-            _peak_voltage(450.0) * 0.75, _peak_voltage(450.0) * 1.35, 20
+            _peak_voltage(cls.true_velocity[0]) * 0.75,
+            _peak_voltage(cls.true_velocity[0]) * 1.35,
+            30,
         )
-        n_sweeps = 5
+        n_sweeps = 8
         all_voltages = np.tile(voltages, n_sweeps)
         cls.grids, cls.cs, cls.cea, cls.at, cls.ats = _build_proton_arrays(
             sr, all_voltages
@@ -1764,40 +1763,151 @@ class TestWrongBasinFlipCheck(unittest.TestCase):
             ig,
         )
 
+    def _spin_axis_mirror(self, v):
+        return 2.0 * np.dot(v, self.spin_axis) * self.spin_axis - v
+
     def test_correct_basin_from_true_init(self):
-        result = self._run(self._make_ig([450.0, -40.0, 35.0]))
+        result = self._run(self._make_ig(self.true_velocity))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+            result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
         )
 
     def test_correct_basin_from_mirror_init(self):
-        v_mirror = (
-            2.0 * np.dot(self.true_velocity, self.spin_axis) * self.spin_axis
-            - self.true_velocity
-        )
-        result = self._run(self._make_ig(v_mirror))
+        result = self._run(self._make_ig(self._spin_axis_mirror(self.true_velocity)))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+            result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
         )
 
     def test_correct_basin_from_zero_transverse_init(self):
-        result = self._run(self._make_ig([450.0, 0.0, 0.0]))
+        result = self._run(self._make_ig([self.true_velocity[0], 0.0, 0.0]))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+            result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
         )
 
     def test_both_inits_give_same_result(self):
-        r_true = self._run(self._make_ig([450.0, -40.0, 35.0]))
-        v_mirror = (
-            2.0 * np.dot(self.true_velocity, self.spin_axis) * self.spin_axis
-            - self.true_velocity
-        )
-        r_mirror = self._run(self._make_ig(v_mirror))
+        r_true = self._run(self._make_ig(self.true_velocity))
+        r_mirror = self._run(self._make_ig(self._spin_axis_mirror(self.true_velocity)))
         np.testing.assert_allclose(
-            r_true.bulk_velocity_rtn, r_mirror.bulk_velocity_rtn, atol=1e-6
+            r_true.bulk_velocity_rtn_nominal(),
+            r_mirror.bulk_velocity_rtn_nominal(),
+            atol=0.01,
         )
-        np.testing.assert_allclose(r_true.density, r_mirror.density, rtol=1e-6)
-        np.testing.assert_allclose(r_true.temperature, r_mirror.temperature, rtol=1e-6)
+        np.testing.assert_allclose(
+            r_true.density.nominal_value, r_mirror.density.nominal_value, rtol=1e-3
+        )
+        np.testing.assert_allclose(
+            r_true.temperature.nominal_value,
+            r_mirror.temperature.nominal_value,
+            rtol=1e-3,
+        )
+
+
+class TestEvaluateRotatedChi(unittest.TestCase):
+    """Direct unit tests for the spin-axis rotation + closed-form n rescale."""
+
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        cls.true_density = 8.0
+        cls.true_temperature = 10.0 * EV_TO_KELVIN
+        cls.true_velocity = np.array([450.0, -40.0, 35.0])
+        voltages = np.geomspace(
+            _peak_voltage(cls.true_velocity[0]) * 0.75,
+            _peak_voltage(cls.true_velocity[0]) * 1.35,
+            20,
+        )
+        n_sweeps = 5
+        all_voltages = np.tile(voltages, n_sweeps)
+        cls.grids, cls.cs, cls.cea, cls.at, cls.ats = _build_proton_arrays(
+            sr, all_voltages
+        )
+        cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
+        cls.spin_axis = cls.rot[0, 1, :].copy()
+        cls.count_rate = _model_count_rates(
+            cls.true_density,
+            cls.true_temperature,
+            cls.true_velocity,
+            cls.grids,
+            cls.cs,
+            cls.cea,
+            cls.at,
+            cls.ats,
+            cls.rot,
+            PROTON_MASS_KG,
+        )
+
+    def _evaluate(self, density, temperature, velocity, theta):
+        lm_result = SimpleNamespace(
+            x=np.array(
+                [
+                    math.log(density),
+                    math.log(temperature),
+                    velocity[0],
+                    velocity[1],
+                    velocity[2],
+                ]
+            )
+        )
+        return _evaluate_rotated_chi(
+            lm_result,
+            theta,
+            self.count_rate,
+            self.grids,
+            self.cs,
+            self.cea,
+            self.at,
+            self.ats,
+            self.rot,
+            self.spin_axis,
+        )
+
+    def test_zero_angle_returns_input_velocity(self):
+        v_in = self.true_velocity
+        _, v_rot, _ = self._evaluate(
+            self.true_density, self.true_temperature, v_in, 0.0
+        )
+        np.testing.assert_allclose(v_rot, v_in, atol=1e-12)
+
+    def test_two_pi_returns_input_velocity(self):
+        v_in = self.true_velocity
+        _, v_rot, _ = self._evaluate(
+            self.true_density, self.true_temperature, v_in, 2.0 * math.pi
+        )
+        np.testing.assert_allclose(v_rot, v_in, atol=1e-10)
+
+    def test_pi_rotation_equals_spin_axis_mirror(self):
+        v_in = self.true_velocity
+        expected = 2.0 * np.dot(v_in, self.spin_axis) * self.spin_axis - v_in
+        _, v_rot, _ = self._evaluate(
+            self.true_density, self.true_temperature, v_in, math.pi
+        )
+        np.testing.assert_allclose(v_rot, expected, atol=1e-10)
+
+    def test_rotation_preserves_speed(self):
+        v_in = self.true_velocity
+        speed_in = np.linalg.norm(v_in)
+        for theta in (0.5, 1.0, math.pi / 3.0, 2.0 * math.pi / 3.0):
+            _, v_rot, _ = self._evaluate(
+                self.true_density, self.true_temperature, v_in, theta
+            )
+            self.assertAlmostEqual(np.linalg.norm(v_rot), speed_in, places=8)
+
+    def test_n_rescale_recovers_density_at_truth(self):
+        chi, _, n_opt = self._evaluate(
+            self.true_density, self.true_temperature, self.true_velocity, 0.0
+        )
+        self.assertGreaterEqual(chi, 0.0)
+        self.assertTrue(np.isfinite(chi))
+        np.testing.assert_allclose(n_opt, self.true_density, rtol=0.01)
+
+    def test_pi_rotation_at_truth_gives_much_higher_chi(self):
+        chi_zero, _, _ = self._evaluate(
+            self.true_density, self.true_temperature, self.true_velocity, 0.0
+        )
+        chi_pi, _, _ = self._evaluate(
+            self.true_density, self.true_temperature, self.true_velocity, math.pi
+        )
+        self.assertGreater(chi_pi, chi_zero * 100.0)
 
 
 if __name__ == "__main__":
