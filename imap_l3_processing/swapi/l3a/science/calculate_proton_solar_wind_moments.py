@@ -59,6 +59,14 @@ EPSILON_SG = 1e-6
 # the Maxwellian (the resulting GL polynomial overshoots a near-delta peak).
 SPEED_HALF_WIDTH_VTH = 5.0
 
+# Wrong-basin detection: iterate flip+LM up to this many times, accepting a flip
+# only if it improves χ² by more than the relative tolerance. Most cases stop
+# after the first flip; pathological starts (low-density, aggressively masked IG
+# that lands LM in an off-axis third basin) need 2-3 flips to walk into the truth
+# basin. See `_optimize` and docs/swapi/solar-wind-moments.md.
+_MAX_BASIN_FLIPS = 6
+_BASIN_FLIP_REL_TOL = 1e-3
+
 # Non-paralyzable detector deadtime (Tsoulfanidis 1995, p. 74): n = g / (1 - g*tau)
 # Rearranged for forward model (true rate -> measured rate): g = n / (1 + n*tau)
 SWAPI_DEADTIME_S = 183.7e-9
@@ -947,22 +955,27 @@ def _optimize(
     # Spin axis in RTN = body-Y direction expressed in RTN coords = row 1 of R[i].
     # 180° rotation about that axis: v' = 2(v·s)s − v.
     #
-    # Always re-run LM from the flipped seed so we land at the mirror basin's
-    # actual minimum and pick whichever converged result has lower chi². The
-    # flipped LM *point* alone is a poor proxy for the mirror basin's depth
-    # when the two basins have different (n, T) — e.g., cold-plasma wrong-
-    # basin local minima with inflated density.
+    # Iterate flip+LM until χ² stops improving. A single flip is enough when the
+    # initial LM converges to the truth basin or its direct spin-axis mirror, but
+    # a low-density / aggressively masked IG can land LM in a third off-axis
+    # basin whose mirror is also not the truth basin — chained flips walk through
+    # those connected basins until the deepest reachable one is found. Monotone
+    # in χ², so this can only equal-or-improve the single-flip result.
     chi2 = float(np.sum(result.fun**2))
-    v_rtn = result.x[2:5]
-    v_flipped = 2.0 * float(np.dot(v_rtn, spin_axis_rtn)) * spin_axis_rtn - v_rtn
-    x_flipped = result.x.copy()
-    x_flipped[2:5] = v_flipped
-    result_flipped = scipy.optimize.least_squares(
-        residuals, x_flipped, method="lm", diff_step=1e-4
-    )
-    chi2_flipped = float(np.sum(result_flipped.fun**2))
-    if chi2_flipped < chi2:
-        result = result_flipped
+    for _ in range(_MAX_BASIN_FLIPS):
+        v_rtn = result.x[2:5]
+        v_flipped = 2.0 * float(np.dot(v_rtn, spin_axis_rtn)) * spin_axis_rtn - v_rtn
+        x_flipped = result.x.copy()
+        x_flipped[2:5] = v_flipped
+        result_flipped = scipy.optimize.least_squares(
+            residuals, x_flipped, method="lm", diff_step=1e-4
+        )
+        chi2_flipped = float(np.sum(result_flipped.fun**2))
+        if chi2_flipped < chi2 * (1.0 - _BASIN_FLIP_REL_TOL):
+            result = result_flipped
+            chi2 = chi2_flipped
+        else:
+            break
 
     density = float(np.exp(result.x[0]))
     temperature = float(np.exp(result.x[1]))

@@ -92,25 +92,25 @@ class TestGetPassbandValues(unittest.TestCase):
         )
 
     def test_returns_correct_number_of_rows_for_oa(self):
-        result = self.response.get_passband_values(529.0, "OA")
+        result = self.response._get_passband_values(529.0, "OA")
         self.assertEqual(len(result), 679)
 
     def test_returns_correct_number_of_rows_for_sg(self):
-        result = self.response.get_passband_values(529.0, "SG")
+        result = self.response._get_passband_values(529.0, "SG")
         self.assertEqual(len(result), 467)
 
     def test_values_are_non_negative(self):
-        result = self.response.get_passband_values(529.0, "OA")
+        result = self.response._get_passband_values(529.0, "OA")
         self.assertTrue((result["value"] >= 0).all())
 
     def test_peak_oa_value_near_one_at_central_energy(self):
         # At the voltage corresponding to the SIMION calibration energy (1 keV / 1.89),
         # the passband peak should be close to 1 (it's normalized per beam energy)
-        result = self.response.get_passband_values(1000 / 1.89, "OA")
+        result = self.response._get_passband_values(1000 / 1.89, "OA")
         npt.assert_approx_equal(result["value"].max(), 1.0, significant=1)
 
     def test_index_has_energy_ratio_and_elevation(self):
-        result = self.response.get_passband_values(529.0, "OA")
+        result = self.response._get_passband_values(529.0, "OA")
         self.assertEqual(result.index.names, ["energy_ratio", "elevation"])
 
 

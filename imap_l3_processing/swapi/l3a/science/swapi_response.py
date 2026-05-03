@@ -14,14 +14,10 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTO
 
 @dataclass
 class SWAPIResponse:
-    azimuthal_transmission: (
-        NDArray  # shape (N,), evenly spaced at 0.1 deg intervals from 0
-    )
+    azimuthal_transmission: NDArray  # shape (N,), evenly spaced at 0.1 deg intervals from 0
     central_effective_area_voltage: NDArray  # shape (M,), ESA voltages in V
     central_effective_area: NDArray  # shape (M,), effective area in cm^2
-    passband_fit_coefficients: (
-        pd.DataFrame
-    )  # index: (region, energy_ratio, elevation), columns: [2, 1, 0]
+    passband_fit_coefficients: pd.DataFrame  # index: (region, energy_ratio, elevation), columns: [2, 1, 0]
     passband_esa_voltage_limits: dict  # {region: (min_esa_voltage, max_esa_voltage)}
     _grid_cache: dict = field(
         default_factory=dict, init=False, repr=False, compare=False
@@ -72,14 +68,6 @@ class SWAPIResponse:
                 self.central_effective_area,
             )
         )
-
-    def get_passband_values(self, esa_voltage: float, region: str) -> pd.DataFrame:
-        v_min, v_max = self.passband_esa_voltage_limits.get(region, (0, np.inf))
-        clamped_voltage = float(np.clip(np.abs(esa_voltage), v_min, v_max))
-        log_beam_energy = np.log(SWAPI_K_FACTOR * clamped_voltage)
-        coeffs = self.passband_fit_coefficients.xs(region, level="region")
-        values = np.exp(np.polyval(coeffs.values.T, log_beam_energy))
-        return pd.DataFrame(values, index=coeffs.index, columns=["value"])
 
     def central_speed(
         self, esa_voltage: float, mass_per_charge_m_p_per_e: float
@@ -134,6 +122,14 @@ class SWAPIResponse:
 
     def _build_passband_grid(self, esa_voltage: float) -> PassbandGrid:
         return build_passband_grid(
-            self.get_passband_values(esa_voltage, "OA"),
-            self.get_passband_values(esa_voltage, "SG"),
+            oa_values=self._get_passband_values(esa_voltage, "OA"),
+            sg_values=self._get_passband_values(esa_voltage, "SG"),
         )
+
+    def _get_passband_values(self, esa_voltage: float, region: str) -> pd.DataFrame:
+        v_min, v_max = self.passband_esa_voltage_limits.get(region, (0, np.inf))
+        clamped_voltage = float(np.clip(np.abs(esa_voltage), v_min, v_max))
+        log_beam_energy = np.log(SWAPI_K_FACTOR * clamped_voltage)
+        coeffs = self.passband_fit_coefficients.xs(region, level="region")
+        values = np.exp(np.polyval(coeffs.values.T, log_beam_energy))
+        return pd.DataFrame(values, index=coeffs.index, columns=["value"])
