@@ -263,8 +263,8 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
             10.0 * EV_TO_KELVIN,
         )  # ~5% abundance, same temperature as protons
         cls.delta_v = 30.0
-        cls.b_hat_rtn = np.array([1.0, 0.0, 0.0])
-        cls.v_a_rtn = cls.v_p_rtn + cls.delta_v * cls.b_hat_rtn
+        cls.magnetic_field_direction = np.array([1.0, 0.0, 0.0])
+        cls.v_a_rtn = cls.v_p_rtn + cls.delta_v * cls.magnetic_field_direction
 
         cls.obs, cls.esa_flat, cls.rot = _synthesize_combined_observed(
             cls.sr,
@@ -299,7 +299,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
                 bad_fit_flag=int(SwapiL3Flags.NONE),
                 velocity_covariance=np.eye(3) * 0.01,
             ),
-            b_hat_rtn=self.b_hat_rtn,
+            magnetic_field_direction=self.magnetic_field_direction,
             alpha_effective_area_scale=1.0,
             proton_effective_area_scale=1.0,
             rotation_matrices=self.rot,
@@ -316,7 +316,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
             measurement_time=np.zeros(len(self.esa_flat), dtype="int64"),
             swapi_response=self.sr,
             proton_moments=self._proton_truth(),
-            b_hat_rtn=np.full(3, np.nan),
+            magnetic_field_direction=np.full(3, np.nan),
             alpha_effective_area_scale=1.0,
             proton_effective_area_scale=1.0,
             rotation_matrices=self.rot,
@@ -371,7 +371,7 @@ class TestFlagsAndGuards(unittest.TestCase):
             measurement_time=np.zeros(len(self.esa_flat), dtype="int64"),
             swapi_response=self.sr,
             proton_moments=proton,
-            b_hat_rtn=np.array([1.0, 0.0, 0.0]),
+            magnetic_field_direction=np.array([1.0, 0.0, 0.0]),
             alpha_effective_area_scale=1.0,
             proton_effective_area_scale=1.0,
         )
@@ -384,7 +384,9 @@ class TestFlagsAndGuards(unittest.TestCase):
         proton = _make_proton_moments(
             density=5.0,
             temperature=10.0,
-            bulk_velocity_rtn=np.array([0.0, 0.0, 0.0]),  # would trip BAD_FIT downstream
+            bulk_velocity_rtn=np.array(
+                [0.0, 0.0, 0.0]
+            ),  # would trip BAD_FIT downstream
             bad_fit_flag=int(SwapiL3Flags.NONE),
         )
         result = fit_solar_wind_alpha_moments(
@@ -393,7 +395,7 @@ class TestFlagsAndGuards(unittest.TestCase):
             measurement_time=np.zeros(len(self.esa_flat), dtype="int64"),
             swapi_response=self.sr,
             proton_moments=proton,
-            b_hat_rtn=np.full(3, np.nan),
+            magnetic_field_direction=np.full(3, np.nan),
             alpha_effective_area_scale=1.0,
             proton_effective_area_scale=1.0,
             rotation_matrices=np.tile(np.eye(3), (len(self.esa_flat), 1, 1)),
@@ -459,7 +461,7 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
             measurement_time=np.zeros(len(f["cr_flat"]), dtype="int64"),
             swapi_response=self.sr,
             proton_moments=proton,
-            b_hat_rtn=f["b_hat_rtn"],
+            magnetic_field_direction=f["b_hat_rtn"],
             alpha_effective_area_scale=float(f["alpha_eff_scale"]),
             proton_effective_area_scale=float(f["proton_eff_scale"]),
             rotation_matrices=f["rotation_matrices"],

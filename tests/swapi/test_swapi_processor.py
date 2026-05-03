@@ -1179,7 +1179,7 @@ class TestSwapiProcessor(TestCase):
         ]
 
         # Provide minimal mag_data so AlphaChunkFitter.precompute_geometry can
-        # compute b_hat_rtn without crashing.  epoch=11 falls inside the chunk
+        # compute magnetic_field_direction without crashing.  epoch=11 falls inside the chunk
         # window [10, 10+2*THIRTY_SECONDS_IN_NANOSECONDS], giving a finite b_hat.
         mock_mag_data = Mock()
         mock_mag_data.epoch = np.array([11])

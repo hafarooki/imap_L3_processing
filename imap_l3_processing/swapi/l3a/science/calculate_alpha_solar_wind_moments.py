@@ -59,7 +59,7 @@ def _nan_alpha_moments(flag: int) -> AlphaSolarWindMoments:
 def _alpha_residuals_njit(
     x,
     proton_bulk,
-    b_hat_rtn,
+    magnetic_field_direction,
     proton_true_rate,
     count_rate,
     sigma,
@@ -73,7 +73,7 @@ def _alpha_residuals_njit(
     n_a = np.exp(x[0])
     T_a = np.exp(x[1])
     dv = x[2]
-    v_a_rtn = proton_bulk + dv * b_hat_rtn
+    v_a_rtn = proton_bulk + dv * magnetic_field_direction
     alpha_true = _model_count_rates(
         n_a,
         T_a,
@@ -96,29 +96,11 @@ def fit_solar_wind_alpha_moments(
     measurement_time: ndarray,
     swapi_response: SWAPIResponse,
     proton_moments: ProtonSolarWindMoments,
-    b_hat_rtn: ndarray,
+    magnetic_field_direction: ndarray,
     alpha_effective_area_scale: float,
     proton_effective_area_scale: float,
     rotation_matrices: Optional[ndarray] = None,
 ) -> AlphaSolarWindMoments:
-    """Fit (n_α, T_α, Δv) given proton moments held fixed.
-
-    ``count_rate`` / ``esa_voltage`` / ``measurement_time`` are flattened over (sweep, bin)
-    with shape ``(n_sweeps × n_bins,)``. The plan recommends 5 sweeps × 62 coarse bins =
-    310 residuals. Sweep ordering is the caller's responsibility (must match for all three).
-
-    ``alpha_effective_area_scale = ε_α(t) / ε_p(t_lab)`` (note the proton-lab denominator
-    even for alphas — see `solar-wind-moments.md` § "Alpha Particle Moments").
-
-    ``b_hat_rtn`` is the unit MAG direction in RTN for the chunk. Normally the
-    chunk fitter intercepts MAG gaps upstream (emitting ``MAG_GAP``) before
-    calling this function, so the NaN-finite guard below is a defensive fallback
-    for direct callers (tests, etc.). If ``b_hat_rtn`` is still NaN when this
-    function is reached it returns NaN moments with ``bad_fit_flag |= BAD_FIT``.
-
-    ``rotation_matrices`` may be precomputed and reused from the Stage 1 proton fit;
-    if ``None``, computed internally from ``measurement_time``.
-    """
     # Guard: stage 1 failed → don't trust v_p*.
     if int(proton_moments.bad_fit_flag) != int(SwapiL3Flags.NONE):
         return _nan_alpha_moments(SwapiL3Flags.STALE_PROTON)
@@ -129,8 +111,8 @@ def fit_solar_wind_alpha_moments(
     # MAG required: per-chunk gaps (NaN b_hat) → BAD_FIT.
     # No Parker-spiral substitution; MAG presence at file level is enforced
     # by the alpha-sw processor branch.
-    b_hat_rtn = np.asarray(b_hat_rtn, dtype=float)
-    if not np.all(np.isfinite(b_hat_rtn)):
+    magnetic_field_direction = np.asarray(magnetic_field_direction, dtype=float)
+    if not np.all(np.isfinite(magnetic_field_direction)):
         return _nan_alpha_moments(SwapiL3Flags.BAD_FIT)
 
     # SPICE shared with Stage 1 if provided; otherwise compute here.
@@ -195,7 +177,7 @@ def fit_solar_wind_alpha_moments(
         az_trans_spacing=az_trans_spacing,
         rotation_matrices=rotation_matrices,
         proton_bulk_velocity_rtn=proton_bulk_rtn,
-        b_hat_rtn=b_hat_rtn,
+        magnetic_field_direction=magnetic_field_direction,
     )
     if initial_guess is None:
         return _nan_alpha_moments(bad_fit_flag | SwapiL3Flags.BAD_FIT)
@@ -225,7 +207,7 @@ def fit_solar_wind_alpha_moments(
         return _alpha_residuals_njit(
             x,
             proton_bulk,
-            b_hat_rtn,
+            magnetic_field_direction,
             proton_true_rate_peak,
             count_rate_peak,
             sigma_peak,
@@ -253,7 +235,7 @@ def fit_solar_wind_alpha_moments(
     n_a_fit = float(np.exp(result.x[0]))
     T_a_fit = float(np.exp(result.x[1]))
     dv_fit = float(result.x[2])
-    bulk_velocity_rtn = proton_bulk + dv_fit * b_hat_rtn
+    bulk_velocity_rtn = proton_bulk + dv_fit * magnetic_field_direction
     if not result.success:
         bad_fit_flag |= SwapiL3Flags.BAD_FIT
 
@@ -269,7 +251,7 @@ def fit_solar_wind_alpha_moments(
     sigma_dv2 = max(cov_x[2, 2], 0.0)
     velocity_covariance_rtn = (
         proton_moments.bulk_velocity_rtn_covariance()
-        + sigma_dv2 * np.outer(b_hat_rtn, b_hat_rtn)
+        + sigma_dv2 * np.outer(magnetic_field_direction, magnetic_field_direction)
     )
 
     return AlphaSolarWindMoments(
@@ -295,7 +277,7 @@ def _alpha_initial_guess(
     az_trans_spacing: float,
     rotation_matrices: ndarray,
     proton_bulk_velocity_rtn: ndarray,
-    b_hat_rtn: ndarray,
+    magnetic_field_direction: ndarray,
 ) -> Optional[tuple]:
     """Return (n_α, T_α, Δv=0, peak_bin_indices) as a starting point for LM, or None if peak-finding fails."""
 

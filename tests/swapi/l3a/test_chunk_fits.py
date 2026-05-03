@@ -68,7 +68,21 @@ class TestChunkFits(TestCase):
             result["proton_sw_speed_sun_uncert"], expected_sun_speed_uncert
         )
 
-    def _call_alpha_fit_chunk(self, rotation_matrices, b_hat_rtn):
+    def test_proton_fitter_ephemeris_gap_when_sc_velocity_none_but_rotation_matrices_valid(
+        self,
+    ):
+        """Defensive: production sets rm and sc_vel together, but if that ever
+        diverges, sc_velocity_rtn=None alone must still raise EPHEMERIS_GAP."""
+        data_chunk = Mock()
+        data_chunk.coincidence_count_rate = np.zeros((5, 72))
+        rm = np.tile(np.eye(3), (5, 1, 1))
+
+        result = ProtonChunkFitter().fit_chunk(data_chunk, 0, rm, None)
+
+        self.assertEqual(result["quality_flags"], int(SwapiL3Flags.EPHEMERIS_GAP))
+        np.testing.assert_array_equal(result["proton_sw_speed"], np.nan)
+
+    def _call_alpha_fit_chunk(self, rotation_matrices, magnetic_field_direction):
         """Call AlphaChunkFitter.fit_chunk with the given geometry arguments.
         _shared is normally populated by the worker initializer; stub it here so
         the early access doesn't KeyError."""
@@ -78,7 +92,9 @@ class TestChunkFits(TestCase):
             data_chunk = Mock()
             data_chunk.coincidence_count_rate = np.full((5, 72), np.nan)
             fitter = AlphaChunkFitter(mag_data=None)
-            return fitter.fit_chunk(data_chunk, 0, rotation_matrices, b_hat_rtn)
+            return fitter.fit_chunk(
+                data_chunk, 0, rotation_matrices, magnetic_field_direction
+            )
         finally:
             _shared.clear()
 

@@ -111,29 +111,13 @@ class ProtonChunkFitter(ChunkFitter):
         bulk_velocity_rtn_sc = np.full(3, np.nan)
         velocity_covariance = np.full((3, 3), np.nan)
         quality_flag = SwapiL3Flags.NONE
-        if rotation_matrices is None or sc_velocity_rtn is None:
-            quality_flag |= SwapiL3Flags.EPHEMERIS_GAP
-            return dict(
-                epoch=epoch,
-                proton_sw_speed=speed_nom,
-                proton_sw_speed_uncert=speed_unc,
-                proton_sw_speed_sun=sun_speed_nom,
-                proton_sw_speed_sun_uncert=sun_speed_unc,
-                proton_sw_temperature=temp_nom,
-                proton_sw_temperature_uncert=temp_unc,
-                proton_sw_density=density_nom,
-                proton_sw_density_uncert=density_unc,
-                proton_sw_clock_angle=clock_nom,
-                proton_sw_clock_angle_uncert=clock_unc,
-                proton_sw_deflection_angle=defl_nom,
-                proton_sw_deflection_angle_uncert=defl_unc,
-                proton_sw_bulk_velocity_rtn_sun=bulk_velocity_rtn_sun,
-                proton_sw_bulk_velocity_rtn_sun_covariance=velocity_covariance,
-                proton_sw_bulk_velocity_rtn_sc=bulk_velocity_rtn_sc,
-                proton_sw_bulk_velocity_rtn_sc_covariance=velocity_covariance,
-                quality_flags=quality_flag,
-            )
         try:
+            if rotation_matrices is None:
+                quality_flag |= SwapiL3Flags.EPHEMERIS_GAP
+                raise ValueError("Missing rotation matrices")
+            if sc_velocity_rtn is None:
+                quality_flag |= SwapiL3Flags.EPHEMERIS_GAP
+                raise ValueError("Missing spacecraft velocity")
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
             ):
@@ -213,7 +197,7 @@ class AlphaChunkFitter(ChunkFitter):
         )
         return (epoch, rm, b_hat)
 
-    def fit_chunk(self, data_chunk, epoch, rotation_matrices, b_hat_rtn):
+    def fit_chunk(self, data_chunk, epoch, rotation_matrices, magnetic_field_direction):
         swapi_response = _shared["swapi_response"]
         efficiency_table = _shared["efficiency_table"]
         density_nom = density_unc = np.nan
@@ -225,13 +209,15 @@ class AlphaChunkFitter(ChunkFitter):
         ref_density = ref_temperature = np.nan
         ref_velocity = np.full(3, np.nan)
         bad_fit_flag = int(SwapiL3Flags.BAD_FIT)
-        if rotation_matrices is None:
-            bad_fit_flag = int(SwapiL3Flags.EPHEMERIS_GAP)
-            return _nan_alpha_record(epoch, bad_fit_flag)
-        if b_hat_rtn is None or not np.all(np.isfinite(b_hat_rtn)):
-            bad_fit_flag = int(SwapiL3Flags.MAG_GAP)
-            return _nan_alpha_record(epoch, bad_fit_flag)
         try:
+            if rotation_matrices is None:
+                bad_fit_flag = int(SwapiL3Flags.EPHEMERIS_GAP)
+                raise ValueError("Missing rotation matrices")
+            if magnetic_field_direction is None or not np.all(
+                np.isfinite(magnetic_field_direction)
+            ):
+                bad_fit_flag = int(SwapiL3Flags.MAG_GAP)
+                raise ValueError("Missing or non-finite magnetic_field_direction")
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
             ):
@@ -248,7 +234,7 @@ class AlphaChunkFitter(ChunkFitter):
                 times,
                 swapi_response,
                 proton_moments,
-                b_hat_rtn,
+                magnetic_field_direction,
                 _eff_scale(efficiency_table, epoch, "alpha"),
                 _eff_scale(efficiency_table, epoch, "proton"),
                 rotation_matrices=rotation_matrices,
@@ -261,7 +247,7 @@ class AlphaChunkFitter(ChunkFitter):
             delta_v_nom, delta_v_unc = mom.delta_v.nominal_value, mom.delta_v.std_dev
             velocity_rtn = mom.bulk_velocity_rtn_nominal()
             velocity_cov = mom.bulk_velocity_rtn_covariance()
-            b_hat_out = b_hat_rtn
+            b_hat_out = magnetic_field_direction
             ref_density = proton_moments.density.nominal_value
             ref_temperature = proton_moments.temperature.nominal_value
             ref_velocity = proton_moments.bulk_velocity_rtn_nominal()
@@ -306,15 +292,10 @@ class PuiProtonChunkFitter(ChunkFitter):
         clock_angle = ufloat(np.nan, np.nan)
         deflection_angle = ufloat(np.nan, np.nan)
         quality_flag = SwapiL3Flags.NONE
-        if rotation_matrices is None:
-            quality_flag |= SwapiL3Flags.EPHEMERIS_GAP
-            return dict(
-                proton_sw_speed=speed,
-                proton_sw_clock_angle=clock_angle,
-                proton_sw_deflection_angle=deflection_angle,
-                quality_flags=quality_flag,
-            )
         try:
+            if rotation_matrices is None:
+                quality_flag |= SwapiL3Flags.EPHEMERIS_GAP
+                raise ValueError("Missing rotation matrices")
             if np.any(
                 np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))
             ):
@@ -335,25 +316,6 @@ class PuiProtonChunkFitter(ChunkFitter):
             proton_sw_deflection_angle=deflection_angle,
             quality_flags=quality_flag,
         )
-
-
-def _nan_alpha_record(epoch, bad_fit_flag):
-    return dict(
-        epoch=epoch,
-        alpha_sw_density=np.nan,
-        alpha_sw_density_uncert=np.nan,
-        alpha_sw_temperature=np.nan,
-        alpha_sw_temperature_uncert=np.nan,
-        alpha_sw_velocity_rtn=np.full(3, np.nan),
-        alpha_sw_velocity_covariance_rtn=np.full((3, 3), np.nan),
-        alpha_sw_delta_v=np.nan,
-        alpha_sw_delta_v_uncert=np.nan,
-        alpha_sw_b_hat_rtn=np.full(3, np.nan),
-        alpha_sw_reference_proton_density=np.nan,
-        alpha_sw_reference_proton_temperature=np.nan,
-        alpha_sw_reference_proton_velocity_rtn=np.full(3, np.nan),
-        bad_fit_flag=bad_fit_flag,
-    )
 
 
 def _eff_scale(efficiency_table, epoch, kind):
