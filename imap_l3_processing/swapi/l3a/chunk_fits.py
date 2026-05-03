@@ -34,7 +34,6 @@ from imap_l3_processing.swapi.l3a.utils import (
     chunk_epoch,
     compute_b_hat_rtn,
     get_spacecraft_velocity_rtn,
-    get_swapi_dsrf_to_rtn,
     get_swapi_geometry,
     measurement_times,
 )
@@ -48,7 +47,7 @@ _shared = {}
 
 def run_parallel_chunks(
     chunks, swapi_response, efficiency_table, geometry_fn, worker_fn
-) -> dict[str, Any]:tre
+) -> dict[str, Any]:
     """Precompute geometry per chunk in the parent, then submit to a
     fork-context process pool. Geometry functions return None-filled tuples on
     SPICE gaps; workers handle them via their existing try/except.
@@ -76,23 +75,21 @@ def proton_geometry(chunk):
     epoch = chunk_epoch(chunk)
     try:
         rm = get_swapi_geometry(measurement_times(chunk, SWAPI_SCIENCE_BINS))
-        dsrf = get_swapi_dsrf_to_rtn(np.array([epoch]))[0]
         sc_vel = get_spacecraft_velocity_rtn(epoch)
     except Exception:
         logger.warning("SPICE gap in proton geometry, NaN-filling chunk", exc_info=True)
-        rm = dsrf = sc_vel = None
-    return (epoch, rm, dsrf, sc_vel)
+        rm = sc_vel = None
+    return (epoch, rm, sc_vel)
 
 
 def pui_geometry(chunk):
     epoch = chunk_epoch(chunk)
     try:
         rm = get_swapi_geometry(measurement_times(chunk, SWAPI_SCIENCE_BINS))
-        dsrf = get_swapi_dsrf_to_rtn(np.array([epoch]))[0]
     except Exception:
         logger.warning("SPICE gap in pui geometry, NaN-filling chunk", exc_info=True)
-        rm = dsrf = None
-    return (epoch, rm, dsrf)
+        rm = None
+    return (epoch, rm)
 
 
 def alpha_geometry(chunk, mag_l1d_data):
@@ -103,14 +100,12 @@ def alpha_geometry(chunk, mag_l1d_data):
             mag_l1d_data, int(epoch), int(THIRTY_SECONDS_IN_NANOSECONDS)
         )
     except Exception:
-        logger.warning("SPICE gap in alpha geometry, NaN-filling chunk", exc_info=True)
+        logger.warning("Geometry gap in alpha fit, NaN-filling chunk", exc_info=True)
         rm = b_hat = None
     return (epoch, rm, b_hat)
 
 
-def proton_chunk_worker(
-    data_chunk, epoch, rotation_matrices, dsrf_to_rtn, sc_velocity_rtn
-):
+def proton_chunk_worker(data_chunk, epoch, rotation_matrices, sc_velocity_rtn):
     speed_nom = speed_unc = clock_nom = clock_unc = defl_nom = defl_unc = np.nan
     sun_speed_nom = sun_speed_unc = np.nan
     density_nom = density_unc = temp_nom = temp_unc = np.nan
@@ -119,13 +114,11 @@ def proton_chunk_worker(
     velocity_covariance = np.full((3, 3), np.nan)
     quality_flag = SwapiL3Flags.NONE
     try:
-        itinp.any(np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))):
+        if np.any(np.isnan(extract_coarse_sweep(data_chunk.coincidence_count_rate))):
             raise ValueError("Fill values in input data")
         result = _fit_proton(data_chunk, epoch, SWAPI_SCIENCE_BINS, rotation_matrices)
         quality_flag |= result.bad_fit_flag
-        speed, clock_angle, deflection_angle = derive_velocity_angles(
-            result, dsrf_to_rtn
-        )
+        speed, clock_angle, deflection_angle = derive_velocity_angles(result, epoch)
         speed_nom, speed_unc = speed.nominal_value, speed.std_dev
         clock_nom, clock_unc = clock_angle.nominal_value, clock_angle.std_dev
         defl_nom, defl_unc = deflection_angle.nominal_value, deflection_angle.std_dev
@@ -172,7 +165,7 @@ def proton_chunk_worker(
     )
 
 
-def pui_proton_chunk_worker(data_chunk, epoch, rotation_matrices, dsrf_to_rtn):
+def pui_proton_chunk_worker(data_chunk, epoch, rotation_matrices):
     speed = ufloat(np.nan, np.nan)
     clock_angle = ufloat(np.nan, np.nan)
     deflection_angle = ufloat(np.nan, np.nan)
@@ -182,9 +175,7 @@ def pui_proton_chunk_worker(data_chunk, epoch, rotation_matrices, dsrf_to_rtn):
             raise ValueError("Fill values in input data")
         result = _fit_proton(data_chunk, epoch, SWAPI_SCIENCE_BINS, rotation_matrices)
         quality_flag |= result.bad_fit_flag
-        speed, clock_angle, deflection_angle = derive_velocity_angles(
-            result, dsrf_to_rtn
-        )
+        speed, clock_angle, deflection_angle = derive_velocity_angles(result, epoch)
     except Exception:
         logger.info(
             f"Exception occurred at epoch {epoch}, continuing with fill value",
@@ -256,7 +247,7 @@ def alpha_chunk_worker(data_chunk, epoch, rotation_matrices, b_hat_rtn):
             alpha_sw_reference_proton_density=np.nan,
             alpha_sw_reference_proton_temperature=np.nan,
             alpha_sw_reference_proton_velocity_rtn=np.full(3, np.nan),
-            bad_fit_flag=int(SwapiL3Flags.HI_CHI_SQ),
+            bad_fit_flag=int(SwapiL3Flags.BAD_FIT),
         )
 
 

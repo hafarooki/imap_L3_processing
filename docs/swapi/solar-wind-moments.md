@@ -33,27 +33,29 @@
 The primary input for `SwapiProcessor` is SWAPI L2 coincidence count-rate data (`imap_swapi_l2_sci`). Each CDF contains time-ordered ESA sweeps with fields:
 
 - `swp_coin_rate` — coincidence count rate (Hz) for each ESA step.
-- `esa_energy` — energy-per-charge setting for each ESA step. It is related to the actual ESA voltage setting of the instrument by $k_\text{L2} = 1.93$ eV/V/e (see [Two k-factors](#two-k-factors)). To recover the ESA voltage: $V = -\texttt{esa\_energy} / k_\text{L2}$.
+- `esa_energy` — energy-per-charge setting for each ESA step. It is related to the actual ESA voltage setting of the instrument by $V = -\texttt{esa\_energy} / k_\text{L2}$, where $k_\text{L2} = 1.93$ eV/V/e.
 - `sci_start_time` — sweep start epoch (TT2000 ns)
 
 Each 12-second ESA sweep contains **72 ESA steps** (indices 0–71). Their roles are:
 
 | Indices | Count | Description |
 |---------|-------|-------------|
-| 0       | 1     | **Always discarded.** Voltage step-up sweep. |
-| 1–62    | 62    | **Coarse sweep.** Fixed ESA voltage steps with logarithmic spacing. |
-| 63–71   | 9     | **Fine sweep.** Depends on instrument mode, but usually provides a higher-resolution scan of the proton peak, using smaller voltage steps. |
+| 0       | 1     | **Always discarded.** Voltage ramp-up step. |
+| 1–62    | 62    | **Coarse steps.** Fixed ESA voltage steps with logarithmic spacing. |
+| 63–71   | 9     | **Fine steps.** Depends on instrument mode, but usually provides a higher-resolution scan of the proton peak, using smaller voltage steps. |
 
-To fit protons, we use both the coarse sweeps and the fine sweeps, since the fine sweeps usually provide extra information about the protons.
-Occasionally, one or more fine sweep steps will have zero ESA voltage; these are excluded from the fit.
+To fit protons, we use both the coarse steps and the fine steps, since the fine steps usually provide extra information about the protons.
+To fit alphas, we use only the coarse steps.
+
+Occasionally, one or more fine steps will have zero ESA voltage; these are excluded from the fit.
 Likewise, only steps near the proton peak are included.
-To fit alphas, we use only the coarse sweeps.
+
 For both protons and alphas, most of the steps are discarded and only the few that are near the peak are actually used.
 
 The CDF provides these 12-second sweeps for one day per file.
  `SwapiProcessor` groups sweeps into non-overlapping 5-sweep chunks (60s cadence), the least common multiple of the spin rate (approximately 15s) and the sweep cadence (12s).
-The solar wind fitting algorithms are applied to these 5-sweep chunks individually.
 The use of 5 sweeps makes it possible to determine the bulk velocity of the solar wind.
+The solar wind fitting algorithms are applied to these 5-sweep chunks individually.
 
 ### SPICE Kernels
 
@@ -68,7 +70,11 @@ $$t_i = t_\text{epoch} + i \cdot \tfrac{12}{72}\,\text{s} = t_\text{epoch} + i \
 
 ### MAG L1D (alpha only)
 
-The alpha moments fitter requires magnetic field direction from MAG L1D (`b_dsrf` in the despun spacecraft frame). Each MAG sample in the chunk's 60 s window ($\pm 30$ s around the chunk center, exactly the 5-sweep span) is rotated DSRF→RTN at its own epoch and the rotated vectors are averaged in RTN; the unit direction of that mean is then taken as $\hat{\mathbf{B}}^\text{RTN}$. Rotating per-sample before averaging preserves the spacecraft-attitude evolution across the window rather than collapsing it to a single chunk-center rotation. When MAG data is unavailable, a nominal Parker spiral direction is used as fallback (see [Quality flags](#quality-flags-alpha-specific)).
+The alpha moments depend on the local magnetic field direction because the alpha-proton drift is constrained to lie along $\hat{\mathbf{B}}$. It reads the MAG L1D RTN CDF variable `b_rtn`, then normalizes the averaged field direction before the alpha fit.
+
+For each 5-sweep alpha chunk, the processor uses the full 60 s MAG window $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$. The in-window RTN samples are averaged directly, and the mean vector is normalized to produce $\hat{\mathbf{B}}^\text{RTN}$.
+
+If the MAG dependency is missing, the window is empty, any in-window sample is non-finite, or the averaged field is too small to define a direction, `compute_b_hat_rtn` returns NaNs. The alpha fitter then uses the nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ in RTN and sets quality flag `ALPHA_MAG_DATA_FALLBACK` (see [Quality flags](#quality-flags-alpha-specific)).
 
 ## SWAPI Response Model
 
@@ -177,13 +183,7 @@ $$v_\text{hi}(\theta) = \min\!\left(v_b + \Delta v_\text{VDF},\; r_\text{max}(\t
 $$(N_\text{elev}, N_\text{az}, N_\text{speed}) = (21,\;21,\;11).$$
 SG and OA use the same azimuth-node count; the OA window is already tightened by the transmission-aware trim.
 
-The loop order is elevation → azimuth → speed. The implementation computes terms in the outermost loop where they are constant:
-
-| Loop level | Work done once at that level |
-|------------|------------------------------|
-| Elevation $\theta$ | Evaluate passband speed bounds, compute $v_\text{lo}$ and $v_\text{hi}$, skip the elevation if they do not overlap, and precompute $v^3P(v/v_0,\theta)/P(1,0^\circ,V)$ for the speed nodes. |
-| Azimuth $\phi$ | Interpolate azimuthal transmission once and reuse it for all speed nodes at that azimuth. |
-| Speed $v$ | Evaluate the Maxwellian term and accumulate the weighted integrand. |
+The loop order is elevation → azimuth → speed. The implementation computes terms in the outermost loop where they are constant as much as possible.
 
 ### Integrator Validation
 
@@ -240,7 +240,7 @@ $$\mathcal{M} = \{i : C_i \geq 0.1 \max_j C_j\}, \qquad r_i = C_i^\text{model} -
 
 Steps below 10% of the peak count rate are dropped: they carry essentially no proton signal (the proton peak sits in a narrow speed window — most ESA steps are noise floor and off-axis leakage), but with N ≈ 355 steps per 5-sweep fit they still contribute non-trivial residuals that can pull the moments. The 10% threshold is chosen to exclude the deep tails (PUI/alpha contamination in production data) while keeping enough steps that the spin-axis-mirror basins remain discriminable — tighter masks (e.g. FWHM at 0.5×max) leave the cold-plasma chi² landscape too noise-degenerate to pick the right basin. The mask is global across all sweeps × steps fed to one fit, and is computed once from the observed count rates only — the model never re-evaluates it. Initial-guess construction (the Gaussian curve fit and the mean-rate density scaling) is unaffected and uses all steps. If fewer than 5 steps survive the mask (fewer constraints than free parameters), the mask is dropped and all steps are fit, which is purely a guard against pathological inputs (e.g. all-zero count rates).
 
-Density and temperature are parameterized in log-space to keep them positive throughout optimization. The optimizer's `success` flag is mapped to `bad_fit_flag`: failure sets `HI_CHI_SQ`.
+Density and temperature are parameterized in log-space to keep them positive throughout optimization. The optimizer's `success` flag is mapped to `bad_fit_flag`: failure sets `BAD_FIT`.
 
 #### Wrong-basin detection (post-fit flip check)
 
@@ -277,7 +277,7 @@ $$\Sigma_x = s^2\,(J^\top J)^+, \qquad s^2 = \frac{\sum_i r_i^2}{N - p},$$
 where ${}^+$ denotes the Moore–Penrose pseudoinverse, $N$ is the number of residuals, and $p$ is the number of fitted parameters. Since the residuals are unweighted, the variance $s^2$ estimated from the residuals themselves captures both measurement noise and model error — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`. Uncertainty in $n$ and $T$ follows directly:
 $$\sigma_n = n\,\sqrt{\Sigma_{x,00}}, \qquad \sigma_T = T\,\sqrt{\Sigma_{x,11}}.$$
 
-**Speed, clock angle, and deflection angle** are computed in the IMAP DPS (despun spacecraft) frame rather than RTN so that the angles reflect the plasma flow direction relative to the spacecraft attitude. Let $R_\text{RTN\to DPS}$ be the rotation from RTN to DPS at the chunk center epoch (obtained via `get_swapi_dsrf_to_rtn(...)[0].T`), and let
+**Speed, clock angle, and deflection angle** are computed in the IMAP DPS (despun spacecraft) frame rather than RTN so that the angles reflect the plasma flow direction relative to the spacecraft attitude. Let $R_\text{RTN\to DPS}$ be the SPICE `IMAP_RTN → IMAP_DPS` rotation at the chunk center epoch, and let
 $$\mathbf{u} = R_\text{RTN\to DPS}\,\mathbf{v}_b^\text{SC}, \qquad u_{xy} = \sqrt{u_0^2 + u_1^2}.$$
 The derived quantities and their angle definitions are:
 $$|\mathbf{v}| = |\mathbf{u}|, \qquad \phi_c = \arctan2(u_1,\, u_0) \bmod 360°, \qquad \phi_d = \arccos\!\left(\frac{-u_2}{|\mathbf{u}|}\right).$$
@@ -305,8 +305,7 @@ When $\Sigma_\text{DPS}$ is non-finite (failed fit), all three σ are NaN.
 
 The optimizer returns $\mathbf{v}_b^\text{SC}$ in the spacecraft RTN frame. To recover the plasma velocity in the sun's inertial rest frame the spacecraft velocity is added back:
 $$\mathbf{v}_b^\text{sun} = \mathbf{v}_b^\text{SC} + \mathbf{v}_\text{sc}^\text{RTN},$$
-where $\mathbf{v}_\text{sc}^\text{RTN}$ (km/s) is obtained at the chunk center epoch from `imap_state` in ECLIPJ2000 and rotated into RTN:
-$$\mathbf{v}_\text{sc}^\text{RTN} = M_{\text{ECL} \rightarrow \text{RTN}} \, \mathbf{v}_\text{sc}^\text{ECL}.$$
+where $\mathbf{v}_\text{sc}^\text{RTN}$ (km/s) is obtained at the chunk center epoch directly from `imap_state(et, IMAP_RTN)` — SPICE's underlying `sxform`-based 6D state transform produces the kinematic velocity in the dynamic RTN frame (i.e. it includes the rotation-rate term of the rotating frame), so no separate rotation step is applied.
 This 3-vector is stored as `proton_sw_bulk_velocity_rtn_sun` (shape $N \times 3$, units km/s) in the proton L3A CDF. Its covariance is stored as `proton_sw_bulk_velocity_rtn_sun_covariance`. Since $\mathbf{v}_\text{sc}^\text{RTN}$ is SPICE-derived and treated as exact, the Sun-frame vector covariance is the fitted spacecraft-frame velocity covariance:
 $$\Sigma_v^\text{sun} = \Sigma_v^\text{SC}.$$
 
@@ -386,13 +385,18 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 ### Quality flags (alpha-specific)
 
 - `STALE_PROTON` (= 32): Stage 1 proton fit failed (proton `bad_fit_flag != NONE`). Stage 2 returns NaN moments without trying.
-- `MAG_GAP` (= 64): MAG L1D gave NaN or $|B| < 10^{-12}$ at the chunk center. Stage 2 returns NaN moments.
-- `HI_CHI_SQ` (= 8): peak-finding failed or optimizer did not converge.
-- `ALPHA_MAG_DATA_FALLBACK` (= 128): MAG L1D unavailable; nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ RTN (45° from R toward $-$T) used in place of the measured field.
+- `BAD_FIT` (= 8): reference proton velocity is nonphysical, peak-finding failed, or optimizer did not converge.
+- `ALPHA_MAG_DATA_FALLBACK` (= 64): MAG L1D is missing or invalid for the chunk; nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ RTN (45° from R toward $-$T) used in place of the measured field.
 
-### Magnetic-field rotation
+### Magnetic-field averaging
 
-$\hat{\mathbf{B}}^\text{RTN}$ is computed per-chunk by `compute_b_hat_rtn` from MAG L1D's `b_dsrf` (despun spacecraft frame). It selects the MAG samples whose epochs lie in $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$ — exactly the 5-sweep chunk span — calls `get_swapi_dsrf_to_rtn(sample_epochs)` (SPICE: `IMAP_DPS → IMAP_RTN`) to get a per-sample rotation matrix at each sample's own epoch, applies them to rotate every $\mathbf{b}_\text{DSRF}$ to RTN, averages the rotated vectors in RTN, and normalizes. Computing the rotation per-sample (rather than precomputing a single `dsrf_to_rtn` at the chunk center and averaging in DSRF) keeps the spacecraft-attitude evolution across the 60 s window from being collapsed away. NaN propagation: empty window, any non-finite sample, or near-zero averaged $|\mathbf{B}|$ → `MAG_GAP`. When proton speed is finite but MAG is unavailable (or the averaged $\hat{\mathbf{B}}$ fails the unit-vector check $0.99 < \|\hat{\mathbf{B}}\| < 1.01$), the fitter falls back to the nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ in RTN and sets `ALPHA_MAG_DATA_FALLBACK`.
+`compute_b_hat_rtn` performs the MAG averaging used by the alpha fitter:
+
+1. Select MAG samples with epochs in $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$, matching the 5-sweep chunk span.
+2. Read the selected `b_rtn` vectors directly in RTN.
+3. Average the selected RTN vectors and normalize the average.
+
+The function returns NaNs when MAG is unavailable, no MAG samples fall in the chunk window, any selected sample is non-finite, or the averaged $|\mathbf{B}|$ is below $10^{-12}$. The alpha fitter treats those NaNs as an invalid measured field and uses the nominal Parker spiral fallback.
 
 ### Known limitations
 

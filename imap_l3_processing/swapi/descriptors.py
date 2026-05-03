@@ -14,6 +14,5 @@ PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR = "passband-fit-coefficients"
 
 SWAPI_L3A_ALPHA_SW_DESCRIPTOR = "alpha-sw"
 
-# MAG L1D despun (DSRF) for the alpha moments fitter's field-aligned-drift constraint.
-# Same descriptor used by SWE/HIT/CodIce; values are unit-vector B in DSRF coordinates.
-MAG_DESPUN_L1D_DESCRIPTOR = "norm-dsrf"
+# MAG L1D RTN vectors for the alpha moments fitter's field-aligned-drift constraint.
+MAG_RTN_L1D_DESCRIPTOR = "norm-rtn"

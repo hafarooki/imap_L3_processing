@@ -9,6 +9,7 @@ import unittest
 
 import numba
 import numpy as np
+from uncertainties import ufloat
 
 from imap_l3_processing.constants import (
     ALPHA_CHARGE_OVER_MASS_C_PER_KG,
@@ -28,6 +29,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     _model_count_rates,
     apply_deadtime_correction,
     apply_deadtime_correction_array,
+    make_correlated_velocity,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_COARSE_SWEEP_BINS,
@@ -283,7 +285,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
         )
 
     def _proton_truth(self, flag=SwapiL3Flags.NONE):
-        return ProtonSolarwindMoments_or_real(
+        return _make_proton_moments(
             density=self.n_p,
             temperature=self.T_p,
             bulk_velocity_rtn=self.v_p_rtn.copy(),
@@ -297,7 +299,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
             esa_voltage=self.esa_flat,
             measurement_time=np.zeros(len(self.esa_flat), dtype="int64"),
             swapi_response=self.sr,
-            proton_moments=ProtonSolarwindMoments_or_real(
+            proton_moments=_make_proton_moments(
                 density=self.n_p,
                 temperature=self.T_p,
                 bulk_velocity_rtn=self.v_p_rtn.copy(),
@@ -314,10 +316,42 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
         self.assertAlmostEqual(result.temperature, self.T_a, delta=2.0 * EV_TO_KELVIN)
         self.assertAlmostEqual(result.delta_v, self.delta_v, delta=10.0)
 
+    def test_invalid_mag_uses_fallback_flag(self):
+        result = fit_solar_wind_alpha_moments(
+            count_rate=self.obs,
+            esa_voltage=self.esa_flat,
+            measurement_time=np.zeros(len(self.esa_flat), dtype="int64"),
+            swapi_response=self.sr,
+            proton_moments=self._proton_truth(),
+            b_hat_rtn=np.full(3, np.nan),
+            alpha_effective_area_scale=1.0,
+            proton_effective_area_scale=1.0,
+            rotation_matrices=self.rot,
+        )
 
-def ProtonSolarwindMoments_or_real(**kw):
-    """Wrapper to construct ProtonSolarWindMoments — declared as a function so the
-    end-to-end test class above can use it without setUpClass-time imports."""
+        self.assertTrue(
+            result.bad_fit_flag & int(SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK)
+        )
+        self.assertTrue(np.isfinite(result.density.nominal_value))
+
+
+def _make_proton_moments(**kw):
+    """Construct ProtonSolarWindMoments from nominal test values."""
+    velocity_covariance = kw.pop("velocity_covariance", None)
+    if not hasattr(kw["density"], "nominal_value"):
+        kw["density"] = ufloat(float(kw["density"]), np.nan)
+    if not hasattr(kw["temperature"], "nominal_value"):
+        kw["temperature"] = ufloat(float(kw["temperature"]), np.nan)
+    if not hasattr(kw["bulk_velocity_rtn"][0], "nominal_value"):
+        if velocity_covariance is None:
+            kw["bulk_velocity_rtn"] = tuple(
+                ufloat(float(v), np.nan) for v in kw["bulk_velocity_rtn"]
+            )
+        else:
+            kw["bulk_velocity_rtn"] = make_correlated_velocity(
+                np.asarray(kw["bulk_velocity_rtn"], dtype=float),
+                np.asarray(velocity_covariance, dtype=float),
+            )
     return ProtonSolarWindMoments(**kw)
 
 
@@ -326,16 +360,17 @@ class TestFlagsAndGuards(unittest.TestCase):
     def setUpClass(cls):
         cls.sr = _swapi_response()
         cls.esa_flat = np.tile(np.geomspace(60.0, 5000.0, _N_BINS)[::-1], _N_SWEEPS)
+        cls.sr.warm_cache(cls.esa_flat)
 
     def _bogus_count_rate(self):
         return np.zeros_like(self.esa_flat, dtype=float)
 
     def test_stale_proton_returns_stale_flag(self):
-        proton = ProtonSolarWindMoments(
+        proton = _make_proton_moments(
             density=5.0,
             temperature=10.0,
             bulk_velocity_rtn=np.array([450.0, 0.0, 0.0]),
-            bad_fit_flag=int(SwapiL3Flags.HI_CHI_SQ),
+            bad_fit_flag=int(SwapiL3Flags.BAD_FIT),
         )
         result = fit_solar_wind_alpha_moments(
             count_rate=self._bogus_count_rate(),
@@ -348,12 +383,12 @@ class TestFlagsAndGuards(unittest.TestCase):
             proton_effective_area_scale=1.0,
         )
         self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.STALE_PROTON))
-        self.assertTrue(np.isnan(result.density))
-        self.assertTrue(np.all(np.isnan(result.bulk_velocity_rtn)))
+        self.assertTrue(np.isnan(result.density.nominal_value))
+        self.assertTrue(np.all(np.isnan(result.bulk_velocity_rtn_nominal())))
 
-    def test_mag_gap_with_zero_proton_returns_mag_gap(self):
-        """When both MAG and proton data are missing/zero, return MAG_GAP."""
-        proton = ProtonSolarWindMoments(
+    def test_invalid_mag_with_zero_proton_still_uses_fallback(self):
+        """Invalid MAG always uses the Parker fallback direction."""
+        proton = _make_proton_moments(
             density=5.0,
             temperature=10.0,
             bulk_velocity_rtn=np.array([0.0, 0.0, 0.0]),  # Zero proton velocity
@@ -365,12 +400,16 @@ class TestFlagsAndGuards(unittest.TestCase):
             measurement_time=np.zeros(len(self.esa_flat), dtype="int64"),
             swapi_response=self.sr,
             proton_moments=proton,
-            b_hat_rtn=np.full(3, np.nan),  # MAG gap
+            b_hat_rtn=np.full(3, np.nan),
             alpha_effective_area_scale=1.0,
             proton_effective_area_scale=1.0,
+            rotation_matrices=np.tile(np.eye(3), (len(self.esa_flat), 1, 1)),
         )
-        self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.MAG_GAP))
-        self.assertTrue(np.isnan(result.delta_v))
+        self.assertEqual(
+            result.bad_fit_flag,
+            int(SwapiL3Flags.BAD_FIT | SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK),
+        )
+        self.assertTrue(np.isnan(result.delta_v.nominal_value))
 
 
 class TestVelocityCovarianceComposition(unittest.TestCase):
@@ -416,7 +455,8 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
 
     def _run_alpha_fit(self, fixture_name: str) -> AlphaSolarWindMoments:
         f = _load_fixture(fixture_name)
-        proton = ProtonSolarWindMoments(
+        self.sr.warm_cache(f["esa_flat"])
+        proton = _make_proton_moments(
             density=float(f["proton_density"]),
             temperature=float(f["proton_temperature"]),
             bulk_velocity_rtn=f["proton_velocity_rtn"],

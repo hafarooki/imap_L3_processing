@@ -124,11 +124,11 @@ def fit_solar_wind_alpha_moments(
     ``alpha_effective_area_scale = ε_α(t) / ε_p(t_lab)`` (note the proton-lab denominator
     even for alphas — see `solar-wind-moments.md` § "Alpha Particle Moments").
 
-    ``b_hat_rtn`` is the unit MAG vector at the chunk center, rotated to RTN. If MAG data
-    is unavailable (NaN or near-zero), the fit uses the nominal Parker spiral direction
+    ``b_hat_rtn`` is the unit MAG direction in RTN for the chunk. If MAG data is
+    unavailable (NaN or near-zero), the fit uses the nominal Parker spiral direction
     B̂ = (1/√2, −1/√2, 0) RTN and sets ``bad_fit_flag |= ALPHA_MAG_DATA_FALLBACK``.
-    If the proton speed is also near-zero, returns ``bad_fit_flag = MAG_GAP`` with NaN
-    moments.
+    If the reference proton velocity is non-finite or near-zero, returns NaN moments
+    with ``bad_fit_flag |= BAD_FIT``.
 
     ``rotation_matrices`` may be precomputed and reused from the Stage 1 proton fit;
     if ``None``, computed internally from ``measurement_time``.
@@ -138,23 +138,24 @@ def fit_solar_wind_alpha_moments(
         return _nan_alpha_moments(SwapiL3Flags.STALE_PROTON)
 
     proton_bulk_rtn = proton_moments.bulk_velocity_rtn_nominal()
-    proton_speed = np.linalg.norm(proton_bulk_rtn)
-    mag_gap_fallback = False
+    bad_fit_flag = SwapiL3Flags.NONE
 
-    # If MAG data unavailable, assume alpha direction matches proton direction.
+    # If MAG data is unavailable, use the nominal Parker spiral direction.
     # b_hat_rtn should be a unit vector; check for non-finite values, wrong magnitude,
-    # or if _compute_b_hat_rtn already returned NaN due to data gaps or fill values.
+    # or if compute_b_hat_rtn already returned NaN due to data gaps or fill values.
     b_hat_check = np.asarray(b_hat_rtn, dtype=float)
     b_norm = np.linalg.norm(b_hat_check)
     # Unit vector should have norm ≈1; allow small tolerance for numerical error.
     is_valid_unit_vector = np.all(np.isfinite(b_hat_check)) and 0.99 < b_norm < 1.01
     if not is_valid_unit_vector:
-        if proton_speed < 1e-12:
-            return _nan_alpha_moments(SwapiL3Flags.MAG_GAP)
         b_hat_rtn = np.array([1.0 / np.sqrt(2.0), -1.0 / np.sqrt(2.0), 0.0])
-        mag_gap_fallback = True
+        bad_fit_flag |= SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK
     else:
         b_hat_rtn = b_hat_check
+
+    proton_speed = np.linalg.norm(proton_bulk_rtn)
+    if not np.isfinite(proton_speed) or proton_speed < 1e-12:
+        return _nan_alpha_moments(bad_fit_flag | SwapiL3Flags.BAD_FIT)
 
     # SPICE shared with Stage 1 if provided; otherwise compute here.
     if rotation_matrices is None:
@@ -221,7 +222,7 @@ def fit_solar_wind_alpha_moments(
         b_hat_rtn=b_hat_rtn,
     )
     if initial_guess is None:
-        return _nan_alpha_moments(SwapiL3Flags.HI_CHI_SQ)
+        return _nan_alpha_moments(bad_fit_flag | SwapiL3Flags.BAD_FIT)
 
     n0, T0, dv0, peak_bin_idx = initial_guess
     proton_bulk = proton_bulk_rtn
@@ -277,9 +278,8 @@ def fit_solar_wind_alpha_moments(
     T_a_fit = float(np.exp(result.x[1]))
     dv_fit = float(result.x[2])
     bulk_velocity_rtn = proton_bulk + dv_fit * b_hat_rtn
-    bad_fit_flag = SwapiL3Flags.NONE if result.success else SwapiL3Flags.HI_CHI_SQ
-    if mag_gap_fallback:
-        bad_fit_flag |= SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK
+    if not result.success:
+        bad_fit_flag |= SwapiL3Flags.BAD_FIT
 
     # Covariance in (log n, log T, Δv) space, scaled by reduced chi² (fitting error).
     n_data, n_params = len(result.fun), len(result.x)

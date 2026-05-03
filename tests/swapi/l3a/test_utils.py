@@ -1,12 +1,19 @@
 import os
+from datetime import datetime
 from pathlib import Path
 from unittest import TestCase
 
 import numpy as np
 from spacepy.pycdf import CDF
 
+from imap_l3_processing.models import MagL1dData
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
-from imap_l3_processing.swapi.l3a.utils import chunk_l2_data, read_l2_swapi_data
+from imap_l3_processing.swapi.l3a.utils import (
+    chunk_l2_data,
+    compute_b_hat_rtn,
+    read_l1d_mag_data,
+    read_l2_swapi_data,
+)
 
 
 class TestUtils(TestCase):
@@ -80,3 +87,39 @@ class TestUtils(TestCase):
         np.testing.assert_array_equal(np.array([5, 6, 7, np.nan]), actual_swapi_l2_data.coincidence_count_rate)
         np.testing.assert_array_equal(np.array([2, 2, np.nan, 2, 2, 2, 2, 2]),
                                       actual_swapi_l2_data.coincidence_count_rate_uncertainty)
+
+    def test_reading_l1d_mag_data_reads_b_rtn(self):
+        path = Path('temp_cdf.cdf')
+        if path.exists():
+            os.remove(path)
+
+        temp_cdf = CDF('temp_cdf', '')
+        temp_cdf["epoch"] = [datetime(2010, 1, 1), datetime(2010, 1, 1, 0, 1)]
+        temp_cdf["b_rtn"] = np.array([[1.0, 2.0, 3.0], [99.0, -99.0, 4.0]])
+        temp_cdf["b_rtn"].attrs["VALIDMIN"] = -10.0
+        temp_cdf["b_rtn"].attrs["VALIDMAX"] = 10.0
+        temp_cdf.close()
+
+        actual = read_l1d_mag_data(path)
+
+        np.testing.assert_allclose(
+            actual.mag_data,
+            np.array([[1.0, 2.0, 3.0], [np.nan, np.nan, 4.0]]),
+        )
+
+    def test_compute_b_hat_rtn_averages_rtn_samples_directly(self):
+        mag_data = MagL1dData(
+            epoch=np.array([0, 6, 10, 20]),
+            mag_data=np.array(
+                [
+                    [100.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [0.0, 0.0, 100.0],
+                ]
+            ),
+        )
+
+        actual = compute_b_hat_rtn(mag_data, 10, 5)
+
+        np.testing.assert_allclose(actual, np.array([1.0, 1.0, 0.0]) / np.sqrt(2.0))

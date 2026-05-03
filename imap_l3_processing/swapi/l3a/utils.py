@@ -2,24 +2,26 @@ from datetime import datetime
 from typing import Iterable
 
 import numpy as np
-import spiceypy
 from numpy import ndarray
 from spacepy import pycdf
 from spacepy.pycdf import CDF
 
 from imap_l3_processing.cdf.cdf_utils import read_numeric_variable
-from imap_l3_processing.constants import (
-    ONE_SECOND_IN_NANOSECONDS,
-    THIRTY_SECONDS_IN_NANOSECONDS,
-)
+from imap_l3_processing.constants import THIRTY_SECONDS_IN_NANOSECONDS
 from imap_l3_processing.models import MagL1dData
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
-from imap_processing.spice.geometry import SpiceFrame, get_rotation_matrix, imap_state
+from imap_processing.spice.geometry import (
+    SpiceFrame,
+    frame_transform,
+    get_rotation_matrix,
+    imap_state,
+)
+from imap_processing.spice.time import ttj2000ns_to_et
 
 
 def read_l1d_mag_data(cdf_path) -> MagL1dData:
     with CDF(str(cdf_path)) as cdf:
-        var = cdf["b_dsrf"]
+        var = cdf["b_rtn"]
         data = read_numeric_variable(var)[:, :3]
         attrs = var.attrs
         if "VALIDMIN" in attrs:
@@ -50,39 +52,32 @@ def get_swapi_geometry(measurement_time: ndarray) -> ndarray:
     Returns:
         rotation_matrices: shape (N, 3, 3) — RTN→SWAPI rotation at each measurement time.
     """
-    et_times = np.array(
-        [
-            spiceypy.unitim(float(t), "TT", "ET")
-            for t in np.atleast_1d(measurement_time) / ONE_SECOND_IN_NANOSECONDS
-        ]
-    )
+    et_times = ttj2000ns_to_et(np.atleast_1d(measurement_time))
     return get_rotation_matrix(et_times, SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_SWAPI)
 
 
-def get_swapi_dsrf_to_rtn(measurement_time_tt2000_ns: ndarray) -> ndarray:
-    """DSRF→RTN rotation at each measurement time (TT2000 ns). Returns shape (N, 3, 3).
+def rotate_rtn_to_dps(vector_rtn, epoch_tt2000_ns: float):
+    """Rotate a 3-vector from IMAP_RTN into IMAP_DPS at the given TT2000 ns epoch.
 
-    Mirrors the TT2000→ET conversion in get_swapi_geometry; used by the alpha moments
-    fitter to rotate MAG L1D unit-B vectors (DSRF) into RTN before applying the
-    field-aligned-drift constraint v_α = v_p* + Δv·B̂."""
-    et_times = np.array(
-        [
-            spiceypy.unitim(float(t), "TT", "ET")
-            for t in np.atleast_1d(measurement_time_tt2000_ns)
-            / ONE_SECOND_IN_NANOSECONDS
-        ]
+    Accepts plain float or `uncertainties.UFloat` components — for object-dtype
+    arrays of correlated UFloats, numpy's matmul preserves correlation tracking
+    so downstream covariance propagation in `derive_velocity_angles` stays
+    consistent with the prior matrix-multiplication implementation."""
+    et = float(ttj2000ns_to_et(epoch_tt2000_ns))
+    return frame_transform(
+        et, np.asarray(vector_rtn), SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_DPS
     )
-    return get_rotation_matrix(et_times, SpiceFrame.IMAP_DPS, SpiceFrame.IMAP_RTN)
 
 
 def get_spacecraft_velocity_rtn(epoch_tt2000_ns: float) -> ndarray:
-    """Return the spacecraft velocity at `epoch_tt2000_ns` (TT2000 ns) in RTN, km/s."""
-    et = spiceypy.unitim(float(epoch_tt2000_ns) / ONE_SECOND_IN_NANOSECONDS, "TT", "ET")
-    state_eclipj2000 = imap_state(et, SpiceFrame.ECLIPJ2000)
-    rtn_from_eclipj2000 = get_rotation_matrix(
-        et, SpiceFrame.ECLIPJ2000, SpiceFrame.IMAP_RTN
-    )
-    return np.einsum("ij,j->i", rtn_from_eclipj2000, state_eclipj2000[3:])
+    """Return the spacecraft velocity at `epoch_tt2000_ns` (TT2000 ns) in RTN, km/s.
+
+    Uses the SPKEZR-backed `imap_state` with `IMAP_RTN` as the reference frame,
+    so the returned velocity is the kinematic 6D state transform (includes the
+    rotation-rate term of the dynamic RTN frame), not just the inertial velocity
+    rotated into RTN axes."""
+    et = float(ttj2000ns_to_et(epoch_tt2000_ns))
+    return imap_state(et, SpiceFrame.IMAP_RTN)[3:]
 
 
 def compute_b_hat_rtn(
@@ -92,13 +87,12 @@ def compute_b_hat_rtn(
 ) -> np.ndarray:
     """Average B over the chunk window in RTN, returning the unit direction.
 
-    Each MAG sample in `[center - delta, center + delta)` is rotated DSRF→RTN at
-    its own epoch (`IMAP_DPS → IMAP_RTN`) before averaging, so spacecraft-attitude
-    evolution within the window is preserved rather than collapsed to a single
-    chunk-center rotation. Returns NaN when MAG is unavailable, no samples fall in
-    the window, the in-window samples include non-finite values, or the averaged
-    |B| is too small to define a direction. The alpha fitter interprets a NaN
-    return as MAG_GAP."""
+    MAG L1D `b_rtn` samples are already in RTN. Samples in
+    `[center - delta, center + delta)` are averaged directly and normalized.
+    Returns NaN when MAG is unavailable, no samples fall in the window, the
+    in-window samples include non-finite values, or the averaged |B| is too
+    small to define a direction. The alpha fitter interprets NaNs as invalid MAG
+    and uses its Parker-spiral fallback direction."""
     if mag_l1d_data is None:
         return np.full(3, np.nan)
     start = chunk_epoch_center_tt2000_ns - chunk_epoch_delta_ns
@@ -107,11 +101,7 @@ def compute_b_hat_rtn(
     right = np.searchsorted(mag_l1d_data.epoch, end, side="left")
     if right == left:
         return np.full(3, np.nan)
-    sample_epochs = mag_l1d_data.epoch[left:right]
-    sample_b_dsrf = mag_l1d_data.mag_data[left:right]
-    rotation = get_swapi_dsrf_to_rtn(sample_epochs)
-    b_rtn = np.einsum("nij,nj->ni", rotation, sample_b_dsrf)
-    b_rtn_mean = b_rtn.mean(axis=0)
+    b_rtn_mean = mag_l1d_data.mag_data[left:right].mean(axis=0)
     norm = np.linalg.norm(b_rtn_mean)
     if not np.all(np.isfinite(b_rtn_mean)) or norm < 1e-12:
         return np.full(3, np.nan)

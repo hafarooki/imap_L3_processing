@@ -517,7 +517,7 @@ class TestCalculatePickupIon(SpiceTestCase):
                                                             efficiency_table=Mock(), hydrogen_inflow_vector=Mock(),
                                                             helium_inflow_vector=Mock())
 
-        self.assertEqual(actual_fitting_params.flags, SwapiL3Flags.HI_CHI_SQ)
+        self.assertEqual(actual_fitting_params.flags, SwapiL3Flags.BAD_FIT)
         self.assertEqual(actual_fitting_params.cooling_index, fit_params["cooling_index"])
         self.assertEqual(actual_fitting_params.cutoff_speed, fit_params["cutoff_speed"])
         self.assertEqual(actual_fitting_params.ionization_rate, fit_params["ionization_rate"])

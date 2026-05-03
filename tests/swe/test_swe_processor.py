@@ -324,7 +324,7 @@ class TestSweProcessor(unittest.TestCase):
             proton_sw_speed=np.array([]),
             proton_sw_clock_angle=np.array([]),
             proton_sw_deflection_angle=np.array([]),
-            swp_flags=np.array([0,0,0,SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED, SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED | SwapiL3Flags.HI_CHI_SQ, SwapiL3Flags.HI_CHI_SQ,0,0,0,0]),
+            swp_flags=np.array([0,0,0,SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED, SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED | SwapiL3Flags.BAD_FIT, SwapiL3Flags.BAD_FIT,0,0,0,0]),
         )
         counts = swe_l1b_data.count_rates * swe_l2_data.acquisition_duration[:, :, np.newaxis] / 1e6
         mock_average_over_look_directions.return_value = np.array([5, 10, 15])

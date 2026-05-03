@@ -43,7 +43,6 @@ class TestChunkFits(TestCase):
             data_chunk,
             123,
             np.tile(np.eye(3), (5, 1, 1)),
-            np.eye(3),
             sc_velocity_rtn,
         )
 

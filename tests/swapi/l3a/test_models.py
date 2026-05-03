@@ -194,7 +194,7 @@ class TestModels(CdfModelTestCase):
         ref_proton_temperature = np.arange(n, dtype=float) * 1e5
         ref_proton_velocity_rtn = np.random.randn(n, 3)
         bad_fit_flag = np.full(n, SwapiL3Flags.NONE)
-        bad_fit_flag[: n // 2] = SwapiL3Flags.HI_CHI_SQ
+        bad_fit_flag[: n // 2] = SwapiL3Flags.BAD_FIT
 
         data = SwapiL3AlphaSolarWindData(
             Mock(),

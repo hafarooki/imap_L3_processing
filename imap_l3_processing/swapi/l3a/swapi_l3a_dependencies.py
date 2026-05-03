@@ -12,7 +12,7 @@ from imap_l3_processing.swapi.descriptors import SWAPI_L2_DESCRIPTOR, \
     DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR, EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR, HYDROGEN_INFLOW_VECTOR_DESCRIPTOR, \
     HELIUM_INFLOW_VECTOR_DESCRIPTOR, AZIMUTHAL_TRANSMISSION_DESCRIPTOR, \
     CENTRAL_EFFECTIVE_AREA_DESCRIPTOR, PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR, \
-    MAG_DESPUN_L1D_DESCRIPTOR
+    MAG_RTN_L1D_DESCRIPTOR
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_l3_processing.swapi.l3a.science.density_of_neutral_helium_lookup_table import \
     DensityOfNeutralHeliumLookupTable
@@ -35,7 +35,7 @@ class SwapiL3ADependencies:
     hydrogen_inflow_vector: InflowVector
     helium_inflow_vector: InflowVector
     swapi_response: SWAPIResponse
-    # MAG L1D despun (DSRF) for the alpha moments fitter's field-aligned-drift constraint.
+    # MAG L1D RTN vectors for the alpha moments fitter's field-aligned-drift constraint.
     # Optional so descriptors that don't need it (e.g. proton-sw, pui-he) keep working
     # without a MAG file present.
     mag_l1d_data: Optional[MagL1dData] = None
@@ -57,7 +57,7 @@ class SwapiL3ADependencies:
 
         # MAG L1D is required for alpha-sw moments but not for proton-sw / pui-he. Make
         # it optional at the dependency level — caller will validate per-descriptor.
-        mag_paths = dependencies.get_file_paths(source='mag', descriptor=MAG_DESPUN_L1D_DESCRIPTOR)
+        mag_paths = dependencies.get_file_paths(source='mag', descriptor=MAG_RTN_L1D_DESCRIPTOR)
         mag_path = download(mag_paths[0]) if mag_paths else None
 
         return cls.from_file_paths(

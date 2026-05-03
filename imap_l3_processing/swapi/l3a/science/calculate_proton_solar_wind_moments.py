@@ -109,7 +109,7 @@ def make_correlated_velocity(
 
 def derive_velocity_angles(
     fitting_result: "ProtonSolarWindMoments",
-    dsrf_to_rtn,
+    epoch_tt2000_ns: float,
 ) -> tuple:
     """Return (speed, clock_angle, deflection_angle) as ufloats in the DPS frame.
 
@@ -125,8 +125,11 @@ def derive_velocity_angles(
     Clock-angle σ uses residuals wrapped to (-180°, 180°] so the 0°/360°
     branch cut doesn't inflate the spread.
     """
-    R = dsrf_to_rtn.T
-    u_unc = R @ np.array(fitting_result.bulk_velocity_rtn)
+    from imap_l3_processing.swapi.l3a.utils import rotate_rtn_to_dps
+
+    u_unc = rotate_rtn_to_dps(
+        np.array(fitting_result.bulk_velocity_rtn), epoch_tt2000_ns
+    )
     u = unp.nominal_values(u_unc)
     cov_DPS = np.array(covariance_matrix(u_unc))
 
@@ -177,7 +180,6 @@ def fit_solar_wind_proton_moments(
     ``rotation_matrices`` must be precomputed and reused
     across stage 1/stage 2 fits to avoid duplicate SPICE calls."""
     from imap_l3_processing.constants import PROTON_MASS_PER_CHARGE_M_P_PER_E
-    from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
 
     # Spin axis (body +Y in RTN) for the wrong-basin flip check in _optimize.
     # Captured here, before the half-mean mask below may drop the bin at index 0.
@@ -713,7 +715,6 @@ def _get_angular_limits(
 
 
 N_OA_SCAN = 64
-OA_SKIP_ABS_THRESHOLD = 1e-9
 
 
 @numba.njit(nogil=True)
@@ -757,9 +758,6 @@ def _trim_oa_azimuth_by_integrand(
         )
 
     kT_max = np.max(kT)
-    if kT_max < OA_SKIP_ABS_THRESHOLD:
-        return 0.0, 0.0, 0.0
-
     threshold_val = OA_SCAN_THRESHOLD * kT_max
 
     lo_i = 0
@@ -965,7 +963,7 @@ def _optimize(
     density = float(np.exp(result.x[0]))
     temperature = float(np.exp(result.x[1]))
     bulk_velocity_rtn = result.x[2:5]
-    bad_fit_flag = SwapiL3Flags.NONE if result.success else SwapiL3Flags.HI_CHI_SQ
+    bad_fit_flag = SwapiL3Flags.NONE if result.success else SwapiL3Flags.BAD_FIT
 
     # Covariance in (log n, log T, vR, vT, vN) space via Moore-Penrose pseudoinverse,
     # scaled by reduced chi² so uncertainties reflect actual residual scatter rather

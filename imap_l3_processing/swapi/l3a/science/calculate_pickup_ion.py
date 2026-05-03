@@ -95,7 +95,7 @@ def calculate_pickup_ion_values(instrument_response_lookup_table, geometric_fact
     result = minimizer.minimize(method="nelder")
     flags = SwapiL3Flags.NONE
     if result.redchi > 10:
-        flags |= SwapiL3Flags.HI_CHI_SQ
+        flags |= SwapiL3Flags.BAD_FIT
 
     param_vals = result.uvars
     if result.uvars is None:
