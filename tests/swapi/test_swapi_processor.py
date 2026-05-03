@@ -1062,7 +1062,8 @@ class TestSwapiProcessor(TestCase):
 
         mock_spicepy.ktotal.return_value = 0
         mock_get_swapi_geometry.return_value = np.tile(np.eye(3), (100, 1, 1))
-        mock_swapi_l3_dependencies_class.fetch_dependencies.return_value.mag_l1d_data = None
+        # alpha-sw requires MAG; provide a sentinel since the alpha fitter is mocked.
+        mock_swapi_l3_dependencies_class.fetch_dependencies.return_value.mag_data = sentinel.mag_data
 
         initial_epoch = 10
 

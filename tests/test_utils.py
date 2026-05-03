@@ -463,7 +463,7 @@ class TestUtils(TestCase):
                     f"{expected_files_to_download}. Expected one file to download, found {case}.",
                     str(cm.exception))
 
-    def test_read_l1d_mag_data(self):
+    def test_read_mag_data(self):
         file_name_as_str = "test_cdf.cdf"
         file_name_as_path = Path(file_name_as_str)
 

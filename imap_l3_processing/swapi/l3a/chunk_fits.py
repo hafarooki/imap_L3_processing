@@ -186,21 +186,21 @@ class ProtonChunkFitter(ChunkFitter):
 
 
 class AlphaChunkFitter(ChunkFitter):
-    def __init__(self, mag_l1d_data):
-        self.mag_l1d_data = mag_l1d_data
+    def __init__(self, mag_data):
+        self.mag_data = mag_data
 
     def __getstate__(self):
-        # mag_l1d_data is consumed parent-side in precompute_geometry to derive
+        # mag_data is consumed parent-side in precompute_geometry to derive
         # b_hat per chunk; workers only ever read b_hat from the geometry tuple.
         # Drop the full MAG arrays from pickle so they don't ride into each worker.
-        return {**self.__dict__, "mag_l1d_data": None}
+        return {**self.__dict__, "mag_data": None}
 
     def precompute_geometry(self, chunk):
         epoch = chunk_epoch(chunk)
         try:
             rm = get_swapi_geometry(measurement_times(chunk, SWAPI_COARSE_SWEEP_BINS))
             b_hat = compute_b_hat_rtn(
-                self.mag_l1d_data, int(epoch), int(THIRTY_SECONDS_IN_NANOSECONDS)
+                self.mag_data, int(epoch), int(THIRTY_SECONDS_IN_NANOSECONDS)
             )
         except Exception:
             logger.warning(

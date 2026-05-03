@@ -316,7 +316,8 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
         self.assertAlmostEqual(result.temperature, self.T_a, delta=2.0 * EV_TO_KELVIN)
         self.assertAlmostEqual(result.delta_v, self.delta_v, delta=10.0)
 
-    def test_invalid_mag_uses_fallback_flag(self):
+    def test_nan_b_hat_returns_bad_fit_with_nan_moments(self):
+        """No Parker-spiral fallback: NaN b_hat → BAD_FIT + NaN moments."""
         result = fit_solar_wind_alpha_moments(
             count_rate=self.obs,
             esa_voltage=self.esa_flat,
@@ -329,10 +330,10 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
             rotation_matrices=self.rot,
         )
 
-        self.assertTrue(
-            result.bad_fit_flag & int(SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK)
-        )
-        self.assertTrue(np.isfinite(result.density.nominal_value))
+        self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.BAD_FIT))
+        self.assertTrue(np.isnan(result.density.nominal_value))
+        self.assertTrue(np.isnan(result.temperature.nominal_value))
+        self.assertTrue(np.isnan(result.delta_v.nominal_value))
 
 
 def _make_proton_moments(**kw):
@@ -386,12 +387,12 @@ class TestFlagsAndGuards(unittest.TestCase):
         self.assertTrue(np.isnan(result.density.nominal_value))
         self.assertTrue(np.all(np.isnan(result.bulk_velocity_rtn_nominal())))
 
-    def test_invalid_mag_with_zero_proton_still_uses_fallback(self):
-        """Invalid MAG always uses the Parker fallback direction."""
+    def test_invalid_mag_short_circuits_before_proton_velocity_guard(self):
+        """Invalid MAG returns BAD_FIT immediately without inspecting proton velocity."""
         proton = _make_proton_moments(
             density=5.0,
             temperature=10.0,
-            bulk_velocity_rtn=np.array([0.0, 0.0, 0.0]),  # Zero proton velocity
+            bulk_velocity_rtn=np.array([0.0, 0.0, 0.0]),  # would trip BAD_FIT downstream
             bad_fit_flag=int(SwapiL3Flags.NONE),
         )
         result = fit_solar_wind_alpha_moments(
@@ -405,10 +406,7 @@ class TestFlagsAndGuards(unittest.TestCase):
             proton_effective_area_scale=1.0,
             rotation_matrices=np.tile(np.eye(3), (len(self.esa_flat), 1, 1)),
         )
-        self.assertEqual(
-            result.bad_fit_flag,
-            int(SwapiL3Flags.BAD_FIT | SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK),
-        )
+        self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.BAD_FIT))
         self.assertTrue(np.isnan(result.delta_v.nominal_value))
 
 

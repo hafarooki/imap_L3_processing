@@ -97,6 +97,11 @@ class SwapiProcessor(Processor):
         )
 
     def process_l3a_alpha(self, data, dependencies) -> SwapiL3AlphaSolarWindData:
+        if dependencies.mag_data is None:
+            raise ValueError(
+                "alpha-sw requires MAG RTN data (L2 preferred, L1D fallback); "
+                "none was provided in the dependency collection."
+            )
         chunks = list(chunk_l2_data(data, 5))
         dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
         runner = ParallelChunkRunner(
@@ -105,7 +110,7 @@ class SwapiProcessor(Processor):
 
         return SwapiL3AlphaSolarWindData(
             replace(self.input_metadata, descriptor="alpha-sw"),
-            **runner.run(chunks, AlphaChunkFitter(dependencies.mag_l1d_data)),
+            **runner.run(chunks, AlphaChunkFitter(dependencies.mag_data)),
         )
 
     def process_l3a_pui(

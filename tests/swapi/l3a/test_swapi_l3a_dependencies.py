@@ -10,7 +10,7 @@ from imap_l3_processing.swapi.descriptors import SWAPI_L2_DESCRIPTOR, \
     EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR, \
     GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR, HYDROGEN_INFLOW_VECTOR_DESCRIPTOR, HELIUM_INFLOW_VECTOR_DESCRIPTOR, \
     AZIMUTHAL_TRANSMISSION_DESCRIPTOR, CENTRAL_EFFECTIVE_AREA_DESCRIPTOR, \
-    PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR, MAG_RTN_L1D_DESCRIPTOR
+    PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR
 from imap_l3_processing.swapi.l3a.swapi_l3a_dependencies import SwapiL3ADependencies
 
 
@@ -93,32 +93,48 @@ class TestSwapiL3ADependencies(unittest.TestCase):
             sentinel.azimuthal_transmission,
             sentinel.central_effective_area,
             sentinel.passband_fit_coefficients,
-            None,  # mag_l1d path is optional; absent when no MAG dep is provided
+            None,  # mag path is optional; absent when no MAG dep is provided
         )
 
         self.assertEqual(mock_from_file_paths.return_value, actual_swapi_l3_dependencies)
 
     @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.SwapiL3ADependencies.from_file_paths")
     @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.download")
-    def test_fetch_dependencies_uses_optional_mag_rtn_dependency(self, mock_download, mock_from_file_paths):
-        input_collection = Mock()
-        mag_path = Path("imap/mag/l1d/2010/01/imap_mag_l1d_norm-rtn_20100105_v010.cdf")
-
-        def get_file_paths(source, descriptor):
-            if source == "mag":
-                self.assertEqual(MAG_RTN_L1D_DESCRIPTOR, descriptor)
-                return [mag_path]
-            return [Path(f"{source}_{descriptor}")]
-
-        mock_download.side_effect = lambda path: f"downloaded:{path}"
-        input_collection.get_file_paths.side_effect = get_file_paths
-
-        SwapiL3ADependencies.fetch_dependencies(input_collection)
-
-        self.assertEqual(
-            mock_from_file_paths.call_args.args[-1],
-            f"downloaded:{mag_path}",
+    def test_fetch_dependencies_uses_mag_l1d_when_only_l1d_present(self, mock_download, mock_from_file_paths):
+        collection = _build_input_collection(
+            ScienceInput("imap_mag_l1d_norm-rtn_20100105_v010.cdf"),
         )
+        mock_download.side_effect = lambda path: f"downloaded:{path}"
+
+        SwapiL3ADependencies.fetch_dependencies(collection)
+
+        mag_path_arg = mock_from_file_paths.call_args.args[-1]
+        self.assertIn("mag_l1d_norm-rtn", str(mag_path_arg))
+
+    @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.SwapiL3ADependencies.from_file_paths")
+    @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.download")
+    def test_fetch_dependencies_prefers_mag_l2_when_both_present(self, mock_download, mock_from_file_paths):
+        collection = _build_input_collection(
+            ScienceInput("imap_mag_l1d_norm-rtn_20100105_v010.cdf"),
+            ScienceInput("imap_mag_l2_norm-rtn_20100105_v010.cdf"),
+        )
+        mock_download.side_effect = lambda path: f"downloaded:{path}"
+
+        SwapiL3ADependencies.fetch_dependencies(collection)
+
+        mag_path_arg = mock_from_file_paths.call_args.args[-1]
+        self.assertIn("mag_l2_norm-rtn", str(mag_path_arg))
+        self.assertNotIn("mag_l1d", str(mag_path_arg))
+
+    @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.SwapiL3ADependencies.from_file_paths")
+    @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.download")
+    def test_fetch_dependencies_passes_none_when_no_mag_present(self, mock_download, mock_from_file_paths):
+        collection = _build_input_collection()
+        mock_download.side_effect = lambda path: f"downloaded:{path}"
+
+        SwapiL3ADependencies.fetch_dependencies(collection)
+
+        self.assertIsNone(mock_from_file_paths.call_args.args[-1])
 
     @patch('imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.CDF')
     @patch('imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.InflowVector.from_file')
@@ -175,3 +191,22 @@ class TestSwapiL3ADependencies(unittest.TestCase):
         mock_swapi_response_from_files.assert_called_once_with(az, ea, pb)
 
         self.assertEqual(expected, actual)
+
+
+def _build_input_collection(*mag_inputs: ScienceInput) -> ProcessingInputCollection:
+    """SWAPI L3A input collection with all required ancillaries plus optional MAG."""
+    collection = ProcessingInputCollection()
+    collection.add([
+        ScienceInput("imap_swapi_l2_sci_20100105_v010.cdf"),
+        AncillaryInput(f"imap_swapi_{EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR}_20100105_v010.cdf"),
+        AncillaryInput(f"imap_swapi_{GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR}_20100105_v010.cdf"),
+        AncillaryInput(f"imap_swapi_{INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR}_20100105_v010.cdf"),
+        AncillaryInput(f"imap_swapi_{DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR}_20100105_v010.cdf"),
+        AncillaryInput(f"imap_swapi_{HYDROGEN_INFLOW_VECTOR_DESCRIPTOR}_20100105_v010.cdf"),
+        AncillaryInput(f"imap_swapi_{HELIUM_INFLOW_VECTOR_DESCRIPTOR}_20100105_v010.cdf"),
+        AncillaryInput(f"imap_swapi_{AZIMUTHAL_TRANSMISSION_DESCRIPTOR}_20100105_v010.csv"),
+        AncillaryInput(f"imap_swapi_{CENTRAL_EFFECTIVE_AREA_DESCRIPTOR}_20100105_v010.csv"),
+        AncillaryInput(f"imap_swapi_{PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR}_20100105_v010.csv"),
+        *mag_inputs,
+    ])
+    return collection

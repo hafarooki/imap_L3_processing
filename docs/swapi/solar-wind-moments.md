@@ -68,13 +68,15 @@ The start time for each sweep, available from the L2 CDF, is denoted $t_\text{ep
 For ESA step $i$ (0-indexed, although recall that step 0 is skipped), the measurement time is:
 $$t_i = t_\text{epoch} + i \cdot \tfrac{12}{72}\,\text{s} = t_\text{epoch} + i \cdot 0.1\overline{6}\,\text{s}.$$
 
-### MAG L1D (alpha only)
+### MAG RTN (alpha only)
 
-The alpha moments depend on the local magnetic field direction because the alpha-proton drift is constrained to lie along $\hat{\mathbf{B}}$. It reads the MAG L1D RTN CDF variable `b_rtn`, then normalizes the averaged field direction before the alpha fit.
+The alpha moments depend on the local magnetic field direction because the alpha-proton drift is constrained to lie along $\hat{\mathbf{B}}$. It reads the MAG RTN CDF variable `b_rtn`, then normalizes the averaged field direction before the alpha fit.
+
+The dependency accepts MAG **L2** (preferred) or **L1D** (fallback) — same descriptor `norm-rtn` for both, disambiguated by `data_type` at fetch time. MAG presence is required for the alpha-sw descriptor; the processor raises if neither L2 nor L1D is provided. Other descriptors (proton-sw, pui-he) do not consume MAG.
 
 For each 5-sweep alpha chunk, the processor uses the full 60 s MAG window $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$. The in-window RTN samples are averaged directly, and the mean vector is normalized to produce $\hat{\mathbf{B}}^\text{RTN}$.
 
-If the MAG dependency is missing, the window is empty, any in-window sample is non-finite, or the averaged field is too small to define a direction, `compute_b_hat_rtn` returns NaNs. The alpha fitter then uses the nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ in RTN and sets quality flag `ALPHA_MAG_DATA_FALLBACK` (see [Quality flags](#quality-flags-alpha-specific)).
+If the window is empty, any in-window sample is non-finite, or the averaged field is too small to define a direction, `compute_b_hat_rtn` returns NaNs. The alpha fitter treats those NaNs as `BAD_FIT` and emits NaN moments for that chunk — there is no Parker-spiral substitution.
 
 ## SWAPI Response Model
 
@@ -391,8 +393,7 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 ### Quality flags (alpha-specific)
 
 - `STALE_PROTON` (= 32): Stage 1 proton fit failed (proton `bad_fit_flag != NONE`). Stage 2 returns NaN moments without trying.
-- `BAD_FIT` (= 8): reference proton velocity is nonphysical, peak-finding failed, or optimizer did not converge.
-- `ALPHA_MAG_DATA_FALLBACK` (= 64): MAG L1D is missing or invalid for the chunk; nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ RTN (45° from R toward $-$T) used in place of the measured field.
+- `BAD_FIT` (= 8): reference proton velocity is nonphysical, MAG direction is unavailable for the chunk (NaN or non-unit), peak-finding failed, or optimizer did not converge.
 
 ### Magnetic-field averaging
 
@@ -402,7 +403,7 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 2. Read the selected `b_rtn` vectors directly in RTN.
 3. Average the selected RTN vectors and normalize the average.
 
-The function returns NaNs when MAG is unavailable, no MAG samples fall in the chunk window, any selected sample is non-finite, or the averaged $|\mathbf{B}|$ is below $10^{-12}$. The alpha fitter treats those NaNs as an invalid measured field and uses the nominal Parker spiral fallback.
+The function returns NaNs when no MAG samples fall in the chunk window, any selected sample is non-finite, or the averaged $|\mathbf{B}|$ is below $10^{-12}$. The alpha fitter treats those NaNs as `BAD_FIT` and emits NaN moments for that chunk.
 
 ### Known limitations
 

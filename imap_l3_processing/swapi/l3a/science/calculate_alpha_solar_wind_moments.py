@@ -6,8 +6,10 @@ performed by the caller and passed in as `proton_moments`. Stage 2 here is a 3-D
 Levenberg–Marquardt over (n_α, T_α, Δv) where v_α = v_p* + Δv * B̂. The combined
 observed model is `deadtime(proton_true + alpha_true)` so deadtime acts on the sum.
 
-When magnetic data is unavailable, the fit uses the nominal Parker spiral direction
-(45° from R toward −T in RTN) and flags the result with ALPHA_MAG_DATA_FALLBACK.
+If the MAG direction is unavailable for a chunk (NaN or non-unit b_hat), the fit
+returns NaN moments with ``bad_fit_flag |= BAD_FIT`` — there is no Parker-spiral
+fallback. MAG presence at the file level is enforced upstream in the alpha-sw
+processor branch.
 
 See `docs/swapi/solar-wind-moments.md` § "Alpha Particle Moments".
 """
@@ -125,10 +127,9 @@ def fit_solar_wind_alpha_moments(
     even for alphas — see `solar-wind-moments.md` § "Alpha Particle Moments").
 
     ``b_hat_rtn`` is the unit MAG direction in RTN for the chunk. If MAG data is
-    unavailable (NaN or near-zero), the fit uses the nominal Parker spiral direction
-    B̂ = (1/√2, −1/√2, 0) RTN and sets ``bad_fit_flag |= ALPHA_MAG_DATA_FALLBACK``.
-    If the reference proton velocity is non-finite or near-zero, returns NaN moments
-    with ``bad_fit_flag |= BAD_FIT``.
+    unavailable for the chunk (NaN or non-unit magnitude), returns NaN moments
+    with ``bad_fit_flag |= BAD_FIT``. If the reference proton velocity is
+    non-finite or near-zero, returns NaN moments with ``bad_fit_flag |= BAD_FIT``.
 
     ``rotation_matrices`` may be precomputed and reused from the Stage 1 proton fit;
     if ``None``, computed internally from ``measurement_time``.
@@ -140,18 +141,13 @@ def fit_solar_wind_alpha_moments(
     proton_bulk_rtn = proton_moments.bulk_velocity_rtn_nominal()
     bad_fit_flag = SwapiL3Flags.NONE
 
-    # If MAG data is unavailable, use the nominal Parker spiral direction.
-    # b_hat_rtn should be a unit vector; check for non-finite values, wrong magnitude,
-    # or if compute_b_hat_rtn already returned NaN due to data gaps or fill values.
-    b_hat_check = np.asarray(b_hat_rtn, dtype=float)
-    b_norm = np.linalg.norm(b_hat_check)
-    # Unit vector should have norm ≈1; allow small tolerance for numerical error.
-    is_valid_unit_vector = np.all(np.isfinite(b_hat_check)) and 0.99 < b_norm < 1.01
-    if not is_valid_unit_vector:
-        b_hat_rtn = np.array([1.0 / np.sqrt(2.0), -1.0 / np.sqrt(2.0), 0.0])
-        bad_fit_flag |= SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK
-    else:
-        b_hat_rtn = b_hat_check
+    # MAG required: per-chunk gaps (NaN b_hat) or non-unit magnitude → BAD_FIT.
+    # No Parker-spiral substitution; MAG presence at file level is enforced
+    # by the alpha-sw processor branch.
+    b_hat_rtn = np.asarray(b_hat_rtn, dtype=float)
+    b_norm = np.linalg.norm(b_hat_rtn)
+    if not (np.all(np.isfinite(b_hat_rtn)) and 0.99 < b_norm < 1.01):
+        return _nan_alpha_moments(SwapiL3Flags.BAD_FIT)
 
     proton_speed = np.linalg.norm(proton_bulk_rtn)
     if not np.isfinite(proton_speed) or proton_speed < 1e-12:

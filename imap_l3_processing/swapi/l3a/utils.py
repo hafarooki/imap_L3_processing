@@ -8,7 +8,7 @@ from spacepy.pycdf import CDF
 
 from imap_l3_processing.cdf.cdf_utils import read_numeric_variable
 from imap_l3_processing.constants import THIRTY_SECONDS_IN_NANOSECONDS
-from imap_l3_processing.models import MagL1dData
+from imap_l3_processing.models import MagData
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_processing.spice.geometry import (
     SpiceFrame,
@@ -19,7 +19,7 @@ from imap_processing.spice.geometry import (
 from imap_processing.spice.time import ttj2000ns_to_et
 
 
-def read_l1d_mag_data(cdf_path) -> MagL1dData:
+def read_mag_rtn_data(cdf_path) -> MagData:
     with CDF(str(cdf_path)) as cdf:
         var = cdf["b_rtn"]
         data = read_numeric_variable(var)[:, :3]
@@ -28,7 +28,7 @@ def read_l1d_mag_data(cdf_path) -> MagL1dData:
             data = np.where(data < float(attrs["VALIDMIN"]), np.nan, data)
         if "VALIDMAX" in attrs:
             data = np.where(data > float(attrs["VALIDMAX"]), np.nan, data)
-        return MagL1dData(
+        return MagData(
             epoch=pycdf.lib.v_datetime_to_tt2000(cdf["epoch"][...]),
             mag_data=data,
         )
@@ -81,27 +81,24 @@ def get_spacecraft_velocity_rtn(epoch_tt2000_ns: float) -> ndarray:
 
 
 def compute_b_hat_rtn(
-    mag_l1d_data,
+    mag_data,
     chunk_epoch_center_tt2000_ns: int,
     chunk_epoch_delta_ns: int,
 ) -> np.ndarray:
     """Average B over the chunk window in RTN, returning the unit direction.
 
-    MAG L1D `b_rtn` samples are already in RTN. Samples in
+    `b_rtn` samples are already in RTN. Samples in
     `[center - delta, center + delta)` are averaged directly and normalized.
-    Returns NaN when MAG is unavailable, no samples fall in the window, the
-    in-window samples include non-finite values, or the averaged |B| is too
-    small to define a direction. The alpha fitter interprets NaNs as invalid MAG
-    and uses its Parker-spiral fallback direction."""
-    if mag_l1d_data is None:
-        return np.full(3, np.nan)
+    Returns NaN when no samples fall in the window, the in-window samples
+    include non-finite values, or the averaged |B| is too small to define a
+    direction. The alpha fitter propagates those NaNs into its result."""
     start = chunk_epoch_center_tt2000_ns - chunk_epoch_delta_ns
     end = chunk_epoch_center_tt2000_ns + chunk_epoch_delta_ns
-    left = np.searchsorted(mag_l1d_data.epoch, start, side="left")
-    right = np.searchsorted(mag_l1d_data.epoch, end, side="left")
+    left = np.searchsorted(mag_data.epoch, start, side="left")
+    right = np.searchsorted(mag_data.epoch, end, side="left")
     if right == left:
         return np.full(3, np.nan)
-    b_rtn_mean = mag_l1d_data.mag_data[left:right].mean(axis=0)
+    b_rtn_mean = mag_data.mag_data[left:right].mean(axis=0)
     norm = np.linalg.norm(b_rtn_mean)
     if not np.all(np.isfinite(b_rtn_mean)) or norm < 1e-12:
         return np.full(3, np.nan)
