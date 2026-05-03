@@ -82,7 +82,7 @@ Other descriptors (proton-sw, pui-he) do not consume MAG.
 For each 5-sweep alpha chunk, the processor uses the full 60 s MAG window $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$.
 The in-window RTN samples are averaged directly, and the mean vector is normalized to produce $\hat{\mathbf{B}}^\text{RTN}$.
 
-If $\hat{\mathbf{B}}^\text{RTN}$ cannot be computed (empty MAG window or fill values among the in-window samples), the alpha fitter flags the chunk `BAD_FIT` and emits NaN moments.
+If $\hat{\mathbf{B}}^\text{RTN}$ cannot be computed (empty MAG window or fill values among the in-window samples), the chunk fitter emits `MAG_GAP` and skips the alpha fit, returning NaN moments. The `fit_solar_wind_alpha_moments` function retains a defensive NaN-finite check on `b_hat_rtn` for direct callers (tests, etc.) and emits `BAD_FIT` in that fallback path.
 
 ## SWAPI Response Model
 
@@ -399,7 +399,9 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 ### Quality flags (alpha-specific)
 
 - `STALE_PROTON` (= 32): Stage 1 proton fit failed (proton `bad_fit_flag != NONE`). Stage 2 returns NaN moments without trying.
-- `BAD_FIT` (= 8): reference proton velocity is nonphysical, MAG direction is unavailable for the chunk (NaN), peak-finding failed, or optimizer did not converge.
+- `BAD_FIT` (= 8): fit was attempted with valid inputs but failed — reference proton velocity is nonphysical, peak-finding failed, or optimizer did not converge.
+- `EPHEMERIS_GAP` (= 4): SPICE could not provide rotation matrices for the chunk's measurement times. The chunk is NaN-filled without attempting a fit.
+- `MAG_GAP` (= 128): SPICE geometry was available but MAG data is missing or contains fill values across the chunk window. The alpha fit is skipped and moments are NaN-filled. `PRELIMINARY_MAG` may be OR'd in alongside this flag when MAG L1D was the configured source.
 - `PRELIMINARY_MAG` (= 64): MAG L1D was used as the source for this run (L2 was unavailable). Set on every chunk in the run. The product is a candidate for reprocessing once MAG L2 covers the time range. See issue #13 / #70.
 
 ### Magnetic-field averaging
