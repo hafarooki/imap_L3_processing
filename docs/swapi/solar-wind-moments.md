@@ -71,7 +71,7 @@ $$t_i = t_\text{epoch} + i \cdot \tfrac{12}{72}\,\text{s} = t_\text{epoch} + i \
 ### MAG RTN (alpha only)
 
 The alpha moments depend on the local magnetic field direction because the alpha-proton drift is constrained to lie along $\hat{\mathbf{B}}$.
-It reads the MAG RTN CDF variable `b_rtn`, then normalizes the averaged field and uses the direction of the average for the alpha fit.
+The processor reads the MAG RTN CDF variable `b_rtn`, averages the in-window samples, and normalizes the mean to produce $\hat{\mathbf{B}}^\text{RTN}$ for the alpha fit.
 
 The dependency prefers MAG **L2** and falls back to **L1D** when no L2 file is available, mirroring how SWE selects its MAG dependency. MAG is required for alpha-sw; the processor raises if neither product is provided. When L1D is the source, every alpha-sw chunk in the run has its `PRELIMINARY_MAG` bit set so the product can be flagged for reprocessing once L2 is available. Proton-sw and pui-he do not consume MAG.
 
@@ -397,7 +397,7 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 - `STALE_PROTON` (= 32): Stage 1 proton fit failed (proton `bad_fit_flag != NONE`). Stage 2 returns NaN moments without trying.
 - `BAD_FIT` (= 8): fit was attempted with valid inputs but failed — reference proton velocity is nonphysical, peak-finding failed, or optimizer did not converge.
 - `EPHEMERIS_GAP` (= 4): SPICE could not provide rotation matrices for the chunk's measurement times. The chunk is NaN-filled without attempting a fit.
-- `MAG_GAP` (= 128): SPICE geometry was available but MAG data is missing or contains fill values across the chunk window. The alpha fit is skipped and moments are NaN-filled. `PRELIMINARY_MAG` may be OR'd in alongside this flag when MAG L1D was the configured source.
+- `MAG_GAP` (= 128): SPICE geometry was available but MAG data is missing or contains fill values across the chunk window. The alpha fit is skipped and moments are NaN-filled.
 - `PRELIMINARY_MAG` (= 64): MAG L1D was used as the source for this run (L2 was unavailable). Set on every chunk in the run. The product is a candidate for reprocessing once MAG L2 covers the time range. See issue #13 / #70.
 
 ### Known limitations
