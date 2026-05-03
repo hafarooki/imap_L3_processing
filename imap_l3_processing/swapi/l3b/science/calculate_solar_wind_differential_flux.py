@@ -1,15 +1,31 @@
+import numpy as np
 from numpy import ndarray
 
-from imap_l3_processing.constants import METERS_PER_KILOMETER, CENTIMETERS_PER_METER
-from imap_l3_processing.swapi.l3b.science.geometric_factor_calibration_table import GeometricFactorCalibrationTable
+from imap_l3_processing.swapi.l3a.science.geometric_factor import (
+    calculate_geometric_factor,
+)
+from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
+from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 
 
-def calculate_combined_solar_wind_differential_flux(energies: ndarray, average_count_rates: ndarray,
-                                                    efficiency: float,
-                                                    geometric_factor_table: GeometricFactorCalibrationTable):
-    geometric_factor = geometric_factor_table.lookup_geometric_factor(energies)
+def calculate_combined_solar_wind_differential_flux(
+    energies: ndarray,
+    average_count_rates: ndarray,
+    eff_correction: float,
+    swapi_response: SWAPIResponse,
+    charge_per_proton_charge: float = 1.0,
+):
+    esa_voltages = np.asarray(energies, dtype=float) / (
+        SWAPI_K_FACTOR * charge_per_proton_charge
+    )
+    geometric_factors = np.array(
+        [
+            calculate_geometric_factor(
+                swapi_response, float(v), charge_per_proton_charge
+            )
+            for v in esa_voltages
+        ]
+    )
 
-    denominator = energies * geometric_factor * efficiency
-    result_per_square_km = average_count_rates / denominator
-    result_per_square_cm = result_per_square_km / (METERS_PER_KILOMETER * CENTIMETERS_PER_METER) ** 2
-    return result_per_square_cm
+    denominator = geometric_factors * eff_correction
+    return average_count_rates / denominator

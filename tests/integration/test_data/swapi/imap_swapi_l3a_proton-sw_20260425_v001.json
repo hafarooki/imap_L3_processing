@@ -22,25 +22,7 @@
   {
     "type": "ancillary",
     "files": [
-      "imap_swapi_alpha-density-temperature-lut_20240920_v000.dat"
-    ]
-  },
-  {
-    "type": "ancillary",
-    "files": [
       "imap_swapi_efficiency-lut_20241020_v000.dat"
-    ]
-  },
-  {
-    "type": "ancillary",
-    "files": [
-      "imap_swapi_energy-gf-pui-lut_20100101_v001.csv"
-    ]
-  },
-  {
-    "type": "ancillary",
-    "files": [
-      "imap_swapi_instrument-response-lut_20241023_v000.zip"
     ]
   },
   {

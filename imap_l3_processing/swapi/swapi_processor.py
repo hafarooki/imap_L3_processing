@@ -624,8 +624,7 @@ class SwapiProcessor(Processor):
                 ) or np.any(np.isnan(sw_velocity)):
                     raise ValueError("Fill values in input data")
                 fit_params = calculate_pickup_ion_values(
-                    dependencies.instrument_response_calibration_table,
-                    dependencies.geometric_factor_calibration_table,
+                    dependencies.swapi_response,
                     data_chunk.energy,
                     data_chunk.coincidence_count_rate,
                     epoch,
@@ -919,10 +918,22 @@ class SwapiProcessor(Processor):
 
         for data_chunk in chunk_l2_data(data, 50):
             center_of_epoch = data_chunk.sci_start_time[0] + FIVE_MINUTES_IN_NANOSECONDS
-            instrument_efficiency = (
-                dependencies.efficiency_calibration_table.get_proton_efficiency_for(
-                    center_of_epoch
+            eps_p_lab = float(dependencies.efficiency_calibration_table.eps_p_lab)
+            proton_eff_correction = (
+                float(
+                    dependencies.efficiency_calibration_table.get_proton_efficiency_for(
+                        center_of_epoch
+                    )
                 )
+                / eps_p_lab
+            )
+            alpha_eff_correction = (
+                float(
+                    dependencies.efficiency_calibration_table.get_alpha_efficiency_for(
+                        center_of_epoch
+                    )
+                )
+                / eps_p_lab
             )
             coincidence_count_rates_with_uncertainty = uarray(
                 data_chunk.coincidence_count_rate,
@@ -934,27 +945,27 @@ class SwapiProcessor(Processor):
             proton_velocities, proton_probabilities = calculate_proton_solar_wind_vdf(
                 energies,
                 average_coincident_count_rates,
-                instrument_efficiency,
-                dependencies.geometric_factor_calibration_table,
+                proton_eff_correction,
+                dependencies.swapi_response,
             )
             alpha_velocities, alpha_probabilities = calculate_alpha_solar_wind_vdf(
                 energies,
                 average_coincident_count_rates,
-                instrument_efficiency,
-                dependencies.geometric_factor_calibration_table,
+                alpha_eff_correction,
+                dependencies.swapi_response,
             )
             pui_velocities, pui_probabilities = calculate_pui_solar_wind_vdf(
                 energies,
                 average_coincident_count_rates,
-                instrument_efficiency,
-                dependencies.geometric_factor_calibration_table,
+                alpha_eff_correction,
+                dependencies.swapi_response,
             )
             combined_differential_flux = (
                 calculate_combined_solar_wind_differential_flux(
                     energies,
                     average_coincident_count_rates,
-                    instrument_efficiency,
-                    dependencies.geometric_factor_calibration_table,
+                    proton_eff_correction,
+                    dependencies.swapi_response,
                 )
             )
             epochs.append(center_of_epoch)

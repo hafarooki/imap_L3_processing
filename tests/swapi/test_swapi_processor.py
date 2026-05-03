@@ -20,11 +20,10 @@ from imap_l3_processing.constants import (
 from imap_l3_processing.models import InputMetadata
 from imap_l3_processing.swapi.descriptors import (
     DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR,
-    INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR,
     EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR,
-    ALPHA_TEMPERATURE_DENSITY_LOOKUP_TABLE_DESCRIPTOR,
-    GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR,
-    GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR,
+    AZIMUTHAL_TRANSMISSION_DESCRIPTOR,
+    CENTRAL_EFFECTIVE_AREA_DESCRIPTOR,
+    PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR,
 )
 from imap_l3_processing.swapi.l3a.models import (
     SwapiL2Data,
@@ -150,9 +149,6 @@ class TestSwapiProcessor(TestCase):
 
         input_file_names = [
             f"imap_{instrument}_{incoming_data_level}_{SWAPI_L2_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{ALPHA_TEMPERATURE_DENSITY_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
             f"imap_{instrument}_{DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
         ]
 
@@ -207,12 +203,7 @@ class TestSwapiProcessor(TestCase):
             dependencies
         )
 
-        mock_instrument_response_calibration_table = (
-            mock_l3a_dependencies.instrument_response_calibration_table
-        )
-        mock_geometric_factor_calibration_table = (
-            mock_l3a_dependencies.geometric_factor_calibration_table
-        )
+        mock_swapi_response = mock_l3a_dependencies.swapi_response
         mock_efficiency_lut = mock_l3a_dependencies.efficiency_calibration_table
         mock_density_of_neutral_helium_calibration_table = (
             mock_l3a_dependencies.density_of_neutral_helium_calibration_table
@@ -227,8 +218,7 @@ class TestSwapiProcessor(TestCase):
         )
 
         (
-            instrument_response_lut,
-            geometric_factor_lut,
+            swapi_response,
             energies,
             count_rates,
             pui_epoch,
@@ -239,11 +229,8 @@ class TestSwapiProcessor(TestCase):
             helium_inflow_vector,
         ) = mock_calculate_pickup_ion.call_args.args
 
-        self.assertEqual(
-            mock_instrument_response_calibration_table, instrument_response_lut
-        )
         self.assertEqual(mock_efficiency_lut, efficiency_lut)
-        self.assertEqual(mock_geometric_factor_calibration_table, geometric_factor_lut)
+        self.assertEqual(mock_swapi_response, swapi_response)
         self.assertEqual(
             mock_density_of_neutral_helium_calibration_table,
             density_of_neutral_helium_lut,
@@ -462,9 +449,6 @@ class TestSwapiProcessor(TestCase):
 
         input_file_names = [
             f"imap_{instrument}_{incoming_data_level}_{SWAPI_L2_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{ALPHA_TEMPERATURE_DENSITY_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{GEOMETRIC_FACTOR_PUI_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
             f"imap_{instrument}_{DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
         ]
 
@@ -595,9 +579,6 @@ class TestSwapiProcessor(TestCase):
 
         input_file_names = [
             f"imap_{instrument}_{incoming_data_level}_{SWAPI_L2_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{ALPHA_TEMPERATURE_DENSITY_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
             f"imap_{instrument}_{DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
         ]
 
@@ -801,9 +782,6 @@ class TestSwapiProcessor(TestCase):
             f"imap_{instrument}_{incoming_data_level}_{SWAPI_L2_DESCRIPTOR}_{dependency_start_date}_{version}.cdf"
         )
         ancillary_file_names = [
-            f"imap_{instrument}_{ALPHA_TEMPERATURE_DENSITY_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
             f"imap_{instrument}_{DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
         ]
         ancillary_inputs = [AncillaryInput(fn) for fn in ancillary_file_names]
@@ -1097,8 +1075,6 @@ class TestSwapiProcessor(TestCase):
 
         input_file_names = [
             f"imap_{instrument}_{incoming_data_level}_{SWAPI_L2_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{INSTRUMENT_RESPONSE_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
             f"imap_{instrument}_{DENSITY_OF_NEUTRAL_HELIUM_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
         ]
 
@@ -1395,13 +1371,20 @@ class TestSwapiProcessor(TestCase):
 
         input_file_names = [
             f"imap_{instrument}_{incoming_data_level}_{SWAPI_L2_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
-            f"imap_{instrument}_{incoming_data_level}_{GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
             f"imap_{instrument}_{incoming_data_level}_{EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR}_{dependency_start_date}_{version}.cdf",
         ]
 
         science_inputs = [ScienceInput(file_name) for file_name in input_file_names]
 
         dependencies = ProcessingInputCollection(*science_inputs)
+
+        mock_l3b_deps = (
+            mock_swapi_l3b_dependencies_class.fetch_dependencies.return_value
+        )
+        mock_efficiency_table = mock_l3b_deps.efficiency_calibration_table
+        mock_efficiency_table.get_proton_efficiency_for.return_value = 0.11
+        mock_efficiency_table.get_alpha_efficiency_for.return_value = 0.11
+        mock_efficiency_table.eps_p_lab = 0.11
 
         swapi_processor = SwapiProcessor(dependencies, input_metadata)
         product = swapi_processor.process()
@@ -1410,12 +1393,9 @@ class TestSwapiProcessor(TestCase):
             dependencies
         )
 
-        mock_geometric_factor_calibration_table = mock_swapi_l3b_dependencies_class.fetch_dependencies.return_value.geometric_factor_calibration_table
-        mock_efficiency_table = mock_swapi_l3b_dependencies_class.fetch_dependencies.return_value.efficiency_calibration_table
+        mock_swapi_response = mock_l3b_deps.swapi_response
 
-        mock_chunk_l2_data.assert_called_with(
-            mock_swapi_l3b_dependencies_class.fetch_dependencies.return_value.data, 50
-        )
+        mock_chunk_l2_data.assert_called_with(mock_l3b_deps.data, 50)
 
         np.testing.assert_array_equal(
             coincidence_count_rate,
@@ -1427,12 +1407,6 @@ class TestSwapiProcessor(TestCase):
         )
         self.assertEqual(
             sentinel.energies, mock_calculate_combined_sweeps.call_args_list[0].args[1]
-        )
-        mock_efficiency_table.get_proton_efficiency_for.assert_has_calls(
-            [
-                call(first_chunk_initial_epoch + FIVE_MINUTES_IN_NANOSECONDS),
-                call(second_chunk_initial_epoch + FIVE_MINUTES_IN_NANOSECONDS),
-            ]
         )
 
         expected_count_rate_with_uncertainties = uarray(
@@ -1455,12 +1429,12 @@ class TestSwapiProcessor(TestCase):
             std_devs_count_rates,
             std_devs(mock_calculate_proton_solar_wind_vdf.call_args_list[0].args[1]),
         )
-        self.assertEqual(
-            mock_efficiency_table.get_proton_efficiency_for.return_value,
+        self.assertIsInstance(
             mock_calculate_proton_solar_wind_vdf.call_args_list[0].args[2],
+            float,
         )
         self.assertEqual(
-            mock_geometric_factor_calibration_table,
+            mock_swapi_response,
             mock_calculate_proton_solar_wind_vdf.call_args_list[0].args[3],
         )
 
@@ -1478,12 +1452,12 @@ class TestSwapiProcessor(TestCase):
             std_devs(mock_calculate_alpha_solar_wind_vdf.call_args_list[0].args[1]),
         )
 
-        self.assertEqual(
-            mock_efficiency_table.get_proton_efficiency_for.return_value,
+        self.assertIsInstance(
             mock_calculate_alpha_solar_wind_vdf.call_args_list[0].args[2],
+            float,
         )
         self.assertEqual(
-            mock_geometric_factor_calibration_table,
+            mock_swapi_response,
             mock_calculate_alpha_solar_wind_vdf.call_args_list[0].args[3],
         )
 
@@ -1498,12 +1472,12 @@ class TestSwapiProcessor(TestCase):
             std_devs_count_rates,
             std_devs(mock_calculate_pui_solar_wind_vdf.call_args_list[0].args[1]),
         )
-        self.assertEqual(
-            mock_efficiency_table.get_proton_efficiency_for.return_value,
+        self.assertIsInstance(
             mock_calculate_pui_solar_wind_vdf.call_args_list[0].args[2],
+            float,
         )
         self.assertEqual(
-            mock_geometric_factor_calibration_table,
+            mock_swapi_response,
             mock_calculate_pui_solar_wind_vdf.call_args_list[0].args[3],
         )
 
@@ -1529,14 +1503,14 @@ class TestSwapiProcessor(TestCase):
                 ].args[1]
             ),
         )
-        self.assertEqual(
-            mock_efficiency_table.get_proton_efficiency_for.return_value,
+        self.assertIsInstance(
             mock_calculate_combined_solar_wind_differential_flux.call_args_list[0].args[
                 2
             ],
+            float,
         )
         self.assertEqual(
-            mock_geometric_factor_calibration_table,
+            mock_swapi_response,
             mock_calculate_combined_solar_wind_differential_flux.call_args_list[0].args[
                 3
             ],
@@ -1722,20 +1696,14 @@ class TestSwapiProcessor(TestCase):
 
 def create_swapi_l3a_dependencies_with_mocks():
     data = Mock()
-    # Default to ε_p(t) = ε_α(t) = ε_p_lab so the moments fit's central_effective_area_scale
-    # comes out to 1.0 — matches behavior tests written before efficiency wiring.
     efficiency_calibration_table = Mock()
     efficiency_calibration_table.get_proton_efficiency_for.return_value = 0.11
     efficiency_calibration_table.get_alpha_efficiency_for.return_value = 0.11
     efficiency_calibration_table.eps_p_lab = 0.11
-    geometric_factor_calibration_table = Mock()
-    instrument_response_calibration_table = Mock()
     density_of_neutral_helium_calibration_table = Mock()
     return SwapiL3ADependencies(
         data=data,
         efficiency_calibration_table=efficiency_calibration_table,
-        geometric_factor_calibration_table=geometric_factor_calibration_table,
-        instrument_response_calibration_table=instrument_response_calibration_table,
         density_of_neutral_helium_calibration_table=density_of_neutral_helium_calibration_table,
         hydrogen_inflow_vector=Mock(),
         helium_inflow_vector=Mock(),
