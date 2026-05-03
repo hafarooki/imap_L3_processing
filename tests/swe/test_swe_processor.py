@@ -324,7 +324,7 @@ class TestSweProcessor(unittest.TestCase):
             proton_sw_speed=np.array([]),
             proton_sw_clock_angle=np.array([]),
             proton_sw_deflection_angle=np.array([]),
-            swp_flags=np.array([0,0,0,SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED, SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED | SwapiL3Flags.BAD_FIT, SwapiL3Flags.BAD_FIT,0,0,0,0]),
+            swp_flags=np.array([0, 0, 0, SwapiL3Flags.BAD_FIT, SwapiL3Flags.BAD_FIT, SwapiL3Flags.NONE, 0, 0, 0, 0]),
         )
         counts = swe_l1b_data.count_rates * swe_l2_data.acquisition_duration[:, :, np.newaxis] / 1e6
         mock_average_over_look_directions.return_value = np.array([5, 10, 15])
@@ -595,7 +595,7 @@ class TestSweProcessor(unittest.TestCase):
         mag_start_time = datetime(2025, 3, 6, 0, 1, 0)
         mag_epochs = np.array([mag_start_time + i * timedelta(seconds=1) for i in range(10)])
         swapi_epochs = np.array([datetime(2025, 3, 6), datetime(2025, 3, 10)])
-        swp_flags = np.array([SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED, SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED])
+        swp_flags = np.array([SwapiL3Flags.BAD_FIT, SwapiL3Flags.BAD_FIT])
 
         pitch_angle_bins = [70, 100, 130]
 

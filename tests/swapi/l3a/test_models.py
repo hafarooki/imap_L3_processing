@@ -64,7 +64,7 @@ class TestModels(CdfModelTestCase):
         expected_flow_deflection = np.arange(100, step=10.0)
         expected_flow_deflection_std = np.arange(1, step=0.1)
         quality_flags = np.full(20, SwapiL3Flags.NONE)
-        quality_flags[3:5] |= SwapiL3Flags.SWP_SW_ANGLES_ESTIMATED
+        quality_flags[3:5] |= SwapiL3Flags.EPHEMERIS_GAP
         bulk_velocity_rtn_sun = np.random.rand(10, 3)
         bulk_velocity_rtn_sun_covariance = np.random.rand(10, 3, 3)
         bulk_velocity_rtn_sc = np.random.rand(10, 3)
@@ -189,7 +189,7 @@ class TestModels(CdfModelTestCase):
         velocity_covariance_rtn = np.random.randn(n, 3, 3)
         delta_v = np.arange(n, dtype=float) * 10
         delta_v_uncert = np.arange(n, dtype=float)
-        b_hat_rtn = np.random.randn(n, 3)
+        magnetic_field_direction = np.random.randn(n, 3)
         ref_proton_density = np.arange(n, dtype=float) * 5
         ref_proton_temperature = np.arange(n, dtype=float) * 1e5
         ref_proton_velocity_rtn = np.random.randn(n, 3)
@@ -207,7 +207,7 @@ class TestModels(CdfModelTestCase):
             velocity_covariance_rtn,
             delta_v,
             delta_v_uncert,
-            b_hat_rtn,
+            magnetic_field_direction,
             ref_proton_density,
             ref_proton_temperature,
             ref_proton_velocity_rtn,
@@ -241,7 +241,9 @@ class TestModels(CdfModelTestCase):
         self.assert_variable_attributes(
             variables[9], delta_v_uncert, "alpha_sw_delta_v_uncert"
         )
-        self.assert_variable_attributes(variables[10], b_hat_rtn, "alpha_sw_b_hat_rtn")
+        self.assert_variable_attributes(
+            variables[10], magnetic_field_direction, "alpha_sw_b_hat_rtn"
+        )
         self.assert_variable_attributes(
             variables[11], ref_proton_density, "alpha_sw_reference_proton_density"
         )

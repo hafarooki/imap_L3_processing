@@ -263,8 +263,8 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
             10.0 * EV_TO_KELVIN,
         )  # ~5% abundance, same temperature as protons
         cls.delta_v = 30.0
-        cls.b_hat_rtn = np.array([1.0, 0.0, 0.0])
-        cls.v_a_rtn = cls.v_p_rtn + cls.delta_v * cls.b_hat_rtn
+        cls.magnetic_field_direction = np.array([1.0, 0.0, 0.0])
+        cls.v_a_rtn = cls.v_p_rtn + cls.delta_v * cls.magnetic_field_direction
 
         cls.obs, cls.esa_flat, cls.rot = _synthesize_combined_observed(
             cls.sr,
@@ -299,7 +299,7 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
                 bad_fit_flag=int(SwapiL3Flags.NONE),
                 velocity_covariance=np.eye(3) * 0.01,
             ),
-            b_hat_rtn=self.b_hat_rtn,
+            magnetic_field_direction=self.magnetic_field_direction,
             alpha_effective_area_scale=1.0,
             proton_effective_area_scale=1.0,
             rotation_matrices=self.rot,
@@ -309,21 +309,23 @@ class TestFitAlphaMomentsEndToEnd(unittest.TestCase):
         self.assertAlmostEqual(result.temperature, self.T_a, delta=2.0 * EV_TO_KELVIN)
         self.assertAlmostEqual(result.delta_v, self.delta_v, delta=10.0)
 
-    def test_invalid_mag_uses_fallback_flag(self):
+    def test_nan_b_hat_returns_bad_fit_with_nan_moments(self):
         result = fit_solar_wind_alpha_moments(
             count_rate=self.obs,
             esa_voltage=self.esa_flat,
             measurement_time=np.zeros(len(self.esa_flat), dtype="int64"),
             swapi_response=self.sr,
             proton_moments=self._proton_truth(),
-            b_hat_rtn=np.full(3, np.nan),
+            magnetic_field_direction=np.full(3, np.nan),
             alpha_effective_area_scale=1.0,
             proton_effective_area_scale=1.0,
             rotation_matrices=self.rot,
         )
 
-        self.assertTrue(result.bad_fit_flag & int(SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK))
-        self.assertTrue(np.isfinite(result.density.nominal_value))
+        self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.BAD_FIT))
+        self.assertTrue(np.isnan(result.density.nominal_value))
+        self.assertTrue(np.isnan(result.temperature.nominal_value))
+        self.assertTrue(np.isnan(result.delta_v.nominal_value))
 
 
 def _make_proton_moments(**kw):
@@ -369,7 +371,7 @@ class TestFlagsAndGuards(unittest.TestCase):
             measurement_time=np.zeros(len(self.esa_flat), dtype="int64"),
             swapi_response=self.sr,
             proton_moments=proton,
-            b_hat_rtn=np.array([1.0, 0.0, 0.0]),
+            magnetic_field_direction=np.array([1.0, 0.0, 0.0]),
             alpha_effective_area_scale=1.0,
             proton_effective_area_scale=1.0,
         )
@@ -377,12 +379,14 @@ class TestFlagsAndGuards(unittest.TestCase):
         self.assertTrue(np.isnan(result.density.nominal_value))
         self.assertTrue(np.all(np.isnan(result.bulk_velocity_rtn_nominal())))
 
-    def test_invalid_mag_with_zero_proton_still_uses_fallback(self):
-        """Invalid MAG always uses the Parker fallback direction."""
+    def test_invalid_mag_short_circuits_before_proton_velocity_guard(self):
+        """Invalid MAG returns BAD_FIT immediately without inspecting proton velocity."""
         proton = _make_proton_moments(
             density=5.0,
             temperature=10.0,
-            bulk_velocity_rtn=np.array([0.0, 0.0, 0.0]),  # Zero proton velocity
+            bulk_velocity_rtn=np.array(
+                [0.0, 0.0, 0.0]
+            ),  # would trip BAD_FIT downstream
             bad_fit_flag=int(SwapiL3Flags.NONE),
         )
         result = fit_solar_wind_alpha_moments(
@@ -391,15 +395,12 @@ class TestFlagsAndGuards(unittest.TestCase):
             measurement_time=np.zeros(len(self.esa_flat), dtype="int64"),
             swapi_response=self.sr,
             proton_moments=proton,
-            b_hat_rtn=np.full(3, np.nan),
+            magnetic_field_direction=np.full(3, np.nan),
             alpha_effective_area_scale=1.0,
             proton_effective_area_scale=1.0,
             rotation_matrices=np.tile(np.eye(3), (len(self.esa_flat), 1, 1)),
         )
-        self.assertEqual(
-            result.bad_fit_flag,
-            int(SwapiL3Flags.BAD_FIT | SwapiL3Flags.ALPHA_MAG_DATA_FALLBACK),
-        )
+        self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.BAD_FIT))
         self.assertTrue(np.isnan(result.delta_v.nominal_value))
 
 
@@ -460,7 +461,7 @@ class TestAlphaFitRealSpectra(unittest.TestCase):
             measurement_time=np.zeros(len(f["cr_flat"]), dtype="int64"),
             swapi_response=self.sr,
             proton_moments=proton,
-            b_hat_rtn=f["b_hat_rtn"],
+            magnetic_field_direction=f["b_hat_rtn"],
             alpha_effective_area_scale=float(f["alpha_eff_scale"]),
             proton_effective_area_scale=float(f["proton_eff_scale"]),
             rotation_matrices=f["rotation_matrices"],

@@ -4,7 +4,7 @@
 
 - `imap_l3_processing/swapi/l3a/science/swapi_response.py` — Instrument response model. Loads calibration tables (azimuthal transmission, central effective area, passband polynomial fits) and builds a `PassbandGrid` per ESA voltage step via `SWAPIResponse.create_passband_grid`.
 - `imap_l3_processing/swapi/l3a/science/calculate_proton_solar_wind_moments.py` — Core proton fitting algorithm. `fit_solar_wind_proton_moments` implements the three-step procedure (SPICE → initial guess → Levenberg–Marquardt); `calculate_integral` is the Numba-JIT count-rate integral over elevation, azimuth, and speed.
-- `imap_l3_processing/swapi/l3a/science/calcxwulate_alpha_solar_wind_moments.py` — Alpha particle moments fitter (Stage 2 of the two-stage proton-frozen scheme). `fit_solar_wind_alpha_moments` fits $(n_\alpha, T_\alpha, \Delta v)$ with proton parameters held fixed.
+- `imap_l3_processing/swapi/l3a/science/calculate_alpha_solar_wind_moments.py` — Alpha particle moments fitter (Stage 2 of the two-stage proton-frozen scheme). `fit_solar_wind_alpha_moments` fits $(n_\alpha, T_\alpha, \Delta v)$ with proton parameters held fixed.
 - `imap_l3_processing/swapi/l3a/science/speed_calculation.py` — ESA step layout constants (`SWAPI_SCIENCE_BINS`, `SWAPI_COARSE_SWEEP_BINS`, `SWAPI_FINE_SWEEP_BINS`), k-factor constants, `esa_voltage_to_proton_speed`/`esa_voltage_to_alpha_speed` conversions, and `get_alpha_peak_indices` for locating the alpha bump in the count-rate spectrum.
 - `imap_l3_processing/swapi/swapi_processor.py` and `imap_l3_processing/swapi/l3a/chunk_fits.py` — Production pipeline entry points. `SwapiProcessor` dispatches on descriptor (`proton-sw`, `alpha-sw`, `pui-he`). Each product's processing method precomputes SPICE geometry, then distributes 5-sweep chunks across fork-based multiprocessing. Module-level worker functions (`proton_chunk_worker`, `alpha_chunk_worker`, `pui_proton_chunk_worker`) receive shared state (`SWAPIResponse`, `EfficiencyCalibrationTable`, MAG data) via an initializer. `derive_velocity_angles` (in `calculate_proton_solar_wind_moments.py`) converts fitted RTN velocity to spacecraft-frame speed, clock angle, and deflection angle in the DPS frame; speed σ uses the closed-form delta method, while the two angles' σ are propagated by Monte-Carlo sampling from the fitted velocity covariance. The proton worker also writes the Sun-frame bulk velocity vector and Sun-frame scalar speed.
 
@@ -23,7 +23,7 @@
       > Daily repointing data gaps
       > High temperature (but still report speed and maybe pressure, too)
 - [ ] Handle the padded SWAPI vs unpadded MAG data temporal mismatch
-- [ ] Use L2 or L1D depending on what's available https://github.com/IMAP-Science-Operations-Center/imap_L3_processing/issues/13
+- [x] Use L2 or L1D depending on what's available https://github.com/IMAP-Science-Operations-Center/imap_L3_processing/issues/13
 - [ ] Investigate the degeneracy in clock angle at 8:11 on 2026-02-04
 
 ## Input Data
@@ -68,13 +68,17 @@ The start time for each sweep, available from the L2 CDF, is denoted $t_\text{ep
 For ESA step $i$ (0-indexed, although recall that step 0 is skipped), the measurement time is:
 $$t_i = t_\text{epoch} + i \cdot \tfrac{12}{72}\,\text{s} = t_\text{epoch} + i \cdot 0.1\overline{6}\,\text{s}.$$
 
-### MAG L1D (alpha only)
+### MAG RTN (alpha only)
 
-The alpha moments depend on the local magnetic field direction because the alpha-proton drift is constrained to lie along $\hat{\mathbf{B}}$. It reads the MAG L1D RTN CDF variable `b_rtn`, then normalizes the averaged field direction before the alpha fit.
+The alpha moments depend on the local magnetic field direction because the alpha-proton drift is constrained to lie along $\hat{\mathbf{B}}$.
+The processor reads MAG RTN samples and derives $\hat{\mathbf{B}}^\text{RTN}$ for the alpha fit.
 
-For each 5-sweep alpha chunk, the processor uses the full 60 s MAG window $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$. The in-window RTN samples are averaged directly, and the mean vector is normalized to produce $\hat{\mathbf{B}}^\text{RTN}$.
+The dependency prefers MAG **L2** and falls back to **L1D** when no L2 file is available. MAG is required for `alpha-sw`; the processor raises `ValueError` if neither product is provided, matching SWE's dependency loader behavior. When L1D is the source, every alpha-sw chunk in the run has its `PRELIMINARY_MAG` bit set so the product can be flagged for reprocessing once L2 is available. `proton-sw` and `pui-he` do not consume MAG.
 
-If the MAG dependency is missing, the window is empty, any in-window sample is non-finite, or the averaged field is too small to define a direction, `compute_b_hat_rtn` returns NaNs. The alpha fitter then uses the nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ in RTN and sets quality flag `ALPHA_MAG_DATA_FALLBACK` (see [Quality flags](#quality-flags-alpha-specific)).
+For each 5-sweep alpha chunk, the processor uses the full $60\,\text{s}$ MAG window $[\,t_\text{center} - 30\,\text{s},\; t_\text{center} + 30\,\text{s})$.
+The in-window RTN samples are averaged directly, and the mean vector is normalized to produce $\hat{\mathbf{B}}^\text{RTN}$.
+
+If $\hat{\mathbf{B}}^\text{RTN}$ cannot be computed (empty MAG window or fill values among the in-window samples), the chunk is flagged `MAG_GAP` and is assigned fill values.
 
 ## SWAPI Response Model
 
@@ -393,19 +397,11 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 
 ### Quality flags (alpha-specific)
 
-- `STALE_PROTON` (= 32): Stage 1 proton fit failed (proton `bad_fit_flag != NONE`). Stage 2 returns NaN moments without trying.
-- `BAD_FIT` (= 8): reference proton velocity is nonphysical, peak-finding failed, or optimizer did not converge.
-- `ALPHA_MAG_DATA_FALLBACK` (= 64): MAG L1D is missing or invalid for the chunk; nominal Parker spiral direction $\hat{\mathbf{B}} = (1/\sqrt{2},\,-1/\sqrt{2},\,0)$ RTN (45° from R toward $-$T) used in place of the measured field.
-
-### Magnetic-field averaging
-
-`compute_b_hat_rtn` performs the MAG averaging used by the alpha fitter:
-
-1. Select MAG samples with epochs in $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$, matching the 5-sweep chunk span.
-2. Read the selected `b_rtn` vectors directly in RTN.
-3. Average the selected RTN vectors and normalize the average.
-
-The function returns NaNs when MAG is unavailable, no MAG samples fall in the chunk window, any selected sample is non-finite, or the averaged $|\mathbf{B}|$ is below $10^{-12}$. The alpha fitter treats those NaNs as an invalid measured field and uses the nominal Parker spiral fallback.
+- `STALE_PROTON` (= 32): Stage 1 proton fit failed (proton `bad_fit_flag != NONE`). Stage 2 returns fill-valued moments without trying.
+- `BAD_FIT` (= 8): fit was attempted with valid inputs but failed — reference proton velocity is nonphysical, peak-finding failed, or optimizer did not converge.
+- `EPHEMERIS_GAP` (= 4): SPICE could not provide rotation matrices for the chunk's measurement times. The chunk is fill-valued without attempting a fit.
+- `MAG_GAP` (= 128): SPICE geometry was available but MAG data is missing or contains fill values across the chunk window. The alpha fit is skipped and moments are fill-valued.
+- `PRELIMINARY_MAG` (= 64): MAG L1D was used as the source for this run (L2 was unavailable). Set on every chunk in the run. The product is a candidate for reprocessing once MAG L2 covers the time range.
 
 ### Known limitations
 

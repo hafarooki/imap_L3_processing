@@ -22,7 +22,7 @@ from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from imap_l3_processing.utils import format_time, download_dependency, read_mag_data, save_data, \
     download_external_dependency, download_dependency_with_repointing, \
     combine_glows_l3e_with_l1c_pointing, furnish_local_spice, get_spice_parent_file_names, furnish_spice_metakernel, \
-    SpiceKernelTypes, FurnishMetakernelOutput, read_cdf_parents, get_dependency_paths_by_descriptor
+    SpiceKernelTypes, FurnishMetakernelOutput, read_cdf_parents, get_dependency_paths_by_descriptor, select_mag_path
 from imap_l3_processing.version import VERSION
 from tests.cdf.test_cdf_utils import TestDataProduct
 from tests.maps.test_builders import create_rectangular_spectral_index_map_data, create_rectangular_intensity_map_data
@@ -463,7 +463,7 @@ class TestUtils(TestCase):
                     f"{expected_files_to_download}. Expected one file to download, found {case}.",
                     str(cm.exception))
 
-    def test_read_l1d_mag_data(self):
+    def test_read_mag_data(self):
         file_name_as_str = "test_cdf.cdf"
         file_name_as_path = Path(file_name_as_str)
 
@@ -654,6 +654,47 @@ class TestUtils(TestCase):
                     self.assertEqual(sorted(expected_output[output_key]),
                                      sorted(actual_output[output_key]), f"output not equal for key {output_key}" + \
                                      f", expected: {sorted(expected_output[output_key])} actual {sorted(actual_output[output_key])}")
+
+    @patch("imap_l3_processing.utils.download")
+    def test_select_mag_path_returns_none_when_no_mag_present(self, mock_download):
+        collection = ProcessingInputCollection(
+            ScienceInput("imap_swapi_l2_sci_20100105_v010.cdf"),
+        )
+        path, level = select_mag_path(collection, "norm-rtn")
+        self.assertIsNone(path)
+        self.assertIsNone(level)
+        mock_download.assert_not_called()
+
+    @patch("imap_l3_processing.utils.download")
+    def test_select_mag_path_returns_l2_when_present(self, mock_download):
+        mock_download.return_value = Path("/tmp/mag_l2.cdf")
+        collection = ProcessingInputCollection(
+            ScienceInput("imap_mag_l2_norm-rtn_20100105_v010.cdf"),
+        )
+        path, level = select_mag_path(collection, "norm-rtn")
+        self.assertEqual(Path("/tmp/mag_l2.cdf"), path)
+        self.assertEqual("l2", level)
+
+    @patch("imap_l3_processing.utils.download")
+    def test_select_mag_path_prefers_l2_over_l1d(self, mock_download):
+        mock_download.return_value = Path("/tmp/mag_l2.cdf")
+        collection = ProcessingInputCollection(
+            ScienceInput("imap_mag_l1d_norm-rtn_20100105_v010.cdf"),
+            ScienceInput("imap_mag_l2_norm-rtn_20100105_v010.cdf"),
+        )
+        path, level = select_mag_path(collection, "norm-rtn")
+        self.assertEqual("l2", level)
+        self.assertEqual(Path("/tmp/mag_l2.cdf"), path)
+
+    @patch("imap_l3_processing.utils.download")
+    def test_select_mag_path_returns_l1d_when_only_l1d_present(self, mock_download):
+        mock_download.return_value = Path("/tmp/mag_l1d.cdf")
+        collection = ProcessingInputCollection(
+            ScienceInput("imap_mag_l1d_norm-rtn_20100105_v010.cdf"),
+        )
+        path, level = select_mag_path(collection, "norm-rtn")
+        self.assertEqual("l1d", level)
+        self.assertEqual(Path("/tmp/mag_l1d.cdf"), path)
 
     @patch("imap_l3_processing.glows.l3bc.utils.imap_data_access.download")
     @with_tempdir
