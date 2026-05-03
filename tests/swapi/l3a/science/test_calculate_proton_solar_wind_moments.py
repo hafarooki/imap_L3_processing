@@ -1473,7 +1473,7 @@ class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):
     def test_zero_passband_grid_returns_zero(self):
         # Build a PassbandGrid where all passband values are zero — norm will be 0
         # and the region loop should skip all regions, returning 0.
-        from imap_l3_processing.swapi.l3a.science.swapi_response import PassbandGrid
+        from imap_l3_processing.swapi.l3a.science.passband_grid import PassbandGrid
 
         zero_grid = np.zeros((23, 101), dtype=np.float64)
         transmission = np.ones(1800, dtype=np.float64)
@@ -1509,7 +1509,7 @@ class TestInterpolateTransmissionBoundary(unittest.TestCase):
     same out-of-bounds entry (weights cancel). Uses a 3-element array to trigger easily."""
 
     def setUp(self):
-        from imap_l3_processing.swapi.l3a.science.swapi_response import PassbandGrid
+        from imap_l3_processing.swapi.l3a.science.passband_grid import PassbandGrid
 
         zero_grid = np.zeros((23, 101), dtype=np.float64)
         boundary = np.array([[0.0], [0.95]])

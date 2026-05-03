@@ -3,14 +3,14 @@ import unittest
 import numpy as np
 import numpy.testing as npt
 
-from imap_l3_processing.swapi.l3a.science.swapi_response import (
-    SWAPIResponse,
+from imap_l3_processing.swapi.l3a.science.passband_grid import (
+    _PASSBAND_BOUNDARY_THRESHOLD,
     _TARGET_ELEVATIONS,
     _TARGET_SPEED_RATIOS,
-    _PASSBAND_BOUNDARY_THRESHOLD,
-    eval_boundary_min,
     eval_boundary_max,
+    eval_boundary_min,
 )
+from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from tests.test_helpers import get_test_instrument_team_data_path
 
 AZIMUTHAL_TRANSMISSION_PATH = get_test_instrument_team_data_path(

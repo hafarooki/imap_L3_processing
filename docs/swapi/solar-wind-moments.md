@@ -166,8 +166,8 @@ For each Gauss-Legendre elevation node, the speed integral only needs to cover s
 2. The SWAPI passband is nonzero at that elevation.
 
 The VDF speed interval is taken to be
-$$[v_b - \Delta v_\text{VDF},\; v_b + \Delta v_\text{VDF}], \qquad \Delta v_\text{VDF} = 10v_\text{th},$$
-where $v_b = |\mathbf{v}_b|$ and $v_\text{th}$ is the thermal speed. For the Maxwellian VDF used here, this interval includes essentially all of the distribution; at $10\sigma$ the radial factor is below $e^{-50} \sim 10^{-22}$.
+$$[v_b - \Delta v_\text{VDF},\; v_b + \Delta v_\text{VDF}], \qquad \Delta v_\text{VDF} = 5v_\text{th},$$
+where $v_b = |\mathbf{v}_b|$ and $v_\text{th}$ is the thermal speed. For the Maxwellian VDF used here, this captures essentially all of the distribution: at $5\sigma$ the radial factor is $e^{-12.5} \approx 4 \times 10^{-6}$ of peak. A wider window (the previous $10v_\text{th}$) makes Gauss-Legendre concentrate nodes far from the integrand peak for cold plasma where the passband already extends well beyond $5v_\text{th}$, and the resulting polynomial overshoots the near-delta peak by a few percent at high count rate.
 
 The passband speed range is stored as speed-ratio bounds relative to the central passband speed $v_0$:
 $$[r_\text{min}(\theta)v_0,\; r_\text{max}(\theta)v_0].$$

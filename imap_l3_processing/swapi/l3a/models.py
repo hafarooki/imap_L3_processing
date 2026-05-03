@@ -90,9 +90,7 @@ class SwapiL3ProtonSolarWindData(DataProduct):
     proton_sw_deflection_angle_uncert: np.ndarray
     proton_sw_bulk_velocity_rtn_sun: np.ndarray  # shape (N, 3), km/s, inertial RTN
     proton_sw_bulk_velocity_rtn_sun_covariance: np.ndarray  # shape (N, 3, 3), km²/s²
-    proton_sw_bulk_velocity_rtn_sc: (
-        np.ndarray
-    )  # shape (N, 3), km/s, RTN in SC rest frame
+    proton_sw_bulk_velocity_rtn_sc: np.ndarray  # shape (N, 3), km/s, RTN in SC rest frame
     proton_sw_bulk_velocity_rtn_sc_covariance: np.ndarray  # shape (N, 3, 3), km²/s²
     quality_flags: np.ndarray[SwapiL3Flags]
 

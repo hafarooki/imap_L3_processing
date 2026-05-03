@@ -20,10 +20,8 @@ from imap_l3_processing.constants import (
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     esa_voltage_to_proton_speed,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import (
-    PassbandGrid,
-    SWAPIResponse,
-)
+from imap_l3_processing.swapi.l3a.science.passband_grid import PassbandGrid
+from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 
 
 class SWParams(NamedTuple):
@@ -54,6 +52,12 @@ OA_SCAN_THRESHOLD = 1e-6  # trim where g < threshold × max(g)
 
 EPSILON_OA = 1e-6
 EPSILON_SG = 1e-6
+
+# Speed integration half-width in units of thermal speed. The Maxwellian at
+# 5σ is exp(-12.5) ≈ 4e-6 of peak, already negligible. Wider windows waste GL
+# nodes in the tails for cold plasma where the passband is much wider than
+# the Maxwellian (the resulting GL polynomial overshoots a near-delta peak).
+SPEED_HALF_WIDTH_VTH = 5.0
 
 # Non-paralyzable detector deadtime (Tsoulfanidis 1995, p. 74): n = g / (1 - g*tau)
 # Rearranged for forward model (true rate -> measured rate): g = n / (1 + n*tau)
@@ -454,7 +458,7 @@ def _integrate_region(
 
         min_speed, max_speed = _dynamic_limits(
             sw_params.bulk_speed,
-            sw_params.thermal_speed * 10,
+            sw_params.thermal_speed * SPEED_HALF_WIDTH_VTH,
             passband_lower_speed,
             passband_upper_speed,
         )
