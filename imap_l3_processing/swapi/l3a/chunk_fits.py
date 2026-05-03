@@ -212,16 +212,13 @@ class ProtonChunkFitter(ChunkFitter):
 
 
 class AlphaChunkFitter(ChunkFitter):
-    def __init__(self, mag_data, mag_data_level):
+    def __init__(self, mag_data):
         self.mag_data = mag_data
-        # "l2" or "l1d" — when "l1d", PRELIMINARY_MAG is OR'd into every chunk's flag.
-        self.mag_data_level = mag_data_level
 
     def __getstate__(self):
         # mag_data is consumed parent-side in precompute_geometry to derive
         # b_hat per chunk; workers only ever read b_hat from the geometry tuple.
         # Drop the full MAG arrays from pickle so they don't ride into each worker.
-        # mag_data_level is small and needed in the worker to set PRELIMINARY_MAG.
         return {**self.__dict__, "mag_data": None}
 
     def precompute_geometry(self, chunk):
@@ -250,15 +247,12 @@ class AlphaChunkFitter(ChunkFitter):
         b_hat_out = np.full(3, np.nan)
         ref_density = ref_temperature = np.nan
         ref_velocity = np.full(3, np.nan)
-        preliminary_mag_bit = (
-            int(SwapiL3Flags.PRELIMINARY_MAG) if self.mag_data_level == "l1d" else 0
-        )
-        bad_fit_flag = int(SwapiL3Flags.BAD_FIT) | preliminary_mag_bit
+        bad_fit_flag = int(SwapiL3Flags.BAD_FIT)
         if rotation_matrices is None:
-            bad_fit_flag = int(SwapiL3Flags.EPHEMERIS_GAP) | preliminary_mag_bit
+            bad_fit_flag = int(SwapiL3Flags.EPHEMERIS_GAP)
             return _nan_alpha_record(epoch, bad_fit_flag)
         if b_hat_rtn is None or not np.all(np.isfinite(b_hat_rtn)):
-            bad_fit_flag = int(SwapiL3Flags.MAG_GAP) | preliminary_mag_bit
+            bad_fit_flag = int(SwapiL3Flags.MAG_GAP)
             return _nan_alpha_record(epoch, bad_fit_flag)
         try:
             if np.any(
@@ -294,7 +288,7 @@ class AlphaChunkFitter(ChunkFitter):
             ref_density = proton_moments.density.nominal_value
             ref_temperature = proton_moments.temperature.nominal_value
             ref_velocity = proton_moments.bulk_velocity_rtn_nominal()
-            bad_fit_flag = int(mom.bad_fit_flag) | preliminary_mag_bit
+            bad_fit_flag = int(mom.bad_fit_flag)
         except Exception:
             logger.info(
                 f"Alpha moments fit exception at epoch {epoch}; using NaN fill",

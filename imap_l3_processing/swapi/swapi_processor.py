@@ -108,12 +108,15 @@ class SwapiProcessor(Processor):
             dependencies.swapi_response, dependencies.efficiency_calibration_table
         )
 
+        result = runner.run(
+            chunks,
+            AlphaChunkFitter(dependencies.mag_data),
+        )
+        if dependencies.mag_data_level == "l1d":
+            result["bad_fit_flag"] = result["bad_fit_flag"] | int(SwapiL3Flags.PRELIMINARY_MAG)
         return SwapiL3AlphaSolarWindData(
             replace(self.input_metadata, descriptor="alpha-sw"),
-            **runner.run(
-                chunks,
-                AlphaChunkFitter(dependencies.mag_data, dependencies.mag_data_level),
-            ),
+            **result,
         )
 
     def process_l3a_pui(
