@@ -41,6 +41,24 @@ from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from tests.test_helpers import get_test_data_path, get_test_instrument_team_data_path
 
+
+def _nom(x):
+    """Strip uncertainties so ndarray-typed assertions can compare against floats.
+
+    `ProtonSolarWindMoments.density` and `.temperature` are `UFloat`, and
+    `bulk_velocity_rtn` is a tuple of `UFloat` after `_optimize`; the initial
+    guess returns plain floats. `assert_allclose` doesn't know how to coerce
+    `UFloat`, so funnel everything through `.nominal_value` first.
+    """
+    if hasattr(x, "nominal_value"):
+        return x.nominal_value
+    if isinstance(x, (tuple, list)) or (
+        isinstance(x, np.ndarray) and x.dtype == object
+    ):
+        return np.array([_nom(v) for v in x])
+    return x
+
+
 _AZIMUTHAL_TRANSMISSION_PATH = get_test_instrument_team_data_path(
     "swapi/imap_swapi_azimuthal-transmission_20260425_v001.csv"
 )
@@ -639,16 +657,21 @@ class TestOptimize(unittest.TestCase):
         )
 
     def test_recovers_density(self):
-        np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.05)
+        np.testing.assert_allclose(
+            _nom(self._run().density), self.true_density, rtol=0.05
+        )
 
     def test_recovers_temperature(self):
         np.testing.assert_allclose(
-            self._run().temperature, self.true_temperature, rtol=0.1
+            _nom(self._run().temperature), self.true_temperature, rtol=0.1
         )
 
     def test_recovers_bulk_velocity(self):
         np.testing.assert_allclose(
-            self._run().bulk_velocity_rtn, self.true_velocity, rtol=0.05, atol=1.0
+            self._run().bulk_velocity_rtn_nominal(),
+            self.true_velocity,
+            rtol=0.05,
+            atol=1.0,
         )
 
     def test_success_flag_on_good_fit(self):
@@ -656,8 +679,8 @@ class TestOptimize(unittest.TestCase):
 
     def test_density_and_temperature_positive(self):
         result = self._run()
-        self.assertGreater(result.density, 0)
-        self.assertGreater(result.temperature, 0)
+        self.assertGreater(_nom(result.density), 0)
+        self.assertGreater(_nom(result.temperature), 0)
 
 
 class TestUncertainties(unittest.TestCase):
@@ -714,15 +737,15 @@ class TestUncertainties(unittest.TestCase):
         )
 
     def test_density_sigma_is_finite_and_positive(self):
-        self.assertTrue(np.isfinite(self.result.density_sigma))
-        self.assertGreater(self.result.density_sigma, 0.0)
+        self.assertTrue(np.isfinite(self.result.density.std_dev))
+        self.assertGreater(self.result.density.std_dev, 0.0)
 
     def test_temperature_sigma_is_finite_and_positive(self):
-        self.assertTrue(np.isfinite(self.result.temperature_sigma))
-        self.assertGreater(self.result.temperature_sigma, 0.0)
+        self.assertTrue(np.isfinite(self.result.temperature.std_dev))
+        self.assertGreater(self.result.temperature.std_dev, 0.0)
 
     def test_velocity_covariance_is_symmetric_positive_semidefinite(self):
-        cov = self.result.velocity_covariance
+        cov = self.result.bulk_velocity_rtn_covariance()
         self.assertEqual(cov.shape, (3, 3))
         np.testing.assert_allclose(cov, cov.T, atol=1e-10)
         eigenvalues = np.linalg.eigvalsh(cov)
@@ -732,13 +755,13 @@ class TestUncertainties(unittest.TestCase):
 
     def test_density_sigma_smaller_than_density(self):
         # Fractional uncertainty on density should be less than 100%
-        self.assertLess(self.result.density_sigma / self.result.density, 1.0)
+        self.assertLess(self.result.density.std_dev / self.result.density, 1.0)
 
     def test_temperature_sigma_smaller_than_temperature(self):
-        self.assertLess(self.result.temperature_sigma / self.result.temperature, 1.0)
+        self.assertLess(self.result.temperature.std_dev / self.result.temperature, 1.0)
 
     def test_velocity_diagonal_sigmas_finite_and_positive(self):
-        cov = self.result.velocity_covariance
+        cov = self.result.bulk_velocity_rtn_covariance()
         for i in range(3):
             self.assertGreater(cov[i, i], 0.0, f"cov[{i},{i}] not positive")
             self.assertTrue(np.isfinite(cov[i, i]))
@@ -778,16 +801,18 @@ class TestUncertainties(unittest.TestCase):
 
         r5 = run_with_n_sweeps(5)
         r10 = run_with_n_sweeps(10)
-        self.assertLess(r10.density_sigma, r5.density_sigma)
-        self.assertLess(r10.temperature_sigma, r5.temperature_sigma)
+        self.assertLess(r10.density.std_dev, r5.density.std_dev)
+        self.assertLess(r10.temperature.std_dev, r5.temperature.std_dev)
 
     def test_speed_uncertainty_via_propagation(self):
         """sigma_speed from covariance matches finite-difference estimate."""
         result = self.result
-        vr, vt, vn = result.bulk_velocity_rtn
-        speed = float(np.linalg.norm(result.bulk_velocity_rtn))
-        v_hat = np.array([vr, vt, vn]) / speed
-        sigma_speed = float(np.sqrt(v_hat @ result.velocity_covariance @ v_hat))
+        v_nom = result.bulk_velocity_rtn_nominal()
+        speed = float(np.linalg.norm(v_nom))
+        v_hat = v_nom / speed
+        sigma_speed = float(
+            np.sqrt(v_hat @ result.bulk_velocity_rtn_covariance() @ v_hat)
+        )
         self.assertGreater(sigma_speed, 0.0)
         self.assertLess(sigma_speed, speed)  # uncertainty smaller than value
 
@@ -1098,7 +1123,7 @@ class TestIntegrationRealL2Spectrum(unittest.TestCase):
         self.assertEqual(self.result.bad_fit_flag, SwapiL3Flags.NONE)
 
     def test_bulk_speed_reasonable(self):
-        speed = float(np.linalg.norm(self.result.bulk_velocity_rtn))
+        speed = float(np.linalg.norm(self.result.bulk_velocity_rtn_nominal()))
         self.assertGreater(speed, 350.0, "Speed too low")
         self.assertLess(speed, 650.0, "Speed too high")
 
@@ -1112,14 +1137,16 @@ class TestIntegrationRealL2Spectrum(unittest.TestCase):
         self.assertLess(self.result.density, 50.0, "Density too high")
 
     def test_temperature_reasonable(self):
-        self.assertGreater(self.result.temperature, 10_000, "Temperature too low")
-        self.assertLess(self.result.temperature, 1_500_000, "Temperature too high")
+        self.assertGreater(_nom(self.result.temperature), 10_000, "Temperature too low")
+        self.assertLess(
+            _nom(self.result.temperature), 1_500_000, "Temperature too high"
+        )
 
     def test_model_reproduces_observed_count_rates(self):
         model = _model_count_rates(
-            self.result.density,
-            self.result.temperature,
-            self.result.bulk_velocity_rtn,
+            _nom(self.result.density),
+            _nom(self.result.temperature),
+            self.result.bulk_velocity_rtn_nominal(),
             self.grids,
             self.cs,
             self.cea,
@@ -1135,12 +1162,12 @@ class TestIntegrationRealL2Spectrum(unittest.TestCase):
         self.assertLess(float(np.mean(rel_err)), 1.0, "Mean relative error > 100%")
 
     def test_uncertainties_are_finite_for_real_data(self):
-        self.assertTrue(np.isfinite(self.result.density_sigma))
-        self.assertTrue(np.isfinite(self.result.temperature_sigma))
-        self.assertIsNotNone(self.result.velocity_covariance)
-        self.assertTrue(np.all(np.isfinite(self.result.velocity_covariance)))
-        self.assertGreater(self.result.density_sigma, 0.0)
-        self.assertGreater(self.result.temperature_sigma, 0.0)
+        self.assertTrue(np.isfinite(self.result.density.std_dev))
+        self.assertTrue(np.isfinite(self.result.temperature.std_dev))
+        self.assertIsNotNone(self.result.bulk_velocity_rtn_covariance())
+        self.assertTrue(np.all(np.isfinite(self.result.bulk_velocity_rtn_covariance())))
+        self.assertGreater(self.result.density.std_dev, 0.0)
+        self.assertGreater(self.result.temperature.std_dev, 0.0)
 
 
 class TestFitSolarWindProtonMoments(unittest.TestCase):
@@ -1178,9 +1205,9 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
         result = self.fit(count_rate, voltages, sr, 1.0, rot)
 
         self.assertIsInstance(result, ProtonSolarWindMoments)
-        self.assertGreater(result.density, 0)
-        self.assertGreater(result.temperature, 0)
-        speed = float(np.linalg.norm(result.bulk_velocity_rtn))
+        self.assertGreater(_nom(result.density), 0)
+        self.assertGreater(_nom(result.temperature), 0)
+        speed = float(np.linalg.norm(result.bulk_velocity_rtn_nominal()))
         self.assertGreater(speed, 300.0)
         self.assertLess(speed, 700.0)
 
@@ -1217,13 +1244,15 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
         baseline = self.fit(count_rate, voltages, sr, 1.0, rot)
         with_perturb = self.fit(perturbed, voltages, sr, 1.0, rot)
 
-        np.testing.assert_allclose(with_perturb.density, baseline.density, rtol=1e-3)
         np.testing.assert_allclose(
-            with_perturb.temperature, baseline.temperature, rtol=1e-3
+            _nom(with_perturb.density), _nom(baseline.density), rtol=1e-3
         )
         np.testing.assert_allclose(
-            with_perturb.bulk_velocity_rtn,
-            baseline.bulk_velocity_rtn,
+            _nom(with_perturb.temperature), _nom(baseline.temperature), rtol=1e-3
+        )
+        np.testing.assert_allclose(
+            with_perturb.bulk_velocity_rtn_nominal(),
+            baseline.bulk_velocity_rtn_nominal(),
             rtol=1e-3,
             atol=1e-2,
         )
@@ -1308,12 +1337,12 @@ class TestPoissonUncertaintyCoverage(unittest.TestCase):
         cls.velocities = np.array(
             [r.bulk_velocity_rtn for r in results]
         )  # shape (N, 3)
-        cls.mean_density_sigma = float(np.mean([r.density_sigma for r in results]))
+        cls.mean_density_sigma = float(np.mean([r.density.std_dev for r in results]))
         cls.mean_temperature_sigma = float(
-            np.mean([r.temperature_sigma for r in results])
+            np.mean([r.temperature.std_dev for r in results])
         )
         cls.mean_velocity_cov = np.mean(
-            [r.velocity_covariance for r in results], axis=0
+            [r.bulk_velocity_rtn_covariance() for r in results], axis=0
         )
 
     def test_density_sigma_matches_empirical_std(self):
@@ -1398,12 +1427,12 @@ class TestLogNormalUncertaintyCoverage(unittest.TestCase):
         cls.densities = np.array([r.density for r in results])
         cls.temperatures = np.array([r.temperature for r in results])
         cls.velocities = np.array([r.bulk_velocity_rtn for r in results])
-        cls.mean_density_sigma = float(np.mean([r.density_sigma for r in results]))
+        cls.mean_density_sigma = float(np.mean([r.density.std_dev for r in results]))
         cls.mean_temperature_sigma = float(
-            np.mean([r.temperature_sigma for r in results])
+            np.mean([r.temperature.std_dev for r in results])
         )
         cls.mean_velocity_cov = np.mean(
-            [r.velocity_covariance for r in results], axis=0
+            [r.bulk_velocity_rtn_covariance() for r in results], axis=0
         )
 
     def test_density_sigma_matches_empirical_std(self):
@@ -1464,7 +1493,9 @@ class TestGetInitialGuessCurveFitFailure(unittest.TestCase):
             result.bulk_velocity_rtn[0], expected_speed, rtol=0.01
         )
         # Fallback sigma_v = 50 km/s → T = m_p * (50e3)^2 / k_B ≈ 302,778 K (≈ 26.1 eV)
-        np.testing.assert_allclose(result.temperature, 26.1 * EV_TO_KELVIN, rtol=0.01)
+        np.testing.assert_allclose(
+            _nom(result.temperature), 26.1 * EV_TO_KELVIN, rtol=0.01
+        )
 
 
 class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):
@@ -1650,17 +1681,18 @@ class TestColdPlasmaTransverseRecovery(unittest.TestCase):
         return _optimize(cr_noisy, grids, cs, cea, at, ats, rot, ig), true_vel
 
     def _assert_velocity_recovered(self, result, true_vel):
+        v_nom = result.bulk_velocity_rtn_nominal()
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn[1],
+            v_nom[1],
             true_vel[1],
             atol=self._ATOL_KMS,
-            err_msg=f"vT: fit={result.bulk_velocity_rtn[1]:.1f}, true={true_vel[1]:.1f}",
+            err_msg=f"vT: fit={v_nom[1]:.1f}, true={true_vel[1]:.1f}",
         )
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn[2],
+            v_nom[2],
             true_vel[2],
             atol=self._ATOL_KMS,
-            err_msg=f"vN: fit={result.bulk_velocity_rtn[2]:.1f}, true={true_vel[2]:.1f}",
+            err_msg=f"vN: fit={v_nom[2]:.1f}, true={true_vel[2]:.1f}",
         )
 
     def test_cold_plasma_high_vt(self):
@@ -1764,7 +1796,7 @@ class TestWrongBasinFlipCheck(unittest.TestCase):
     def test_correct_basin_from_true_init(self):
         result = self._run(self._make_ig([450.0, -40.0, 35.0]))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+            result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
         )
 
     def test_correct_basin_from_mirror_init(self):
@@ -1774,13 +1806,13 @@ class TestWrongBasinFlipCheck(unittest.TestCase):
         )
         result = self._run(self._make_ig(v_mirror))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+            result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
         )
 
     def test_correct_basin_from_zero_transverse_init(self):
         result = self._run(self._make_ig([450.0, 0.0, 0.0]))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+            result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
         )
 
     def test_both_inits_give_same_result(self):
@@ -1791,10 +1823,16 @@ class TestWrongBasinFlipCheck(unittest.TestCase):
         )
         r_mirror = self._run(self._make_ig(v_mirror))
         np.testing.assert_allclose(
-            r_true.bulk_velocity_rtn, r_mirror.bulk_velocity_rtn, atol=1e-6
+            r_true.bulk_velocity_rtn_nominal(),
+            r_mirror.bulk_velocity_rtn_nominal(),
+            atol=1e-6,
         )
-        np.testing.assert_allclose(r_true.density, r_mirror.density, rtol=1e-6)
-        np.testing.assert_allclose(r_true.temperature, r_mirror.temperature, rtol=1e-6)
+        np.testing.assert_allclose(
+            _nom(r_true.density), _nom(r_mirror.density), rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            _nom(r_true.temperature), _nom(r_mirror.temperature), rtol=1e-6
+        )
 
 
 if __name__ == "__main__":

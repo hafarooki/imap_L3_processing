@@ -1,100 +1,143 @@
+"""Tests for `SwapiL3BDependencies`.
+
+Replaces the previous "mock everything" tests with real fixture loads:
+`from_file_paths` is invoked with real file paths and `fetch_dependencies` is
+exercised through `mock_imap_data_access` so the returned dependency objects
+are *used*, not just checked for type.
+"""
+
+import shutil
+import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch, call, sentinel
 
-import imap_data_access
-from imap_data_access.processing_input import ScienceInput, ProcessingInputCollection, AncillaryInput
+import numpy as np
+from imap_data_access.processing_input import (
+    AncillaryInput,
+    ProcessingInputCollection,
+    ScienceInput,
+)
+from spacepy.pycdf import lib as pycdf_lib
 
-from imap_l3_processing.swapi.descriptors import SWAPI_L2_DESCRIPTOR, GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR, \
-    EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR
+from imap_l3_processing.swapi.descriptors import (
+    EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR,
+    GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR,
+    SWAPI_L2_DESCRIPTOR,
+)
+from imap_l3_processing.swapi.l3a.models import SwapiL2Data
+from imap_l3_processing.swapi.l3b.science.efficiency_calibration_table import (
+    EfficiencyCalibrationTable,
+)
+from imap_l3_processing.swapi.l3b.science.geometric_factor_calibration_table import (
+    GeometricFactorCalibrationTable,
+)
 from imap_l3_processing.swapi.l3b.swapi_l3b_dependencies import SwapiL3BDependencies
+from tests.integration.integration_test_helpers import mock_imap_data_access
+from tests.test_helpers import get_test_data_path
 
 
-class TestSwapiL3BDependencies(unittest.TestCase):
-    def setUp(self) -> None:
-        self.mock_imap_patcher = patch('imap_l3_processing.utils.imap_data_access')
-        self.mock_imap_api = self.mock_imap_patcher.start()
+_L2_SCIENCE = get_test_data_path("swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf")
+_GEOMETRIC_FACTOR_SW = get_test_data_path(
+    "swapi/imap_swapi_energy-gf-sw-lut_20100101_v001.csv"
+)
+_EFFICIENCY = get_test_data_path("swapi/imap_swapi_efficiency-lut_20241020_v000.dat")
 
-    def tearDown(self) -> None:
-        self.mock_imap_patcher.stop()
+_STAGE_DIR = Path(tempfile.gettempdir()) / "claude" / "swapi_l3b_dep_test_staging"
 
-    @patch(
-        "imap_l3_processing.swapi.l3b.swapi_l3b_dependencies.SwapiL3BDependencies.from_file_paths")
-    @patch(
-        "imap_l3_processing.swapi.l3b.swapi_l3b_dependencies.download")
-    def test_fetch_dependencies(self, mock_download, mock_from_file_paths):
-        incoming_data_level = 'l2'
-        version = 'v002'
-        start_date = datetime(2025, 1, 1).strftime("%Y%m%d")
 
-        science_file_path = f'imap_swapi_{incoming_data_level}_{SWAPI_L2_DESCRIPTOR}_{start_date}_{version}.cdf'
-        geometric_calibration_path = f'imap_swapi_{GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR}_{start_date}_{version}.cdf'
-        efficiency_table_path = f'imap_swapi_{EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR}_{start_date}_{version}.cdf'
+def _stage_under_name(source: Path, dest_name: str) -> Path:
+    _STAGE_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _STAGE_DIR / dest_name
+    if not dest.exists() or dest.stat().st_mtime < source.stat().st_mtime:
+        shutil.copy(source, dest)
+    return dest
 
-        science_input = ScienceInput(science_file_path)
-        geometric_calibration_input = AncillaryInput(geometric_calibration_path)
-        efficiency_table_input = AncillaryInput(efficiency_table_path)
-        dependencies = ProcessingInputCollection(science_input, geometric_calibration_input, efficiency_table_input)
 
-        actual_swapi_l3b_dependencies = SwapiL3BDependencies.fetch_dependencies(dependencies)
-
-        sci_data_dir = imap_data_access.config["DATA_DIR"] / 'imap' / 'swapi' / 'l2' / '2025' / '01'
-        ancillary_data_dir = imap_data_access.config["DATA_DIR"] / 'imap' / 'ancillary' / 'swapi'
-
-        expected_download_science_path = sci_data_dir / science_file_path
-        expected_geometric_calibration_path = ancillary_data_dir / geometric_calibration_path
-        expected_efficiency_table_path = ancillary_data_dir / efficiency_table_path
-
-        mock_download.assert_has_calls([
-            call(expected_download_science_path),
-            call(expected_geometric_calibration_path),
-            call(expected_efficiency_table_path),
-        ])
-
-        mock_from_file_paths.assert_called_with(
-            expected_download_science_path,
-            expected_geometric_calibration_path,
-            expected_efficiency_table_path,
+class TestFromFilePaths(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.deps = SwapiL3BDependencies.from_file_paths(
+            _L2_SCIENCE, _GEOMETRIC_FACTOR_SW, _EFFICIENCY
         )
 
-        self.assertEqual(mock_from_file_paths.return_value, actual_swapi_l3b_dependencies)
+    def test_l2_data_is_loaded(self):
+        self.assertIsInstance(self.deps.data, SwapiL2Data)
+        self.assertEqual(self.deps.data.energy.shape[1], 72)
 
-    @patch('imap_l3_processing.swapi.l3b.swapi_l3b_dependencies.CDF')
-    @patch('imap_l3_processing.swapi.l3b.swapi_l3b_dependencies.EfficiencyCalibrationTable')
-    @patch('imap_l3_processing.swapi.l3b.swapi_l3b_dependencies.GeometricFactorCalibrationTable.from_file')
-    @patch('imap_l3_processing.swapi.l3b.swapi_l3b_dependencies.read_l2_swapi_data')
-    def test_from_file_paths(self, mock_read_l2_swapi, mock_read_geometric_factor, mock_efficiency_calibration,
-                             mock_cdf):
-        start_date = '20100105'
-        mission = 'imap'
-        instrument = 'swapi'
-        data_level = 'l2'
-        version = 'v010'
+    def test_geometric_factor_table_is_loaded_and_interpolates(self):
+        self.assertIsInstance(
+            self.deps.geometric_factor_calibration_table,
+            GeometricFactorCalibrationTable,
+        )
+        gf = self.deps.geometric_factor_calibration_table.lookup_geometric_factor(
+            np.array([1000.0, 8000.0])
+        )
+        self.assertTrue(np.all(np.isfinite(gf)))
+        self.assertTrue(np.all(gf > 0))
 
-        swapi_science_file_download_path = Path(f"{mission}_{instrument}_{data_level}_{SWAPI_L2_DESCRIPTOR}_{start_date}_{version}.cdf")
-        swapi_geometric_factor_calibration_file_path = Path(f"{mission}_{instrument}_{GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR}_{start_date}_{version}.cdf")
-        swapi_efficiency_calibration_file_path = Path(f"{mission}_{instrument}_{EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR}_{start_date}_{version}.cdf")
+    def test_efficiency_table_returns_real_value_for_valid_epoch(self):
+        self.assertIsInstance(
+            self.deps.efficiency_calibration_table, EfficiencyCalibrationTable
+        )
+        epoch = pycdf_lib.datetime_to_tt2000(datetime(2024, 11, 1))
+        result = self.deps.efficiency_calibration_table.get_proton_efficiency_for(epoch)
+        self.assertTrue(np.isfinite(result))
+        self.assertGreater(result, 0.0)
 
-        mock_read_l2_swapi.return_value = sentinel.swapi_l2_data
-        mock_read_geometric_factor.return_value = sentinel.geometric_factor_data
-        mock_efficiency_calibration.return_value = sentinel.efficiency_calibration_data
 
-        expected_dependencies = SwapiL3BDependencies(sentinel.swapi_l2_data,
-                                                     sentinel.geometric_factor_data,
-                                                     sentinel.efficiency_calibration_data,
-                                                     )
-
-        actual_dependencies = SwapiL3BDependencies.from_file_paths(
-            swapi_science_file_download_path,
-            swapi_geometric_factor_calibration_file_path,
-            swapi_efficiency_calibration_file_path
+class TestFetchDependenciesEndToEnd(unittest.TestCase):
+    def test_fetch_dependencies_returns_usable_dependencies(self):
+        start_date = "20100105"
+        version = "v010"
+        staged_files = [
+            _stage_under_name(
+                _L2_SCIENCE, f"imap_swapi_l2_sci_{start_date}_{version}.cdf"
+            ),
+            _stage_under_name(
+                _GEOMETRIC_FACTOR_SW,
+                f"imap_swapi_energy-gf-sw-lut_{start_date}_{version}.csv",
+            ),
+            _stage_under_name(
+                _EFFICIENCY,
+                f"imap_swapi_efficiency-lut_{start_date}_{version}.dat",
+            ),
+        ]
+        collection = ProcessingInputCollection(
+            ScienceInput(
+                f"imap_swapi_l2_{SWAPI_L2_DESCRIPTOR}_{start_date}_{version}.cdf"
+            ),
+            AncillaryInput(
+                f"imap_swapi_{GEOMETRIC_FACTOR_SW_LOOKUP_TABLE_DESCRIPTOR}_{start_date}_{version}.csv"
+            ),
+            AncillaryInput(
+                f"imap_swapi_{EFFICIENCY_LOOKUP_TABLE_DESCRIPTOR}_{start_date}_{version}.dat"
+            ),
         )
 
-        mock_read_l2_swapi.assert_called_once_with(mock_cdf.return_value)
-        mock_read_geometric_factor.assert_called_once_with(swapi_geometric_factor_calibration_file_path)
-        mock_efficiency_calibration.assert_called_once_with(swapi_efficiency_calibration_file_path)
+        with tempfile.TemporaryDirectory() as data_dir:
+            with mock_imap_data_access(Path(data_dir), staged_files):
+                deps = SwapiL3BDependencies.fetch_dependencies(collection)
 
-        mock_cdf.assert_called_once_with(str(swapi_science_file_download_path))
+        self.assertIsInstance(deps.data, SwapiL2Data)
+        self.assertIsInstance(
+            deps.geometric_factor_calibration_table, GeometricFactorCalibrationTable
+        )
+        self.assertIsInstance(
+            deps.efficiency_calibration_table, EfficiencyCalibrationTable
+        )
+        # Lookup tables must be functional.
+        epoch = pycdf_lib.datetime_to_tt2000(datetime(2024, 11, 1))
+        self.assertGreater(
+            deps.efficiency_calibration_table.get_proton_efficiency_for(epoch), 0
+        )
+        self.assertGreater(
+            deps.geometric_factor_calibration_table.lookup_geometric_factor(
+                np.array([1000.0])
+            )[0],
+            0,
+        )
 
-        self.assertEqual(expected_dependencies, actual_dependencies)
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
 import numpy as np
-from uncertainties.unumpy import uarray
+from uncertainties.unumpy import nominal_values, std_devs, uarray
 
 from imap_l3_processing.constants import (
     THIRTY_SECONDS_IN_NANOSECONDS,
@@ -369,3 +369,45 @@ class TestModels(CdfModelTestCase):
         self.assert_variable_attributes(
             variables[14], expected_quality_flags, SWAPI_QUALITY_FLAGS_CDF_VAR_NAME
         )
+
+    def test_pui_nominal_and_std_extraction_does_not_swap_fields(self):
+        # Regression: catches the bug pattern where `to_data_product_variables`
+        # swaps `nominal_values(field)` and `std_devs(field)` for any uarray-backed
+        # field. We pin uniquely-valued nominal/std arrays and verify each variable
+        # carries the correct half.
+        n = 6
+        cooling = uarray(np.linspace(1.0, 6.0, n), np.linspace(10.0, 60.0, n))
+        ionization = uarray(np.linspace(100.0, 600.0, n), np.linspace(1.0, 6.0, n))
+        cutoff = uarray(np.linspace(50_000.0, 55_000.0, n), np.linspace(0.5, 5.0, n))
+        background = uarray(np.linspace(0.1, 0.6, n), np.linspace(0.01, 0.06, n))
+        density = uarray(np.linspace(1e-3, 6e-3, n), np.linspace(1e-4, 6e-4, n))
+        temperature = uarray(np.linspace(1e5, 6e5, n), np.linspace(1e3, 6e3, n))
+        flags = np.zeros(n, dtype=int)
+
+        data = SwapiL3PickupIonData(
+            Mock(),
+            np.arange(n),
+            cooling,
+            ionization,
+            cutoff,
+            background,
+            density,
+            temperature,
+            flags,
+        )
+
+        # Build {var_name: data} map for ergonomic lookups.
+        produced = {v.name: v.value for v in data.to_data_product_variables()}
+
+        for prefix, ufield in [
+            (PUI_COOLING_INDEX_CDF_VAR_NAME, cooling),
+            (PUI_IONIZATION_RATE_CDF_VAR_NAME, ionization),
+            (PUI_CUTOFF_SPEED_CDF_VAR_NAME, cutoff),
+            (PUI_BACKGROUND_COUNT_RATE_CDF_VAR_NAME, background),
+            (PUI_DENSITY_CDF_VAR_NAME, density),
+            (PUI_TEMPERATURE_CDF_VAR_NAME, temperature),
+        ]:
+            uncert_name = prefix + "_uncert"
+            with self.subTest(field=prefix):
+                np.testing.assert_array_equal(produced[prefix], nominal_values(ufield))
+                np.testing.assert_array_equal(produced[uncert_name], std_devs(ufield))

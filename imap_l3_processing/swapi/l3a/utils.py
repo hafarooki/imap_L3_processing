@@ -7,7 +7,10 @@ from spacepy import pycdf
 from spacepy.pycdf import CDF
 
 from imap_l3_processing.cdf.cdf_utils import read_numeric_variable
-from imap_l3_processing.constants import THIRTY_SECONDS_IN_NANOSECONDS
+from imap_l3_processing.constants import (
+    ONE_SECOND_IN_NANOSECONDS,
+    THIRTY_SECONDS_IN_NANOSECONDS,
+)
 from imap_l3_processing.models import MagL1dData
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_processing.spice.geometry import (
