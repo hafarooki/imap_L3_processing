@@ -290,32 +290,20 @@ Not accounting for this would result in an overestimate of the model count rate 
 
 #### Parameter uncertainties
 
-The Jacobian $J$ of the residuals $r_i$ with respect to $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ at the solution is returned by the optimizer. The covariance matrix in parameter space is estimated as
+The optimizer returns the Jacobian $J$ of the residuals with respect to $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ at the solution. The parameter covariance is
 $$\Sigma_x = s^2\,(J^\top J)^+, \qquad s^2 = \frac{\sum_i r_i^2}{N - p},$$
-where ${}^+$ denotes the Moore–Penrose pseudoinverse, $N$ is the number of residuals, and $p$ is the number of fitted parameters. Since the residuals are unweighted, the variance $s^2$ estimated from the residuals themselves captures both measurement noise and model error — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`. Uncertainty in $n$ and $T$ follows directly:
+where ${}^+$ is the Moore–Penrose pseudoinverse. Residuals are unweighted, so the $s^2$ scaling absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, intra-window variability) — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`. The directly fitted scalars get
 $$\sigma_n = n\,\sqrt{\Sigma_{x,00}}, \qquad \sigma_T = T\,\sqrt{\Sigma_{x,11}}.$$
 
-**Speed, clock angle, and deflection angle** are computed in the IMAP DPS (despun spacecraft) frame rather than RTN so that the angles reflect the plasma flow direction relative to the spacecraft attitude. Let $R_\text{RTN\to DPS}$ be the SPICE `IMAP_RTN → IMAP_DPS` rotation at the chunk center epoch, and let
-$$\mathbf{u} = R_\text{RTN\to DPS}\,\mathbf{v}_b^\text{SC}, \qquad u_{xy} = \sqrt{u_0^2 + u_1^2}.$$
-The derived quantities and their angle definitions are:
-$$|\mathbf{v}| = |\mathbf{u}|, \qquad \phi_c = \arctan2(u_1,\, u_0) \bmod 360°, \qquad \phi_d = \arccos\!\left(\frac{-u_2}{|\mathbf{u}|}\right).$$
+The fitted velocity $\mathbf{v}_b^\text{SC}$ (RTN) is built as a 3-tuple of correlated `uncertainties.UFloat` components carrying $\Sigma_v = \Sigma_x[2{:}5,\,2{:}5]$. `derive_velocity_angles` rotates this tuple into the IMAP DPS (despun spacecraft) frame so the angles describe plasma flow relative to the spacecraft attitude:
+$$\mathbf{u} = R_\text{RTN\to DPS}\,\mathbf{v}_b^\text{SC}, \qquad |\mathbf{v}| = |\mathbf{u}|, \quad \phi_c = \arctan2(u_1,\, u_0) \bmod 360°, \quad \phi_d = \arccos\!\left(-u_2/|\mathbf{u}|\right).$$
+The rotation is a linear map applied with `numpy` to the object-dtype UFloat array, so correlations propagate automatically; the DPS covariance is recovered with `uncertainties.covariance_matrix` and equals $R\,\Sigma_v\,R^\top$.
 
-The velocity covariance is rotated into DPS:
-$$\Sigma_\text{DPS} = R_\text{RTN\to DPS}\,\Sigma_v\,R_\text{RTN\to DPS}^\top, \qquad \Sigma_v = \Sigma_x[2\!:\!5,\,2\!:\!5].$$
+**Speed σ** is propagated through `umath.sqrt(sum(x**2 for x in u_unc))` — the `uncertainties` package's automatic delta method. The linearization is essentially exact whenever $|\mathbf{u}| \gg \sigma$, which is always true for SWAPI bulk speeds vs. fitted scatter, so MC would only add sampling noise.
 
-**Speed σ** uses first-order Gaussian propagation:
-$$\sigma_{|\mathbf{v}|} = \sqrt{\mathbf{g}_s^\top \Sigma_\text{DPS}\, \mathbf{g}_s}, \quad \mathbf{g}_s = \frac{\mathbf{u}}{|\mathbf{u}|}.$$
-The linearization is essentially exact whenever $|\mathbf{u}| \gg \sigma$ (always true for SWAPI's bulk speeds vs. the fitted scatter), so MC would only add sampling noise.
-
-**Clock and deflection angle σ** are propagated by Monte Carlo. The angle gradients,
-$$\mathbf{g}_c = \frac{1}{u_{xy}^2}\begin{pmatrix}-u_1\\u_0\\0\end{pmatrix}, \qquad \mathbf{g}_d = \frac{1}{|\mathbf{u}|^2}\begin{pmatrix}-u_0 u_2 / u_{xy}\\-u_1 u_2 / u_{xy}\\u_{xy}\end{pmatrix},$$
-diverge as $u_{xy} \to 0$. For the typical SWAPI regime — bulk velocity dominated by the spin-axis component, so $u_{xy} \sim \sigma_{xy}$ — the first-order Taylor expansion blows up and underestimates the true σ by tens of percent (verified empirically in `scripts/swapi/compare_angle_propagation.py`: cold-aligned plasma has +49% bias on σ$_{\phi_c}$ and +46% on σ$_{\phi_d}$ vs. ground truth, with σ$_{\phi_c}$ exceeding the uniform-distribution bound of $\approx 104°$). Instead, we draw `N_VELOCITY_ANGLE_MC_SAMPLES = 1000` samples
-$$\mathbf{u}_i \sim \mathcal{N}(\mathbf{u},\, \Sigma_\text{DPS}), \qquad i = 1, \dots, N,$$
-recompute $(\phi_c^{(i)}, \phi_d^{(i)})$ per sample, and take the sample standard deviations. Clock-angle σ uses residuals wrapped to $(-180°, 180°]$ relative to the nominal $\phi_c$ so the $0°/360°$ branch cut doesn't artificially inflate the spread:
-$$\Delta\phi_c^{(i)} = ((\phi_c^{(i)} - \phi_c + 180°) \bmod 360°) - 180°, \qquad \sigma_{\phi_c} = \mathrm{std}(\Delta\phi_c).$$
-Deflection σ is the plain sample std (range $[0°, 180°]$, no branch cut). At $N = 1000$ the residual sampling noise on σ is ${\sim}3\text{--}5\%$, far smaller than the bias being corrected. The RNG is seeded per-call (`np.random.default_rng(0)`) for deterministic outputs.
-
-These uncertainties reflect the actual residual scatter through the $s^2$ scaling on $\Sigma_x$ (covariance of all five fitted parameters before slicing out $\Sigma_v$), which absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, temporal variability within the fit window).
+**Clock and deflection angle σ** are propagated by Monte Carlo. The arctan2 and arccos gradients scale as $1/u_{xy}^2$ and $1/(|\mathbf{u}|^2\,u_{xy})$ and diverge as $u_{xy} \to 0$, where $u_{xy} = \sqrt{u_0^2 + u_1^2}$. SWAPI's bulk velocity is dominated by the spin-axis component, so $u_{xy} \sim \sigma_{xy}$ and the delta method underestimates σ by tens of percent in the typical regime (see `scripts/swapi/compare_angle_propagation.py`: cold spin-aligned plasma shows +49% bias on $\sigma_{\phi_c}$ and +46% on $\sigma_{\phi_d}$, with $\sigma_{\phi_c}$ exceeding the uniform-distribution bound of $\approx 104°$). Instead, we draw `N_VELOCITY_ANGLE_MC_SAMPLES = 1000` samples
+$$\mathbf{u}_i \sim \mathcal{N}(\mathbf{u},\, \Sigma_\text{DPS}),$$
+recompute $(\phi_c^{(i)}, \phi_d^{(i)})$ per sample, and take the sample standard deviation. Clock-angle σ uses residuals wrapped to $(-180°,\, 180°]$ relative to the nominal $\phi_c$ so the $0°/360°$ branch cut doesn't inflate the spread; deflection σ is the plain sample std (with the arccos argument clipped to $[-1,\,1]$ to absorb numerical overshoots from samples just outside the unit-direction shell). The RNG is seeded per call (`np.random.default_rng(0)`) so outputs are deterministic.
 
 When $\Sigma_\text{DPS}$ is non-finite (failed fit), all three σ are NaN.
 
