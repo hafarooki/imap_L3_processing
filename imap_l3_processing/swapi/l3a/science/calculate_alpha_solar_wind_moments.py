@@ -321,21 +321,30 @@ def fit_solar_wind_alpha_moments(
     n_initial = float(np.exp(result.x[0]))
     while len(current_window) > 5:
         T_now = float(np.exp(result.x[1]))
+        n_now = float(np.exp(result.x[0]))
         chi2_now = float(np.sum(result.fun**2))
         per_bin_now = chi2_now / max(n_data, 1)
-        # When the current fit is unphysical (T_α/T_p > 20 — beyond the
-        # user-stated 19× upper limit), relax the per-bin SSE gate:
-        # trims that restore T to a physical value can have *higher*
-        # per-bin SSE than the runaway-T fit when the residual has
-        # wider-than-Maxwellian tails (the runaway fit captures those
-        # tails better in absolute SSE, even though the small-window
-        # physical fit is the right answer). Cap the relaxation at 2×
-        # per-bin SSE so we don't accept clearly worse candidates.
+        # When the current fit is in the runaway-T basin (T_α > 20·T_p,
+        # beyond the user-stated 19× upper limit) — relax the per-bin
+        # SSE gate. Trims that escape the runaway basin can have *higher*
+        # per-bin SSE than the runaway fit when the residual has
+        # wider-than-Maxwellian tails. Cap the relaxation at 2× per-bin
+        # SSE so we don't accept clearly worse candidates.
         unphysical_now = T_now > 20.0 * proton_T
         chi2_gate = (2.0 * per_bin_now) if unphysical_now else per_bin_now
 
         candidates = []
-        for trim_lo, trim_hi in ((1, 0), (0, 1), (1, 1)):
+        # The (2,0)/(3,0) trim options exist for PUI He+ shelf escape:
+        # cases like ci=313 have a wide-Maxwellian basin where neither
+        # (1,0) nor (1,1) drop T enough to trigger the basin-transition
+        # bypass below — the high-V PUI tail is 2+ bins deep, and one
+        # bin trim leaves enough PUI bias to keep LM in the wide basin.
+        # The bypass requires both T_t < 0.7·T_now and n_t ≥ n_now, so
+        # multi-bin high-V trims are only accepted when they cross into
+        # a clearly narrower-and-denser alpha-core basin.
+        for trim_lo, trim_hi in (
+            (1, 0), (0, 1), (1, 1), (2, 0), (3, 0), (4, 0)
+        ):
             if len(current_window) - trim_lo - trim_hi < 5:
                 continue
             new_window = current_window[trim_lo : len(current_window) - trim_hi]
@@ -363,7 +372,18 @@ def fit_solar_wind_alpha_moments(
             # whose per-bin SSE is genuinely lower. The unphysical
             # regime has n_now ≈ 0 so this ratio is meaningless — skip.
             n_ok = unphysical_now or n_t_density >= 0.5 * n_initial
-            if per_bin_t < chi2_gate and T_ok and n_ok:
+            # Basin-transition bypass: when a trim drops T by >30% AND
+            # keeps n at-or-above the current fit's n, the candidate has
+            # crossed from the wide-Maxwellian basin (which fits the
+            # PUI He+ shelf as alpha tail) into the narrow-alpha-core
+            # basin. The new basin's per-bin SSE can be substantially
+            # *higher* than the current fit's because the still-included
+            # high-V bins are PUI shelf the narrow-core model can't
+            # explain. The "n_t ≥ n_now" requirement is the safety gate:
+            # genuinely-wrong basin transitions collapse n alongside T.
+            big_drop_t = (T_t < 0.7 * T_now) and (n_t_density >= n_now)
+            gate_ok = big_drop_t or (per_bin_t < chi2_gate)
+            if gate_ok and T_ok and n_ok:
                 candidates.append(
                     (per_bin_t, T_t, r_t, res_t, n_t, new_window)
                 )
