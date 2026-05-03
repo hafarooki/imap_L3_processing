@@ -73,7 +73,7 @@ $$t_i = t_\text{epoch} + i \cdot \tfrac{12}{72}\,\text{s} = t_\text{epoch} + i \
 The alpha moments depend on the local magnetic field direction because the alpha-proton drift is constrained to lie along $\hat{\mathbf{B}}$.
 The processor reads MAG RTN samples and derives $\hat{\mathbf{B}}^\text{RTN}$ for the alpha fit.
 
-The dependency prefers MAG **L2** and falls back to **L1D** when no L2 file is available, mirroring how SWE selects its MAG dependency. MAG is required for alpha-sw; the processor raises if neither product is provided. When L1D is the source, every alpha-sw chunk in the run has its `PRELIMINARY_MAG` bit set so the product can be flagged for reprocessing once L2 is available. Proton-sw and pui-he do not consume MAG.
+The dependency prefers MAG **L2** and falls back to **L1D** when no L2 file is available. MAG is required for alpha-sw; the processor raises if neither product is provided. When L1D is the source, every alpha-sw chunk in the run has its `PRELIMINARY_MAG` bit set so the product can be flagged for reprocessing once L2 is available. Proton-sw and pui-he do not consume MAG.
 
 For each 5-sweep alpha chunk, the processor uses the full 60 s MAG window $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$.
 The in-window RTN samples are averaged directly, and the mean vector is normalized to produce $\hat{\mathbf{B}}^\text{RTN}$.
