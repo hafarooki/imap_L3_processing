@@ -82,8 +82,9 @@ Other descriptors (proton-sw, pui-he) do not consume MAG.
 For each 5-sweep alpha chunk, the processor uses the full 60 s MAG window $[\,t_\text{center} - 30\text{ s},\; t_\text{center} + 30\text{ s})$.
 The in-window RTN samples are averaged directly, and the mean vector is normalized to produce $\hat{\mathbf{B}}^\text{RTN}$.
 
-If the window is empty, any in-window sample is non-finite, or the averaged field is too small to define a direction, `compute_b_hat_rtn` returns NaNs.
-The alpha fitter treats those NaNs as `BAD_FIT` and emits NaN moments for that chunk — there is no Parker-spiral substitution.
+If the window is empty or any in-window sample is non-finite, `compute_b_hat_rtn` returns NaNs.
+A zero-magnitude average propagates as inf/NaN through the normalization and is caught by the alpha fitter's NaN-finite check on the same path.
+The alpha fitter treats any of those NaNs as `BAD_FIT` and emits NaN moments for that chunk — there is no Parker-spiral substitution.
 
 ## SWAPI Response Model
 
