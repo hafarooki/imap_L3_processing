@@ -281,6 +281,18 @@ def fit_solar_wind_alpha_moments(
     if not result.success:
         bad_fit_flag |= SwapiL3Flags.BAD_FIT
 
+    # LM occasionally finds a degenerate basin where (n_α, T_α) blow up
+    # (often n>>n_p with T>>10⁸ K) when the window is small and the residuals
+    # cancel. Reject obviously unphysical results so downstream consumers see
+    # a clean BAD_FIT NaN rather than a 10⁸-cm⁻³ density.
+    if (
+        not np.isfinite(n_a_fit)
+        or not np.isfinite(T_a_fit)
+        or n_a_fit > 100.0
+        or T_a_fit > 1e8
+    ):
+        return _nan_alpha_moments(bad_fit_flag | SwapiL3Flags.BAD_FIT)
+
     # Covariance in (log n, log T, Δv) space, scaled by reduced chi² (fitting error).
     n_data, n_params = len(result.fun), len(result.x)
     s_sq = float(np.sum(result.fun**2)) / max(n_data - n_params, 1)
@@ -355,7 +367,11 @@ def _alpha_initial_guess(
     if not np.any(residual_peak > 0):
         return None
 
-    T_alpha = proton_temperature
+    # Initial alpha temperature: assume mass-ratio thermal equilibrium with protons
+    # (T_α ≈ 4 T_p ⇒ v_th_α ≈ v_th_p), which sets the alpha bump width that we use
+    # below to define the LM fit window. Using T_α = T_p as before would produce
+    # an alpha model half as wide as reality and drive the window too narrow.
+    T_alpha = 4.0 * proton_temperature
 
     unit_alpha = _model_count_rates(
         1.0,
@@ -375,6 +391,59 @@ def _alpha_initial_guess(
         return None
     n_alpha = float(np.nanmean(residual_peak)) / denom
     n_alpha = max(n_alpha, 1e-3)
+
+    # Refine the LM fit window using the alpha Maxwellian shape itself. The
+    # original window from `get_alpha_peak_indices` extends to a fixed 4×V_p
+    # ceiling, which sweeps in the PUI shelf / non-thermal high-V tail above
+    # the alpha core. Fitting a Maxwellian to that flat shoulder is what
+    # drives the LM toward spuriously high T_α (and correspondingly low n_α).
+    #
+    # Three-step refinement of the upper edge of the LM window. (The lower
+    # edge — the valley between proton and alpha — is preserved as found by
+    # `get_alpha_peak_indices`.) Each step can only shrink the window.
+    #
+    #   (a) Empirical valley above alpha peak. Walk from the alpha-peak bin
+    #       toward higher voltage (lower index, since `energies_per_sweep` is
+    #       decreasing) and stop at the first local minimum of the residual.
+    #       That's the start of the PUI shelf / superthermal tail.
+    #   (b) Kinematic cap at 3 × V_p_peak (≈1.5 × V_α_peak when v_α≈v_p).
+    #       When (a) finds no valley (e.g. weak alpha bump merging into a
+    #       flat PUI plateau), the kinematic cap still excludes the plateau.
+    #       1.5 × V_α_peak corresponds to ≈3.5σ on the voltage Maxwellian
+    #       for T_α≈10 T_p — wide enough for typical alphas, tight enough
+    #       to keep the plateau out. Anchored on V_p_peak (not the
+    #       residual-detected alpha-peak voltage) because for weak-alpha
+    #       chunks the detected peak can be a noise spike and would lead
+    #       the cap astray.
+    #   (c) Shape mask. Drop bins where the unit-density alpha model with
+    #       T_α=4 T_p is below 1% of its peak. Symmetric backstop in case
+    #       the alpha-peak detection finds a noise spike on the wrong side.
+    if len(peak_idx) >= 3:
+        local_peak_pos = int(np.argmax(residual[peak_idx]))
+        alpha_peak_bin = int(peak_idx[local_peak_pos])
+
+        v_p_peak_voltage = float(np.abs(voltage_per_sweep[proton_peak_index]))
+        upper_v_cap = 3.0 * v_p_peak_voltage
+
+        upper_cutoff_bin = int(peak_idx.min())  # current upper end (lowest index)
+        for i in range(alpha_peak_bin - 1, max(int(peak_idx.min()) - 1, 0), -1):
+            if i - 1 < 0 or i + 1 >= len(residual):
+                break
+            if residual[i] < residual[i + 1] and residual[i] < residual[i - 1]:
+                upper_cutoff_bin = i
+                break
+
+        kinematic_mask = np.abs(voltage_per_sweep) <= upper_v_cap
+        peak_idx = peak_idx[
+            (peak_idx >= upper_cutoff_bin) & kinematic_mask[peak_idx]
+        ]
+
+    alpha_max = float(np.nanmax(unit_alpha_per_sweep))
+    if alpha_max > 0 and np.isfinite(alpha_max) and len(peak_idx) >= 3:
+        shape_mask = unit_alpha_per_sweep >= 0.01 * alpha_max
+        refined_idx = peak_idx[shape_mask[peak_idx]]
+        if len(refined_idx) >= 3:
+            peak_idx = refined_idx
 
     return (n_alpha, T_alpha, 0.0, peak_idx)
 
