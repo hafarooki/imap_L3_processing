@@ -14,7 +14,7 @@ because scipy.optimize.least_squares does most of its bookkeeping in pure Python
 and holds the GIL.
 
 Solar wind parameter ranges (seed=7):
-  bulk_speed:   300–800 km/s          (uniform)
+  bulk_speed:   200–2000 km/s         (uniform)
   temperature:  23,000–580,000 K      (log-uniform)
   density:        2–20 cm⁻³          (uniform)
   vT, vN:       −50–50 km/s          (uniform)
@@ -216,7 +216,7 @@ def _process_chunk(idx_range):
 
 def _run_cases(voltages: np.ndarray) -> dict:
     rng = np.random.default_rng(_RNG_SEED)
-    bulk_speeds = rng.uniform(300, 800, _N_SAMPLES)
+    bulk_speeds = rng.uniform(200, 2000, _N_SAMPLES)
     temperatures = np.exp(
         rng.uniform(np.log(2 * EV_TO_KELVIN), np.log(50 * EV_TO_KELVIN), _N_SAMPLES)
     )
