@@ -54,9 +54,6 @@ class SwapiL3ADependencies:
         passband_fit_coefficients_paths = dependencies.get_file_paths(source='swapi', descriptor=PASSBAND_FIT_COEFFICIENTS_DESCRIPTOR)
         # @formatter:on
 
-        # Prefer L2; fall back to L1D. MAG is required for alpha-sw but not for
-        # proton-sw / pui-he, so absence is allowed at the dependency level —
-        # the alpha-sw processor branch validates presence.
         mag_path, mag_level = select_mag_path(dependencies, MAG_RTN_DESCRIPTOR)
         mag_is_preliminary = mag_level == "l1d"
 
