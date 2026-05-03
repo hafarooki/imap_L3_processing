@@ -387,21 +387,33 @@ def fit_solar_wind_alpha_moments(
             # whose per-bin SSE is genuinely lower. The unphysical
             # regime has n_now ≈ 0 so this ratio is meaningless — skip.
             n_ok = unphysical_now or n_t_density >= 0.5 * n_initial
-            # Basin-transition bypass: when a trim drops T by >30% AND
-            # keeps n at-or-above the current fit's n, the candidate has
-            # crossed from the wide-Maxwellian basin (which fits the
-            # PUI He+ shelf as alpha tail) into the narrow-alpha-core
-            # basin. The new basin's per-bin SSE can be substantially
-            # *higher* than the current fit's because the still-included
-            # high-V bins are PUI shelf the narrow-core model can't
-            # explain. The "n_t ≥ n_now" requirement is the safety gate:
-            # genuinely-wrong basin transitions collapse n alongside T.
-            big_drop_t = (T_t < 0.7 * T_now) and (n_t_density >= n_now)
+            # Basin transitions: when a trim drops T by >30%, classify
+            # by whether n keeps up.
+            #   - Right-basin (n_t ≥ n_now): the trim crossed from a
+            #     wide-Maxwellian (PUI- or proton-wing-contaminated)
+            #     basin into the narrow alpha-core basin. Accept; the
+            #     new basin's per-bin SSE may be HIGHER because the
+            #     still-included contamination bins now disagree with
+            #     the narrow core, but n-keeps-up confirms the move is
+            #     toward more alphas.
+            #   - Wrong-basin (n_t < n_now): the trim crossed into a
+            #     narrower-and-emptier basin (PUI-only, or noise). Even
+            #     when per-bin SSE drops, this is the wrong direction
+            #     for the alpha fit. Reject explicitly — without this,
+            #     ci=1413/1419 (cool alpha, T~3·T_p) chunks get pushed
+            #     into low-n basins by single-bin (0,1) trims that
+            #     happen to find a steep chi² descent.
+            T_drops_sharply = T_t < 0.7 * T_now
+            n_keeps_up = n_t_density >= n_now
+            basin_transition = T_drops_sharply and n_keeps_up
+            wrong_basin = T_drops_sharply and not n_keeps_up
             is_bypass_only = (trim_lo, trim_hi) in BYPASS_ONLY_TRIMS
-            if is_bypass_only:
-                gate_ok = big_drop_t
+            if wrong_basin:
+                gate_ok = False
+            elif is_bypass_only:
+                gate_ok = basin_transition
             else:
-                gate_ok = big_drop_t or (per_bin_t < chi2_gate)
+                gate_ok = basin_transition or (per_bin_t < chi2_gate)
             if gate_ok and T_ok and n_ok:
                 candidates.append(
                     (per_bin_t, T_t, r_t, res_t, n_t, new_window)
