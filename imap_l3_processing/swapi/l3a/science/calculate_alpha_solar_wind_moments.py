@@ -6,8 +6,8 @@ performed by the caller and passed in as `proton_moments`. Stage 2 here is a 3-D
 Levenberg–Marquardt over (n_α, T_α, Δv) where v_α = v_p* + Δv * B̂. The combined
 observed model is `deadtime(proton_true + alpha_true)` so deadtime acts on the sum.
 
-If the MAG direction is unavailable for a chunk (NaN or non-unit b_hat), the fit
-returns NaN moments with ``bad_fit_flag |= BAD_FIT`` — there is no Parker-spiral
+If the MAG direction is unavailable for a chunk (NaN b_hat), the fit returns
+NaN moments with ``bad_fit_flag |= BAD_FIT`` — there is no Parker-spiral
 fallback. MAG presence at the file level is enforced upstream in the alpha-sw
 processor branch.
 
@@ -127,8 +127,8 @@ def fit_solar_wind_alpha_moments(
     even for alphas — see `solar-wind-moments.md` § "Alpha Particle Moments").
 
     ``b_hat_rtn`` is the unit MAG direction in RTN for the chunk. If MAG data is
-    unavailable for the chunk (NaN or non-unit magnitude), returns NaN moments
-    with ``bad_fit_flag |= BAD_FIT``. If the reference proton velocity is
+    unavailable for the chunk (NaN), returns NaN moments with
+    ``bad_fit_flag |= BAD_FIT``. If the reference proton velocity is
     non-finite or near-zero, returns NaN moments with ``bad_fit_flag |= BAD_FIT``.
 
     ``rotation_matrices`` may be precomputed and reused from the Stage 1 proton fit;
@@ -141,12 +141,11 @@ def fit_solar_wind_alpha_moments(
     proton_bulk_rtn = proton_moments.bulk_velocity_rtn_nominal()
     bad_fit_flag = SwapiL3Flags.NONE
 
-    # MAG required: per-chunk gaps (NaN b_hat) or non-unit magnitude → BAD_FIT.
+    # MAG required: per-chunk gaps (NaN b_hat) → BAD_FIT.
     # No Parker-spiral substitution; MAG presence at file level is enforced
     # by the alpha-sw processor branch.
     b_hat_rtn = np.asarray(b_hat_rtn, dtype=float)
-    b_norm = np.linalg.norm(b_hat_rtn)
-    if not (np.all(np.isfinite(b_hat_rtn)) and 0.99 < b_norm < 1.01):
+    if not np.all(np.isfinite(b_hat_rtn)):
         return _nan_alpha_moments(SwapiL3Flags.BAD_FIT)
 
     proton_speed = np.linalg.norm(proton_bulk_rtn)

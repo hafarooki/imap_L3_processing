@@ -89,9 +89,9 @@ def compute_b_hat_rtn(
 
     `b_rtn` samples are already in RTN. Samples in
     `[center - delta, center + delta)` are averaged directly and normalized.
-    Returns NaN when no samples fall in the window, the in-window samples
-    include non-finite values, or the averaged |B| is too small to define a
-    direction. The alpha fitter propagates those NaNs into its result."""
+    Returns NaN when no samples fall in the window or the in-window samples
+    include non-finite values. The alpha fitter's downstream unit-norm check
+    rejects any remaining pathological vectors as `BAD_FIT`."""
     start = chunk_epoch_center_tt2000_ns - chunk_epoch_delta_ns
     end = chunk_epoch_center_tt2000_ns + chunk_epoch_delta_ns
     left = np.searchsorted(mag_data.epoch, start, side="left")
@@ -99,10 +99,9 @@ def compute_b_hat_rtn(
     if right == left:
         return np.full(3, np.nan)
     b_rtn_mean = mag_data.mag_data[left:right].mean(axis=0)
-    norm = np.linalg.norm(b_rtn_mean)
-    if not np.all(np.isfinite(b_rtn_mean)) or norm < 1e-12:
+    if not np.all(np.isfinite(b_rtn_mean)):
         return np.full(3, np.nan)
-    return b_rtn_mean / norm
+    return b_rtn_mean / np.linalg.norm(b_rtn_mean)
 
 
 def chunk_l2_data(data: SwapiL2Data, chunk_size: int) -> Iterable[SwapiL2Data]:

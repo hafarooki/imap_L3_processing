@@ -393,7 +393,7 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 ### Quality flags (alpha-specific)
 
 - `STALE_PROTON` (= 32): Stage 1 proton fit failed (proton `bad_fit_flag != NONE`). Stage 2 returns NaN moments without trying.
-- `BAD_FIT` (= 8): reference proton velocity is nonphysical, MAG direction is unavailable for the chunk (NaN or non-unit), peak-finding failed, or optimizer did not converge.
+- `BAD_FIT` (= 8): reference proton velocity is nonphysical, MAG direction is unavailable for the chunk (NaN), peak-finding failed, or optimizer did not converge.
 - `PRELIMINARY_MAG` (= 64): MAG L1D was used as the source for this run (L2 was unavailable). Set on every chunk in the run. The product is a candidate for reprocessing once MAG L2 covers the time range. See issue #13 / #70.
 
 ### Magnetic-field averaging
@@ -404,7 +404,7 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 2. Read the selected `b_rtn` vectors directly in RTN.
 3. Average the selected RTN vectors and normalize the average.
 
-The function returns NaNs when no MAG samples fall in the chunk window, any selected sample is non-finite, or the averaged $|\mathbf{B}|$ is below $10^{-12}$. The alpha fitter treats those NaNs as `BAD_FIT` and emits NaN moments for that chunk.
+The function returns NaNs when no MAG samples fall in the chunk window or any selected sample is non-finite. A zero-magnitude average would propagate as inf/NaN through the normalization and reach the alpha fitter's NaN-finite check via the same path. Either route triggers `BAD_FIT` and emits NaN moments for that chunk.
 
 ### Known limitations
 
