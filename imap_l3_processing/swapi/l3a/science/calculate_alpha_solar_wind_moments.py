@@ -380,13 +380,21 @@ def fit_solar_wind_alpha_moments(
             # actually escaped the runaway-T basin); otherwise just
             # require T_t < T_now. Per-bin gated as above.
             T_ok = (T_t < 20.0 * proton_T) if unphysical_now else (T_t < T_now)
-            # Density-collapse guard: cumulative n_α must stay ≥50% of
-            # the pre-shrink fit's n in the physical regime. Without this
-            # the shrink walks both T and n downward together, since
-            # smaller windows admit narrower-Gaussian smaller-n fits
-            # whose per-bin SSE is genuinely lower. The unphysical
-            # regime has n_now ≈ 0 so this ratio is meaningless — skip.
-            n_ok = unphysical_now or n_t_density >= 0.5 * n_initial
+            # Density-collapse guard: per-step n must stay ≥85% of the
+            # current fit's n, AND cumulative n must stay ≥50% of the
+            # pre-shrink fit's n (physical regime only). Without these
+            # the shrink walks n downward gradually — each step within
+            # the per-bin gate, but cumulatively a 30-50% drop. Examples:
+            # ci=859 (T 8.4→4.5, n 0.06→0.014) under cumulative drift,
+            # ci=1400 (n 0.20→0.13 via 4 steps of 15-25% drops). The
+            # per-step guard catches gradual drift; the cumulative guard
+            # handles edge cases where the per-step drift compounds. The
+            # unphysical regime has n_now ≈ 0 so the ratio is
+            # meaningless — skip both.
+            n_ok = unphysical_now or (
+                n_t_density >= 0.85 * n_now
+                and n_t_density >= 0.5 * n_initial
+            )
             # Basin transitions: when a trim drops T by >30%, classify
             # by whether n keeps up.
             #   - Right-basin (n_t ≥ n_now): the trim crossed from a
