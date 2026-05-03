@@ -100,12 +100,15 @@ class TestSwapiL3ADependencies(unittest.TestCase):
         self.assertEqual(mock_from_file_paths.return_value, actual_swapi_l3_dependencies)
 
     @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.SwapiL3ADependencies.from_file_paths")
+    @patch("imap_l3_processing.utils.download")
     @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.download")
-    def test_fetch_dependencies_uses_mag_l1d_when_only_l1d_present(self, mock_download, mock_from_file_paths):
+    def test_fetch_dependencies_uses_mag_l1d_when_only_l1d_present(self, mock_download, mock_utils_download,
+                                                                   mock_from_file_paths):
         collection = _build_input_collection(
             ScienceInput("imap_mag_l1d_norm-rtn_20100105_v010.cdf"),
         )
         mock_download.side_effect = lambda path: f"downloaded:{path}"
+        mock_utils_download.side_effect = lambda path: f"downloaded:{path}"
 
         SwapiL3ADependencies.fetch_dependencies(collection)
 
@@ -115,13 +118,16 @@ class TestSwapiL3ADependencies(unittest.TestCase):
         self.assertEqual("l1d", mag_level_arg)
 
     @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.SwapiL3ADependencies.from_file_paths")
+    @patch("imap_l3_processing.utils.download")
     @patch("imap_l3_processing.swapi.l3a.swapi_l3a_dependencies.download")
-    def test_fetch_dependencies_prefers_mag_l2_when_both_present(self, mock_download, mock_from_file_paths):
+    def test_fetch_dependencies_prefers_mag_l2_when_both_present(self, mock_download, mock_utils_download,
+                                                                 mock_from_file_paths):
         collection = _build_input_collection(
             ScienceInput("imap_mag_l1d_norm-rtn_20100105_v010.cdf"),
             ScienceInput("imap_mag_l2_norm-rtn_20100105_v010.cdf"),
         )
         mock_download.side_effect = lambda path: f"downloaded:{path}"
+        mock_utils_download.side_effect = lambda path: f"downloaded:{path}"
 
         SwapiL3ADependencies.fetch_dependencies(collection)
 

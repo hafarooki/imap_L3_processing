@@ -18,6 +18,7 @@ from imap_l3_processing.swapi.l3a.science.density_of_neutral_helium_lookup_table
     DensityOfNeutralHeliumLookupTable
 from imap_l3_processing.swapi.l3a.science.inflow_vector import InflowVector
 from imap_l3_processing.swapi.l3a.utils import read_l2_swapi_data, read_mag_rtn_data
+from imap_l3_processing.utils import select_mag_path
 from imap_l3_processing.swapi.l3b.science.efficiency_calibration_table import EfficiencyCalibrationTable
 from imap_l3_processing.swapi.l3b.science.geometric_factor_calibration_table import GeometricFactorCalibrationTable
 from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
@@ -61,7 +62,7 @@ class SwapiL3ADependencies:
         # Prefer L2; fall back to L1D. MAG is required for alpha-sw but not for
         # proton-sw / pui-he, so absence is allowed at the dependency level —
         # the alpha-sw processor branch validates presence.
-        mag_path, mag_level = _select_mag_path(dependencies)
+        mag_path, mag_level = select_mag_path(dependencies, MAG_RTN_DESCRIPTOR)
 
         return cls.from_file_paths(
             download(science_dependency_file[0]),
@@ -102,24 +103,3 @@ class SwapiL3ADependencies:
             mag_data=read_mag_rtn_data(mag_path) if mag_path is not None else None,
             mag_data_level=mag_level,
         )
-
-
-def _select_mag_path(dependencies: ProcessingInputCollection) -> tuple[Optional[Path], Optional[str]]:
-    """Pick a MAG RTN path from the input collection, preferring L2 over L1D.
-
-    Mirrors the SWE pattern (commit afa6ce23): same descriptor name for both
-    levels, disambiguated by `data_type`. Returns (path, level) where level is
-    "l2" or "l1d"; (None, None) if neither is present.
-    """
-    science_files = dependencies.processing_input
-    for level in ("l2", "l1d"):
-        match = next(
-            (d.imap_file_paths[0] for d in science_files
-             if d.source == "mag"
-             and d.descriptor == MAG_RTN_DESCRIPTOR
-             and d.data_type == level),
-            None,
-        )
-        if match is not None:
-            return download(match.construct_path()), level
-    return None, None
