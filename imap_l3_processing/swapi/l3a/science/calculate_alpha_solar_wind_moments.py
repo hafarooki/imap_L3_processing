@@ -226,93 +226,118 @@ def fit_solar_wind_alpha_moments(
 
     n0, T0, dv0, peak_bin_idx = initial_guess
     proton_bulk = proton_bulk_rtn
-    n_sweeps, n_bins = _infer_sweep_layout(esa_voltage)
 
-    def _run_lm(peak_bin_idx_in: ndarray, x0_in: ndarray):
-        """Build window arrays from per-sweep bin indices and run LM (with
-        signed-Δv basin flip). Returns (result, residuals_fn)."""
+    n_sweeps, n_bins = _infer_sweep_layout(esa_voltage)
+    proton_T = proton_moments.temperature.nominal_value
+
+    def _run_lm(window_bin_idx: ndarray, x0_in: ndarray):
+        """Subset all per-measurement arrays to ``window_bin_idx`` (a
+        per-sweep bin index list, broadcast across all sweeps), run LM,
+        apply the signed-Δv basin flip, and return (result, residuals_fn,
+        n_data). LM fits the alpha bump on the chosen window only — the
+        proton-dominated bins outside the window cause an n↓/T↑ degeneracy
+        when included."""
         flat_idx = np.concatenate(
-            [peak_bin_idx_in + s * n_bins for s in range(n_sweeps)]
+            [window_bin_idx + s * n_bins for s in range(n_sweeps)]
         )
-        cr_peak = count_rate[flat_idx]
-        keep_mask = cr_peak > 0
-        if not np.all(keep_mask):
-            flat_idx = flat_idx[keep_mask]
-            cr_peak = cr_peak[keep_mask]
-        p_rate_peak = proton_true_rate[flat_idx]
-        a_cs_peak = alpha_central_speeds[flat_idx]
-        a_ea_peak = alpha_central_eff_areas[flat_idx]
-        rot_peak = rotation_matrices[flat_idx]
-        pg_peak = numba.typed.List([passband_grids[i] for i in flat_idx])
-        sigma = np.ones(len(cr_peak))
+        cr_pk = count_rate[flat_idx]
+        keep = cr_pk > 0
+        if not np.all(keep):
+            flat_idx = flat_idx[keep]
+            cr_pk = cr_pk[keep]
+        pt_pk = proton_true_rate[flat_idx]
+        a_cs_pk = alpha_central_speeds[flat_idx]
+        a_ea_pk = alpha_central_eff_areas[flat_idx]
+        rot_pk = rotation_matrices[flat_idx]
+        pg_pk = numba.typed.List([passband_grids[i] for i in flat_idx])
+        sigma = np.ones(len(cr_pk))
 
         def residuals(x):
             return _alpha_residuals_njit(
-                x, proton_bulk, b_hat_rtn, p_rate_peak, cr_peak, sigma,
-                pg_peak, a_cs_peak, a_ea_peak, az_trans, az_trans_spacing,
-                rot_peak,
+                x, proton_bulk, b_hat_rtn, pt_pk, cr_pk, sigma, pg_pk,
+                a_cs_pk, a_ea_pk, az_trans, az_trans_spacing, rot_pk,
             )
 
-        result = scipy.optimize.least_squares(
-            residuals, x0_in, method="lm", diff_step=1e-4
-        )
-        chi2 = float(np.sum(result.fun**2))
-        x_flipped = result.x.copy()
+        r = scipy.optimize.least_squares(residuals, x0_in, method="lm", diff_step=1e-4)
+        c = float(np.sum(r.fun**2))
+        x_flipped = r.x.copy()
         x_flipped[2] = -x_flipped[2]
-        chi2_flipped = float(np.sum(residuals(x_flipped) ** 2))
-        if chi2_flipped < chi2:
-            result = scipy.optimize.least_squares(
+        c_flipped = float(np.sum(residuals(x_flipped) ** 2))
+        if c_flipped < c:
+            r = scipy.optimize.least_squares(
                 residuals, x_flipped, method="lm", diff_step=1e-4
             )
-        return result, residuals
+        return r, residuals, len(cr_pk)
 
     x0 = np.array([np.log(max(n0, 1e-3)), np.log(max(T0, 1e-3)), dv0])
-    result, residuals = _run_lm(peak_bin_idx, x0)
+    result, residuals, n_data = _run_lm(peak_bin_idx, x0)
+    current_window = peak_bin_idx
 
-    # Iterative refinement: once we have a fitted (n_α, T_α, Δv), redefine
-    # the LM window using the *fitted* alpha shape and refit. This recovers
-    # broader windows for genuinely hot alphas (whose wings the
-    # initial-guess T_α=4T_p shape mask would clip), and also tightens the
-    # window for cool alphas. We accept the second fit only if its
-    # reduced-χ² is no worse than the first.
-    n_a_first = float(np.exp(result.x[0]))
-    T_a_first = float(np.exp(result.x[1]))
-    dv_first = float(result.x[2])
-    if (
-        np.isfinite(n_a_first) and n_a_first <= 100.0
-        and np.isfinite(T_a_first) and T_a_first <= 1e8
-    ):
-        v_alpha_rtn_fit = proton_bulk + dv_first * b_hat_rtn
-        alpha_model_fit = _model_count_rates(
-            n_a_first, T_a_first, v_alpha_rtn_fit,
-            passband_grids, alpha_central_speeds, alpha_central_eff_areas,
-            az_trans, az_trans_spacing, rotation_matrices, ALPHA_PARTICLE_MASS_KG,
-        )
-        alpha_per_sweep_fit = alpha_model_fit.reshape(n_sweeps, n_bins).mean(axis=0)
-        alpha_max_fit = float(np.nanmax(alpha_per_sweep_fit))
-        if alpha_max_fit > 0:
-            shape_mask_fit = alpha_per_sweep_fit >= 0.01 * alpha_max_fit
-            # Only consider bins above proton peak (lower bin index = higher V).
-            proton_peak_bin = int(
-                np.argmax(proton_true_rate.reshape(n_sweeps, n_bins).mean(axis=0))
-            )
-            valid_bins = np.arange(n_bins) < proton_peak_bin
-            refined_bin_idx = np.where(shape_mask_fit & valid_bins)[0]
-            if (
-                len(refined_bin_idx) >= 3
-                and not np.array_equal(refined_bin_idx, peak_bin_idx)
-            ):
-                # χ² per d.o.f. of first fit, for comparison.
-                rchi2_first = float(np.sum(result.fun**2)) / max(
-                    len(result.fun) - 3, 1
+    # Conditional multi-start (T₀ ∈ {2·T_p, 8·T_p}). When the default fit
+    # lands in the runaway-T basin (T_α/T_p > 20), retry from cooler and
+    # hotter T seeds and accept any alternative with strictly lower χ²
+    # AND lower T_α than the default. The "lower T_α" gate keeps multi-
+    # start from swapping a physical basin for a marginally lower-χ²
+    # wrong one elsewhere in parameter space.
+    T_a_default = float(np.exp(result.x[1]))
+    if T_a_default > 20.0 * proton_T:
+        chi2_default = float(np.sum(result.fun**2))
+        for T_seed in (2.0 * proton_T, 8.0 * proton_T):
+            x0_alt = np.array([np.log(max(n0, 1e-3)), np.log(T_seed), dv0])
+            try:
+                r_alt, res_alt, n_data_alt = _run_lm(current_window, x0_alt)
+            except (RuntimeError, ValueError):
+                continue
+            T_a_alt = float(np.exp(r_alt.x[1]))
+            chi2_alt = float(np.sum(r_alt.fun**2))
+            if T_a_alt < T_a_default and chi2_alt < chi2_default:
+                result = r_alt
+                residuals = res_alt
+                n_data = n_data_alt
+                T_a_default = T_a_alt
+                chi2_default = chi2_alt
+
+    # Window-shrink refinement. Try LM on smaller windows obtained by
+    # trimming one bin off each end of the current window. Accept the
+    # trim only if it strictly improves per-bin SSE AND lowers T_α —
+    # this dual gate keeps physical fits from being disturbed (a trim
+    # that lowers per-bin SSE by going _hotter_ is a sign the fit was
+    # already in the right basin). Per-bin SSE rather than total χ² is
+    # the metric so windows of different sizes are comparable.
+    #
+    # Among the accepted candidates, candidates that drop T_α by more
+    # than 30% are preferred over marginal improvers. This is what
+    # rescues the cases where the current window has the LM stuck on a
+    # T_α≈12·T_p collapsed-n basin and a single-bin trim from the right
+    # side reveals the cool physical basin (T_α≈5–7·T_p). Without this
+    # preference the greedy lowest-per-bin-SSE choice picks a tiny
+    # T-drop trim that keeps the fit stuck.
+    while len(current_window) > 5:
+        T_now = float(np.exp(result.x[1]))
+        chi2_now = float(np.sum(result.fun**2))
+        per_bin_now = chi2_now / max(n_data, 1)
+        candidates = []
+        for trim_lo, trim_hi in ((1, 0), (0, 1), (1, 1)):
+            if len(current_window) - trim_lo - trim_hi < 5:
+                continue
+            new_window = current_window[trim_lo : len(current_window) - trim_hi]
+            try:
+                r_t, res_t, n_t = _run_lm(new_window, result.x)
+            except (RuntimeError, ValueError):
+                continue
+            chi2_t = float(np.sum(r_t.fun**2))
+            T_t = float(np.exp(r_t.x[1]))
+            per_bin_t = chi2_t / max(n_t, 1)
+            if per_bin_t < per_bin_now and T_t < T_now:
+                candidates.append(
+                    (per_bin_t, T_t, r_t, res_t, n_t, new_window)
                 )
-                result_refined, residuals_refined = _run_lm(refined_bin_idx, result.x)
-                rchi2_refined = float(np.sum(result_refined.fun**2)) / max(
-                    len(result_refined.fun) - 3, 1
-                )
-                if rchi2_refined <= rchi2_first * 1.10:
-                    result = result_refined
-                    residuals = residuals_refined
+        if not candidates:
+            break
+        big_drop = [c for c in candidates if c[1] < 0.7 * T_now]
+        pool = big_drop if big_drop else candidates
+        pool.sort(key=lambda c: c[0])
+        _, _, result, residuals, n_data, current_window = pool[0]
 
     n_a_fit = float(np.exp(result.x[0]))
     T_a_fit = float(np.exp(result.x[1]))
@@ -432,60 +457,67 @@ def _alpha_initial_guess(
     n_alpha = float(np.nanmean(residual_peak)) / denom
     n_alpha = max(n_alpha, 1e-3)
 
-    # Refine the LM fit window using the alpha Maxwellian shape itself. The
-    # original window from `get_alpha_peak_indices` extends to a fixed 4×V_p
-    # ceiling, which sweeps in the PUI shelf / non-thermal high-V tail above
-    # the alpha core. Fitting a Maxwellian to that flat shoulder is what
-    # drives the LM toward spuriously high T_α (and correspondingly low n_α).
-    #
-    # Three-step refinement of the upper edge of the LM window. (The lower
-    # edge — the valley between proton and alpha — is preserved as found by
-    # `get_alpha_peak_indices`.) Each step can only shrink the window.
-    #
-    #   (a) Empirical valley above alpha peak. Walk from the alpha-peak bin
-    #       toward higher voltage (lower index, since `energies_per_sweep` is
-    #       decreasing) and stop at the first local minimum of the residual.
-    #       That's the start of the PUI shelf / superthermal tail.
-    #   (b) Kinematic cap at 3 × V_p_peak (≈1.5 × V_α_peak when v_α≈v_p).
-    #       When (a) finds no valley (e.g. weak alpha bump merging into a
-    #       flat PUI plateau), the kinematic cap still excludes the plateau.
-    #       1.5 × V_α_peak corresponds to ≈3.5σ on the voltage Maxwellian
-    #       for T_α≈10 T_p — wide enough for typical alphas, tight enough
-    #       to keep the plateau out. Anchored on V_p_peak (not the
-    #       residual-detected alpha-peak voltage) because for weak-alpha
-    #       chunks the detected peak can be a noise spike and would lead
-    #       the cap astray.
-    #   (c) Shape mask. Drop bins where the unit-density alpha model with
-    #       T_α=4 T_p is below 1% of its peak. Symmetric backstop in case
-    #       the alpha-peak detection finds a noise spike on the wrong side.
-    if len(peak_idx) >= 3:
-        local_peak_pos = int(np.argmax(residual[peak_idx]))
-        alpha_peak_bin = int(peak_idx[local_peak_pos])
-
-        v_p_peak_voltage = float(np.abs(voltage_per_sweep[proton_peak_index]))
-        upper_v_cap = 3.0 * v_p_peak_voltage
-
-        upper_cutoff_bin = int(peak_idx.min())  # current upper end (lowest index)
-        for i in range(alpha_peak_bin - 1, max(int(peak_idx.min()) - 1, 0), -1):
-            if i - 1 < 0 or i + 1 >= len(residual):
-                break
-            if residual[i] < residual[i + 1] and residual[i] < residual[i - 1]:
-                upper_cutoff_bin = i
-                break
-
-        kinematic_mask = np.abs(voltage_per_sweep) <= upper_v_cap
-        peak_idx = peak_idx[
-            (peak_idx >= upper_cutoff_bin) & kinematic_mask[peak_idx]
-        ]
-
-    alpha_max = float(np.nanmax(unit_alpha_per_sweep))
-    if alpha_max > 0 and np.isfinite(alpha_max) and len(peak_idx) >= 3:
-        shape_mask = unit_alpha_per_sweep >= 0.01 * alpha_max
-        refined_idx = peak_idx[shape_mask[peak_idx]]
-        if len(refined_idx) >= 3:
-            peak_idx = refined_idx
+    # Refine the LM fit window: starting from the residual maximum inside
+    # the [valley → 4×V_p] span, walk outward on each side while the
+    # residual is monotonically decreasing, stopping at the first local
+    # minimum. This isolates the alpha-core lobe and excludes any PUI
+    # plateau that may sit above it on the high-V side — important because
+    # at low n_p / hot solar wind the PUI shelf can rival the alpha bump
+    # in count rate, and a wide LM window covering both produces the
+    # runaway-T / collapsed-n degeneracy.
+    refined_peak_idx = _walk_to_local_minima(
+        residual=residual,
+        original_peak_idx=peak_idx,
+    )
+    if len(refined_peak_idx) >= 3:
+        peak_idx = refined_peak_idx
 
     return (n_alpha, T_alpha, 0.0, peak_idx)
+
+
+def _walk_to_local_minima(
+    residual: ndarray,
+    original_peak_idx: ndarray,
+    *,
+    min_bins: int = 5,
+) -> ndarray:
+    """Pick the residual maximum inside `original_peak_idx`, then walk
+    outward on each side while the residual is strictly decreasing. Stop at
+    the first local minimum on each side. The result is the contiguous
+    alpha-core lobe; any secondary bump (e.g., a PUI plateau on the high-V
+    side) is left out by construction.
+
+    Pads back up to `min_bins` symmetrically inside the original window if
+    the walk produces a too-narrow lobe (a 3-DOF LM is under-constrained on
+    fewer than ~5 bins)."""
+    indices = np.sort(np.asarray(original_peak_idx))
+    if len(indices) <= min_bins:
+        return indices
+
+    sub = residual[indices]
+    p = int(np.argmax(sub))
+
+    left = p
+    while left > 0 and sub[left - 1] < sub[left]:
+        left -= 1
+    right = p
+    while right < len(sub) - 1 and sub[right + 1] < sub[right]:
+        right += 1
+
+    while right - left + 1 < min_bins:
+        grew = False
+        if left > 0:
+            left -= 1
+            grew = True
+        if right - left + 1 >= min_bins:
+            break
+        if right < len(sub) - 1:
+            right += 1
+            grew = True
+        if not grew:
+            break
+
+    return indices[left : right + 1]
 
 
 def _infer_sweep_layout(esa_voltage: ndarray) -> tuple:
