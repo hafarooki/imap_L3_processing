@@ -226,53 +226,93 @@ def fit_solar_wind_alpha_moments(
 
     n0, T0, dv0, peak_bin_idx = initial_guess
     proton_bulk = proton_bulk_rtn
-
-    # Subset all per-measurement arrays to only the alpha peak bins across
-    # all sweeps, so LM fits the alpha bump rather than the proton-dominated
-    # tails (which create an n↓/T↑ degeneracy).
     n_sweeps, n_bins = _infer_sweep_layout(esa_voltage)
-    peak_flat_idx = np.concatenate([peak_bin_idx + s * n_bins for s in range(n_sweeps)])
-    count_rate_peak = count_rate[peak_flat_idx]
-    keep = count_rate_peak > 0
-    if not np.all(keep):
-        peak_flat_idx = peak_flat_idx[keep]
-        count_rate_peak = count_rate_peak[keep]
-    proton_true_rate_peak = proton_true_rate[peak_flat_idx]
-    alpha_central_speeds_peak = alpha_central_speeds[peak_flat_idx]
-    alpha_central_eff_areas_peak = alpha_central_eff_areas[peak_flat_idx]
-    rotation_matrices_peak = rotation_matrices[peak_flat_idx]
-    passband_grids_peak = numba.typed.List([passband_grids[i] for i in peak_flat_idx])
 
-    sigma_peak = np.ones(len(count_rate_peak))
-
-    def residuals(x):
-        return _alpha_residuals_njit(
-            x,
-            proton_bulk,
-            b_hat_rtn,
-            proton_true_rate_peak,
-            count_rate_peak,
-            sigma_peak,
-            passband_grids_peak,
-            alpha_central_speeds_peak,
-            alpha_central_eff_areas_peak,
-            az_trans,
-            az_trans_spacing,
-            rotation_matrices_peak,
+    def _run_lm(peak_bin_idx_in: ndarray, x0_in: ndarray):
+        """Build window arrays from per-sweep bin indices and run LM (with
+        signed-Δv basin flip). Returns (result, residuals_fn)."""
+        flat_idx = np.concatenate(
+            [peak_bin_idx_in + s * n_bins for s in range(n_sweeps)]
         )
+        cr_peak = count_rate[flat_idx]
+        keep_mask = cr_peak > 0
+        if not np.all(keep_mask):
+            flat_idx = flat_idx[keep_mask]
+            cr_peak = cr_peak[keep_mask]
+        p_rate_peak = proton_true_rate[flat_idx]
+        a_cs_peak = alpha_central_speeds[flat_idx]
+        a_ea_peak = alpha_central_eff_areas[flat_idx]
+        rot_peak = rotation_matrices[flat_idx]
+        pg_peak = numba.typed.List([passband_grids[i] for i in flat_idx])
+        sigma = np.ones(len(cr_peak))
+
+        def residuals(x):
+            return _alpha_residuals_njit(
+                x, proton_bulk, b_hat_rtn, p_rate_peak, cr_peak, sigma,
+                pg_peak, a_cs_peak, a_ea_peak, az_trans, az_trans_spacing,
+                rot_peak,
+            )
+
+        result = scipy.optimize.least_squares(
+            residuals, x0_in, method="lm", diff_step=1e-4
+        )
+        chi2 = float(np.sum(result.fun**2))
+        x_flipped = result.x.copy()
+        x_flipped[2] = -x_flipped[2]
+        chi2_flipped = float(np.sum(residuals(x_flipped) ** 2))
+        if chi2_flipped < chi2:
+            result = scipy.optimize.least_squares(
+                residuals, x_flipped, method="lm", diff_step=1e-4
+            )
+        return result, residuals
 
     x0 = np.array([np.log(max(n0, 1e-3)), np.log(max(T0, 1e-3)), dv0])
-    result = scipy.optimize.least_squares(residuals, x0, method="lm", diff_step=1e-4)
+    result, residuals = _run_lm(peak_bin_idx, x0)
 
-    # Wrong-basin: signed-Δv flip (1-DOF basin ambiguity along B̂).
-    chi2 = float(np.sum(result.fun**2))
-    x_flipped = result.x.copy()
-    x_flipped[2] = -x_flipped[2]
-    chi2_flipped = float(np.sum(residuals(x_flipped) ** 2))
-    if chi2_flipped < chi2:
-        result = scipy.optimize.least_squares(
-            residuals, x_flipped, method="lm", diff_step=1e-4
+    # Iterative refinement: once we have a fitted (n_α, T_α, Δv), redefine
+    # the LM window using the *fitted* alpha shape and refit. This recovers
+    # broader windows for genuinely hot alphas (whose wings the
+    # initial-guess T_α=4T_p shape mask would clip), and also tightens the
+    # window for cool alphas. We accept the second fit only if its
+    # reduced-χ² is no worse than the first.
+    n_a_first = float(np.exp(result.x[0]))
+    T_a_first = float(np.exp(result.x[1]))
+    dv_first = float(result.x[2])
+    if (
+        np.isfinite(n_a_first) and n_a_first <= 100.0
+        and np.isfinite(T_a_first) and T_a_first <= 1e8
+    ):
+        v_alpha_rtn_fit = proton_bulk + dv_first * b_hat_rtn
+        alpha_model_fit = _model_count_rates(
+            n_a_first, T_a_first, v_alpha_rtn_fit,
+            passband_grids, alpha_central_speeds, alpha_central_eff_areas,
+            az_trans, az_trans_spacing, rotation_matrices, ALPHA_PARTICLE_MASS_KG,
         )
+        alpha_per_sweep_fit = alpha_model_fit.reshape(n_sweeps, n_bins).mean(axis=0)
+        alpha_max_fit = float(np.nanmax(alpha_per_sweep_fit))
+        if alpha_max_fit > 0:
+            shape_mask_fit = alpha_per_sweep_fit >= 0.01 * alpha_max_fit
+            # Only consider bins above proton peak (lower bin index = higher V).
+            proton_peak_bin = int(
+                np.argmax(proton_true_rate.reshape(n_sweeps, n_bins).mean(axis=0))
+            )
+            valid_bins = np.arange(n_bins) < proton_peak_bin
+            refined_bin_idx = np.where(shape_mask_fit & valid_bins)[0]
+            if (
+                len(refined_bin_idx) >= 3
+                and not np.array_equal(refined_bin_idx, peak_bin_idx)
+            ):
+                # χ² per d.o.f. of first fit, for comparison.
+                rchi2_first = float(np.sum(result.fun**2)) / max(
+                    len(result.fun) - 3, 1
+                )
+                result_refined, residuals_refined = _run_lm(refined_bin_idx, result.x)
+                rchi2_refined = float(np.sum(result_refined.fun**2)) / max(
+                    len(result_refined.fun) - 3, 1
+                )
+                if rchi2_refined <= rchi2_first * 1.10:
+                    result = result_refined
+                    residuals = residuals_refined
 
     n_a_fit = float(np.exp(result.x[0]))
     T_a_fit = float(np.exp(result.x[1]))
