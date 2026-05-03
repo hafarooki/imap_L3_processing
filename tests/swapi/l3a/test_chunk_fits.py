@@ -4,14 +4,14 @@ from unittest.mock import Mock, patch
 import numpy as np
 from uncertainties import ufloat
 
-from imap_l3_processing.swapi.l3a.chunk_fits import proton_chunk_worker
+from imap_l3_processing.swapi.l3a.chunk_fits import ProtonChunkFitter
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
 
 class TestChunkFits(TestCase):
     @patch("imap_l3_processing.swapi.l3a.chunk_fits.derive_velocity_angles")
     @patch("imap_l3_processing.swapi.l3a.chunk_fits._fit_proton")
-    def test_proton_chunk_worker_outputs_sun_frame_speed(
+    def test_proton_fitter_outputs_sun_frame_speed(
         self, mock_fit_proton, mock_derive_velocity_angles
     ):
         data_chunk = Mock()
@@ -39,7 +39,7 @@ class TestChunkFits(TestCase):
             ufloat(4.0, 0.2),
         )
 
-        result = proton_chunk_worker(
+        result = ProtonChunkFitter().fit_chunk(
             data_chunk,
             123,
             np.tile(np.eye(3), (5, 1, 1)),

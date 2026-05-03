@@ -1,6 +1,5 @@
 import logging
 from dataclasses import replace
-from functools import partial
 
 import numpy as np
 from imap_data_access.processing_input import ProcessingInputCollection
@@ -11,13 +10,10 @@ from imap_l3_processing.constants import FIVE_MINUTES_IN_NANOSECONDS
 from imap_l3_processing.models import InputMetadata
 from imap_l3_processing.processor import Processor
 from imap_l3_processing.swapi.l3a.chunk_fits import (
-    alpha_chunk_worker,
-    alpha_geometry,
-    proton_chunk_worker,
-    proton_geometry,
-    pui_geometry,
-    pui_proton_chunk_worker,
-    run_parallel_chunks,
+    AlphaChunkFitter,
+    ParallelChunkRunner,
+    ProtonChunkFitter,
+    PuiProtonChunkFitter,
 )
 from imap_l3_processing.swapi.l3a.models import (
     SwapiL3ProtonSolarWindData,
@@ -91,33 +87,27 @@ class SwapiProcessor(Processor):
     def process_l3a_proton(self, data, dependencies) -> SwapiL3ProtonSolarWindData:
         chunks = list(chunk_l2_data(data, 5))
         dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
+        runner = ParallelChunkRunner(
+            dependencies.swapi_response, dependencies.efficiency_calibration_table
+        )
 
         return SwapiL3ProtonSolarWindData(
             replace(self.input_metadata, descriptor="proton-sw"),
-            **run_parallel_chunks(
-                chunks,
-                dependencies.swapi_response,
-                dependencies.efficiency_calibration_table,
-                proton_geometry,
-                proton_chunk_worker,
-            ),
+            **runner.run(chunks, ProtonChunkFitter()),
         )
 
     def process_l3a_alpha(self, data, dependencies) -> SwapiL3AlphaSolarWindData:
         chunks = list(chunk_l2_data(data, 5))
         dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
+        runner = ParallelChunkRunner(
+            dependencies.swapi_response, dependencies.efficiency_calibration_table
+        )
 
         return SwapiL3AlphaSolarWindData(
             replace(self.input_metadata, descriptor="alpha-sw"),
-            **run_parallel_chunks(
+            **runner.run(
                 chunks,
-                dependencies.swapi_response,
-                dependencies.efficiency_calibration_table,
-                partial(
-                    alpha_geometry,
-                    mag_l1d_data=getattr(dependencies, "mag_l1d_data", None),
-                ),
-                alpha_chunk_worker,
+                AlphaChunkFitter(getattr(dependencies, "mag_l1d_data", None)),
             ),
         )
 
@@ -126,14 +116,11 @@ class SwapiProcessor(Processor):
     ) -> SwapiL3PickupIonData:
         chunks = list(chunk_l2_data(data, 5))
         dependencies.swapi_response.warm_cache(data.energy / SWAPI_L2_K_FACTOR)
-
-        pui_proton_results = run_parallel_chunks(
-            chunks,
-            dependencies.swapi_response,
-            dependencies.efficiency_calibration_table,
-            pui_geometry,
-            pui_proton_chunk_worker,
+        runner = ParallelChunkRunner(
+            dependencies.swapi_response, dependencies.efficiency_calibration_table
         )
+
+        pui_proton_results = runner.run(chunks, PuiProtonChunkFitter())
         ten_minute_solar_wind_velocities, proton_sw_quality_flags = (
             calculate_ten_minute_velocities(
                 nominal_values(pui_proton_results["proton_sw_speed"]),
