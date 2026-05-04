@@ -73,9 +73,18 @@ SPEED_HALF_WIDTH_VTH = 6.0
 # right at the boundary, undoing the benefit.
 VV_OUTER_DEG = 26.0
 
+# Wrong-basin recovery: K-rotation analytic verifier + restart LM + iter-flip-LM.
+# The K-rotation grid evaluates analytic chi² at K-1 spin-axis rotations of the
+# LM-1 velocity; the cheapest (best chi²) seeds an LM restart only when it sits
+# within `_VERIFIER_CHI_RATIO_THRESHOLD`× LM-1's chi². After that one restart,
+# iter-flip-LM repeatedly mirrors across the spin axis (180°) and re-runs LM,
+# accepting on each chi² improvement until convergence (max `_MAX_BASIN_FLIPS`
+# iterations). Each acceptance test uses a relative tolerance to break ties
+# between near-equivalent basins so the iter-flip loop terminates.
 _GRID_K = 4
-_GRID_THRESHOLD = 50.0
+_MAX_BASIN_FLIPS = 6
 _BASIN_FLIP_REL_TOL = 1e-3
+_VERIFIER_CHI_RATIO_THRESHOLD = 5000.0
 
 # Non-paralyzable detector deadtime (Tsoulfanidis 1995, p. 74): n = g / (1 - g*tau)
 # Rearranged for forward model (true rate -> measured rate): g = n / (1 + n*tau)
@@ -101,6 +110,12 @@ N_VELOCITY_ANGLE_MC_SAMPLES = 1000
 # Loosened from scipy default; xtol fires before ftol on this problem so loosening ftol is redundant.
 _LM_XTOL = 1e-3
 
+OA_SKIP_FRACTION = 1e-3
+
+KM_TO_CM = 1e5
+
+N_OA_SCAN = 64
+
 
 @dataclass
 class ProtonSolarWindMoments:
@@ -118,79 +133,6 @@ class ProtonSolarWindMoments:
         return np.array(covariance_matrix(self.bulk_velocity_rtn))
 
 
-def make_correlated_velocity(
-    v_mean: ndarray, v_cov: ndarray
-) -> tuple[UFloat, UFloat, UFloat]:
-    """Build a correlated 3-tuple of UFloats from (mean, covariance). Falls
-    back to independent NaN-σ UFloats if the covariance is non-finite or
-    `correlated_values` rejects it (LinAlg failures, NaN fills, etc.)."""
-    if np.all(np.isfinite(v_cov)):
-        try:
-            return tuple(correlated_values(v_mean, v_cov))
-        except Exception:
-            pass
-    return tuple(ufloat(float(v), np.nan) for v in v_mean)
-
-
-def derive_velocity_angles(
-    fitting_result: "ProtonSolarWindMoments",
-    epoch_tt2000_ns: float,
-) -> tuple:
-    """Return (speed, clock_angle, deflection_angle) as ufloats in the DPS frame.
-
-    Speed uncertainty is propagated automatically by the ``uncertainties``
-    package (first-order delta method via ``umath.sqrt(Σ xᵢ²)``), which is
-    essentially exact whenever ``|u| >> σ``. Clock and deflection angles, by contrast, have
-    arctan2/arccos gradients that scale as ``1/v_xy²`` and ``1/(s²·v_xy)``,
-    which underestimate σ severely whenever ``σ_xy`` is comparable to
-    ``v_xy`` — the typical SWAPI regime, since the bulk velocity is
-    dominated by the spin-axis component. Their σ are computed by drawing
-    ``N_VELOCITY_ANGLE_MC_SAMPLES`` velocity samples from
-    ``MultivariateNormal(u, cov)`` and applying the transforms per-sample.
-    Clock-angle σ uses residuals wrapped to (-180°, 180°] so the 0°/360°
-    branch cut doesn't inflate the spread.
-    """
-    from imap_l3_processing.swapi.l3a.utils import rotate_rtn_to_dps
-
-    u_unc = rotate_rtn_to_dps(
-        np.array(fitting_result.bulk_velocity_rtn), epoch_tt2000_ns
-    )
-    u = unp.nominal_values(u_unc)
-    cov_DPS = np.array(covariance_matrix(u_unc))
-
-    speed_nom = float(np.linalg.norm(u))
-    clock_nom = float(np.degrees(np.arctan2(u[1], u[0])) % 360)
-    defl_nom = float(np.degrees(np.arccos(-u[2] / speed_nom)))
-
-    if not np.all(np.isfinite(cov_DPS)):
-        return (
-            ufloat(speed_nom, np.nan),
-            ufloat(clock_nom, np.nan),
-            ufloat(defl_nom, np.nan),
-        )
-
-    speed = umath.sqrt(sum(x**2 for x in u_unc))
-
-    rng = np.random.default_rng(0)
-    samples = rng.multivariate_normal(
-        u, cov_DPS, size=N_VELOCITY_ANGLE_MC_SAMPLES, check_valid="ignore"
-    )
-
-    clocks = np.degrees(np.arctan2(samples[:, 1], samples[:, 0])) % 360.0
-    clock_resid = ((clocks - clock_nom + 180.0) % 360.0) - 180.0
-    clock_sigma = float(np.std(clock_resid, ddof=1))
-
-    sample_speeds = np.linalg.norm(samples, axis=1)
-    defls = np.degrees(np.arccos(np.clip(-samples[:, 2] / sample_speeds, -1.0, 1.0)))
-    defl_sigma = float(np.std(defls, ddof=1))
-
-    return (
-        speed,
-        ufloat(clock_nom, clock_sigma),
-        ufloat(defl_nom, defl_sigma),
-    )
-
-
 def fit_solar_wind_proton_moments(
     count_rate: ndarray,
     esa_voltage: ndarray,
@@ -205,9 +147,6 @@ def fit_solar_wind_proton_moments(
     ``rotation_matrices`` must be precomputed and reused
     across stage 1/stage 2 fits to avoid duplicate SPICE calls."""
     from imap_l3_processing.constants import PROTON_MASS_PER_CHARGE_M_P_PER_E
-
-    # Captured here, before the half-mean mask below may drop the bin at index 0.
-    spin_axis_rtn = rotation_matrices[0, 1, :].copy()
 
     # Drop any 0V (or non-finite) ESA steps. Some sweeps include a zero-energy
     # step that carries no useful information and would make central_speed = 0,
@@ -266,8 +205,7 @@ def fit_solar_wind_proton_moments(
         az_trans,
         az_trans_spacing,
         rotation_matrices,
-        initial_guess,
-        spin_axis_rtn=spin_axis_rtn,
+        initial_guess
     )
 
 
@@ -319,7 +257,6 @@ def _get_initial_guess(
         ]
     )
 
-    # Scale density so that the unit model count rate matches the mean observed count rate.
     unit_model = _model_count_rates(
         1.0,
         temperature,
@@ -332,7 +269,7 @@ def _get_initial_guess(
         rotation_matrices,
         PROTON_MASS_KG,
     )
-    density = float(np.nanmean(count_rate) / np.nanmean(unit_model))
+    density = _optimal_density_scale(unit_model, count_rate)
 
     return ProtonSolarWindMoments(
         density=density,
@@ -340,15 +277,6 @@ def _get_initial_guess(
         bulk_velocity_rtn=bulk_velocity_rtn,
         bad_fit_flag=0,
     )
-
-
-@numba.njit(nogil=True)
-def _compute_angles(bulk_velocity_rtn: ndarray, rotation_matrix: ndarray):
-    bulk_velocity_xyz = rotation_matrix @ bulk_velocity_rtn
-    bulk_speed = np.linalg.norm(bulk_velocity_rtn)
-    phi = np.degrees(np.arctan2(-bulk_velocity_xyz[0], -bulk_velocity_xyz[1]))
-    theta = np.degrees(np.arcsin(-bulk_velocity_xyz[2] / bulk_speed))
-    return phi, theta
 
 
 @numba.njit(nogil=True)
@@ -399,28 +327,180 @@ def _model_count_rates(
 
 
 @numba.njit(nogil=True)
-def apply_deadtime_correction(true_rate: float) -> float:
-    """Scalar deadtime correction (kept for back-compat with tests).
-    Use `apply_deadtime_correction_array` for the vectorized form used by the residual."""
-    return true_rate / (1.0 + SWAPI_DEADTIME_S * true_rate)
+def _compute_angles(bulk_velocity_rtn: ndarray, rotation_matrix: ndarray):
+    bulk_velocity_xyz = rotation_matrix @ bulk_velocity_rtn
+    bulk_speed = np.linalg.norm(bulk_velocity_rtn)
+    phi = np.degrees(np.arctan2(-bulk_velocity_xyz[0], -bulk_velocity_xyz[1]))
+    theta = np.degrees(np.arcsin(-bulk_velocity_xyz[2] / bulk_speed))
+    return phi, theta
+
+
+@numba.njit(fastmath=True, nogil=True)
+def calculate_integral(
+    grid: PassbandGrid,
+    sw_params: SWParams,
+    central_speed: float,
+    central_effective_area: float,
+    azimuthal_transmission: ndarray,
+    azimuthal_transmission_spacing: float,
+):
+    """Pre-deadtime model count rate at one ESA voltage step.
+
+    Five-region azimuth scheme (0=SG, ±2=VV, ±1=OA):
+        SG | VV- | OA- | VV+ | OA+
+    The OA azimuth integration is split at ±VV_OUTER_DEG so the steep T(φ)
+    rise (the vanes-vignetting transition between |φ|=20° and ~30°) is
+    captured by GL boundary clustering inside the VV regions, instead of
+    being smeared across a single wide OA window."""
+
+    # SG first — used as the reference for the OA skip decision.
+    min_el, max_el, min_az, max_az = _integration_window(
+        sw_params, 0, grid, central_speed
+    )
+    sg_rate = 0.0
+    if max_el > min_el and max_az > min_az:
+        sg_rate = _integrate_region(
+            grid,
+            sw_params,
+            central_speed,
+            central_effective_area,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
+            True,
+            min_el,
+            max_el,
+            min_az,
+            max_az,
+        )
+
+    count_rate = sg_rate
+
+    # VV± regions: small OA azimuth bands [-VV_OUTER, -20] and [20, VV_OUTER].
+    # T is small (≤~0.05) but rises steeply; a few GL nodes here resolve it
+    # well. No trim or skip — these regions are bounded and cheap.
+    for region in (-2, +2):
+        min_el, max_el, min_az, max_az = _integration_window(
+            sw_params, region, grid, central_speed
+        )
+        if max_el <= min_el or max_az <= min_az:
+            continue
+        count_rate += _integrate_region(
+            grid,
+            sw_params,
+            central_speed,
+            central_effective_area,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
+            False,
+            min_el,
+            max_el,
+            min_az,
+            max_az,
+        )
+
+    # OA± regions: full-transmission azimuth bands beyond ±VV_OUTER.
+    for region in (-1, +1):
+        min_el, max_el, min_az, max_az = _integration_window(
+            sw_params, region, grid, central_speed
+        )
+        if max_el <= min_el or max_az <= min_az:
+            continue
+
+        min_az, max_az, integral_Tg = _trim_oa_azimuth_by_integrand(
+            sw_params,
+            central_speed,
+            min_el,
+            max_el,
+            min_az,
+            max_az,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
+        )
+        if max_az <= min_az:
+            continue
+
+        oa_upper_bound = _oa_rate_upper_bound(
+            grid,
+            central_speed,
+            central_effective_area,
+            integral_Tg,
+            min_el,
+            max_el,
+        )
+        if oa_upper_bound < max(0.1, OA_SKIP_FRACTION * sg_rate):
+            continue
+
+        count_rate += _integrate_region(
+            grid,
+            sw_params,
+            central_speed,
+            central_effective_area,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
+            False,
+            min_el,
+            max_el,
+            min_az,
+            max_az,
+        )
+
+    return count_rate
 
 
 @numba.njit(nogil=True)
-def apply_deadtime_correction_array(true_rates: ndarray) -> ndarray:
-    """Vectorized deadtime correction. Applied at the residual stage so that for the
-    two-species fit it acts on the *combined* (proton + alpha) true rate."""
-    return true_rates / (1.0 + SWAPI_DEADTIME_S * true_rates)
+def _integration_window(
+    sw_params: SWParams, region: int, grid: PassbandGrid, central_speed: float
+):
+    epsilon = EPSILON_SG if region == 0 else EPSILON_OA
+
+    cos_angular_width = (
+         sw_params.thermal_speed**2 * np.log(epsilon)
+         / (central_speed * sw_params.bulk_speed)
+         + 1
+    )
+    cos_angular_width = _clamp(cos_angular_width, -1, +1)
+    angular_width = np.degrees(np.arccos(cos_angular_width))
+
+    if region == 0:
+        # region = 0 -> sunglasses passband
+        sg_lo, sg_hi = grid.sg_elevation_range
+        min_elevation, max_elevation = _dynamic_limits(
+            sw_params.bulk_elevation, angular_width, sg_lo, sg_hi
+        )
+
+        min_azimuth, max_azimuth = _dynamic_limits(
+            sw_params.bulk_azimuth, angular_width, -20.0, 20.0
+        )
+    else:
+        # region != 0 -> open aperture passband
+        oa_lo, oa_hi = grid.oa_elevation_range
+        min_elevation, max_elevation = _dynamic_limits(
+            sw_params.bulk_elevation, angular_width, oa_lo, oa_hi
+        )
+
+        is_vv_band = abs(region) == 2
+        inner = 20.0 if is_vv_band else VV_OUTER_DEG
+        outer = VV_OUTER_DEG if is_vv_band else 150.0
+        az_lo = inner if region > 0 else -outer
+        az_hi = outer if region > 0 else -inner
+        min_azimuth, max_azimuth = _dynamic_limits(
+            sw_params.bulk_azimuth, angular_width, az_lo, az_hi
+        )
+
+    return min_elevation, max_elevation, min_azimuth, max_azimuth
 
 
-@numba.njit(nogil=True, inline="always")
-def _density_area_norm(sw_params: SWParams, central_effective_area: float) -> float:
-    """A_eff · n / (√2π v_th)³ · (km→cm). Multiplied by a phase-space integral in
-    (km/s × rad²) units, gives a count rate in Hz."""
-    return (
-        central_effective_area
-        * sw_params.density
-        * (np.sqrt(2 * np.pi) * sw_params.thermal_speed) ** -3
-        * 1e5
+@numba.njit(nogil=True)
+def _clamp(x: float, lower: float, upper: float) -> float:
+    return min(max(x, lower), upper)
+
+
+@numba.njit(nogil=True)
+def _dynamic_limits(
+    center: float, width: float, lower_bound: float, upper_bound: float
+):
+    return _clamp(center - width, lower_bound, upper_bound), _clamp(
+        center + width, lower_bound, upper_bound
     )
 
 
@@ -538,151 +618,69 @@ def _integrate_region(
     )
 
 
-OA_SKIP_FRACTION = 1e-3
+@numba.njit(nogil=True)
+def interpolate_passband(
+    grid: PassbandGrid, is_sunglasses: bool, elevation: float, speed_ratio: float
+) -> float:
+    """Interpolate the V-only passband at the given (elevation, speed_ratio = v / v_0).
 
+    The grid contains passband values on a (elevation, speed_ratio) lattice so this
+    function is species-independent — convert v -> speed_ratio at the call site using
+    the species-specific `central_speed`."""
+    grid_values = grid.values_sunglasses if is_sunglasses else grid.values_open_aperture
 
-KM_TO_CM = 1e5
+    i_float = (elevation - grid.min_elevation) / grid.elevation_spacing
+    if i_float < 0 or i_float + 1 >= grid_values.shape[0]:
+        return 0.0
+
+    j_float = (speed_ratio - grid.min_speed_ratio) / grid.speed_ratio_spacing
+    if j_float < 0 or j_float + 1 >= grid_values.shape[1]:
+        return 0.0
+
+    i_lower = int(i_float)
+    i_upper = i_lower + 1
+    i_weight = i_float - i_lower
+
+    j_lower = int(j_float)
+    j_upper = j_lower + 1
+    j_weight = j_float - j_lower
+
+    return (1 - i_weight) * (
+        (1 - j_weight) * grid_values[i_lower, j_lower]
+        + j_weight * grid_values[i_lower, j_upper]
+    ) + i_weight * (
+        (1 - j_weight) * grid_values[i_upper, j_lower]
+        + j_weight * grid_values[i_upper, j_upper]
+    )
 
 
 @numba.njit(nogil=True)
-def _oa_rate_upper_bound(
-    grid: PassbandGrid,
-    central_speed: float,
-    central_effective_area: float,
-    integral_Tg: float,
-    min_elevation: float,
-    max_elevation: float,
-) -> float:
-    """Heuristic upper estimate of the OA region rate (Hz):
-        Ĉ_OA = A₀ · v₀³ · Δθ · Δv · ∫ T(φ) g(φ) dφ
-    bounding cos(θ) ≤ 1 (giving Δθ) and v³ P(v/v₀, θ) ≤ v₀³ supported on the
-    passband (giving Δv = (r_max(0) - r_min(0))·v₀ at θ = 0°). The azimuth
-    integral is supplied by `_trim_oa_azimuth_by_integrand` with full Maxwellian
-    normalization (i.e. g(φ) = f(v₀, θ_b', φ))."""
-    delta_theta_rad = (math.pi / 180.0) * (max_elevation - min_elevation)
-    delta_v = central_speed * (
-        _eval_boundary(grid, False, 0.0, False) - _eval_boundary(grid, False, 0.0, True)
-    )
-    return (
-        central_effective_area
-        * central_speed**3
-        * delta_theta_rad
-        * delta_v
-        * integral_Tg
-        * KM_TO_CM
-    )
-
-
-@numba.njit(fastmath=True, nogil=True)
-def calculate_integral(
-    grid: PassbandGrid,
-    sw_params: SWParams,
-    central_speed: float,
-    central_effective_area: float,
+def _interpolate_transmission(
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
-):
-    """Pre-deadtime model count rate at one ESA voltage step.
+    azimuth: float,
+) -> float:
+    azimuth = (azimuth + 180) % 360 - 180
+    i_float = abs(azimuth) / azimuthal_transmission_spacing
+    i_lower = int(math.floor(i_float))
+    i_upper = i_lower + 1
 
-    Five-region azimuth scheme (see `_get_angular_limits` for region codes):
-        SG | VV- | OA- | VV+ | OA+
-    The OA azimuth integration is split at ±VV_OUTER_DEG so the steep T(φ)
-    rise (the vanes-vignetting transition between |φ|=20° and ~30°) is
-    captured by GL boundary clustering inside the VV regions, instead of
-    being smeared across a single wide OA window."""
+    n = len(azimuthal_transmission)
+    if i_lower < 0:
+        i_lower = 0
+    elif i_lower >= n:
+        i_lower = n - 1
+    if i_upper < 0:
+        i_upper = 0
+    elif i_upper >= n:
+        i_upper = n - 1
 
-    # SG first — used as the reference for the OA skip decision.
-    min_el, max_el, min_az, max_az = _get_angular_limits(
-        sw_params, 0, grid, central_speed
+    weight_lower = float(i_upper) - i_float
+    weight_upper = i_float - float(i_lower)
+    return (
+        azimuthal_transmission[i_lower] * weight_lower
+        + azimuthal_transmission[i_upper] * weight_upper
     )
-    sg_rate = 0.0
-    if max_el > min_el and max_az > min_az:
-        sg_rate = _integrate_region(
-            grid,
-            sw_params,
-            central_speed,
-            central_effective_area,
-            azimuthal_transmission,
-            azimuthal_transmission_spacing,
-            True,
-            min_el,
-            max_el,
-            min_az,
-            max_az,
-        )
-
-    count_rate = sg_rate
-
-    # VV± regions: small OA azimuth bands [-VV_OUTER, -20] and [20, VV_OUTER].
-    # T is small (≤~0.05) but rises steeply; a few GL nodes here resolve it
-    # well. No trim or skip — these regions are bounded and cheap.
-    for region in (-2, +2):
-        min_el, max_el, min_az, max_az = _get_angular_limits(
-            sw_params, region, grid, central_speed
-        )
-        if max_el <= min_el or max_az <= min_az:
-            continue
-        count_rate += _integrate_region(
-            grid,
-            sw_params,
-            central_speed,
-            central_effective_area,
-            azimuthal_transmission,
-            azimuthal_transmission_spacing,
-            False,
-            min_el,
-            max_el,
-            min_az,
-            max_az,
-        )
-
-    # OA± regions: full-transmission azimuth bands beyond ±VV_OUTER.
-    for region in (-1, +1):
-        min_el, max_el, min_az, max_az = _get_angular_limits(
-            sw_params, region, grid, central_speed
-        )
-        if max_el <= min_el or max_az <= min_az:
-            continue
-
-        min_az, max_az, integral_Tg = _trim_oa_azimuth_by_integrand(
-            sw_params,
-            central_speed,
-            min_el,
-            max_el,
-            min_az,
-            max_az,
-            azimuthal_transmission,
-            azimuthal_transmission_spacing,
-        )
-        if max_az <= min_az:
-            continue
-
-        oa_upper_bound = _oa_rate_upper_bound(
-            grid,
-            central_speed,
-            central_effective_area,
-            integral_Tg,
-            min_el,
-            max_el,
-        )
-        if oa_upper_bound < max(0.1, OA_SKIP_FRACTION * sg_rate):
-            continue
-
-        count_rate += _integrate_region(
-            grid,
-            sw_params,
-            central_speed,
-            central_effective_area,
-            azimuthal_transmission,
-            azimuthal_transmission_spacing,
-            False,
-            min_el,
-            max_el,
-            min_az,
-            max_az,
-        )
-
-    return count_rate
 
 
 @numba.njit(nogil=True)
@@ -726,66 +724,16 @@ def _exponential_term(sw_params: SWParams, cos_angle: float, speed: float) -> fl
     )
 
 
-@numba.njit(nogil=True)
-def _get_angular_limits(
-    sw_params: SWParams, region: int, grid: PassbandGrid, central_speed: float
-):
-    """Per-region azimuth/elevation integration window.
-
-    Region codes:
-      0  → SG    az ∈ [-20, +20]            (sunglasses passband)
-     -2  → VV-  az ∈ [-VV_OUTER, -20]       (open-aperture passband, vanes-vignetting band)
-     +2  → VV+  az ∈ [+20, +VV_OUTER]       (open-aperture passband, vanes-vignetting band)
-     -1  → OA-  az ∈ [-150, -VV_OUTER]      (open-aperture passband, full transmission)
-     +1  → OA+  az ∈ [+VV_OUTER, +150]      (open-aperture passband, full transmission)
-    """
-    epsilon = EPSILON_SG if region == 0 else EPSILON_OA
-
-    angular_width = (180 / np.pi) * np.arccos(
-        _clamp(
-            sw_params.thermal_speed**2
-            * np.log(epsilon)
-            / (central_speed * sw_params.bulk_speed)
-            + 1,
-            -1,
-            1,
-        )
+@numba.njit(nogil=True, inline="always")
+def _density_area_norm(sw_params: SWParams, central_effective_area: float) -> float:
+    """A_eff · n / (√2π v_th)³ · (km→cm). Multiplied by a phase-space integral in
+    (km/s × rad²) units, gives a count rate in Hz."""
+    return (
+        central_effective_area
+        * sw_params.density
+        * (np.sqrt(2 * np.pi) * sw_params.thermal_speed) ** -3
+        * 1e5
     )
-
-    if region == 0:
-        sg_lo, sg_hi = grid.sg_elevation_range
-        min_elevation, max_elevation = _dynamic_limits(
-            sw_params.bulk_elevation, angular_width, sg_lo, sg_hi
-        )
-        min_azimuth, max_azimuth = _dynamic_limits(
-            sw_params.bulk_azimuth, angular_width, -20.0, 20.0
-        )
-    else:
-        oa_lo, oa_hi = grid.oa_elevation_range
-        min_elevation, max_elevation = _dynamic_limits(
-            sw_params.bulk_elevation, angular_width, oa_lo, oa_hi
-        )
-        if region == -2:
-            min_azimuth, max_azimuth = _dynamic_limits(
-                sw_params.bulk_azimuth, angular_width, -VV_OUTER_DEG, -20.0
-            )
-        elif region == +2:
-            min_azimuth, max_azimuth = _dynamic_limits(
-                sw_params.bulk_azimuth, angular_width, 20.0, VV_OUTER_DEG
-            )
-        elif region == -1:
-            min_azimuth, max_azimuth = _dynamic_limits(
-                sw_params.bulk_azimuth, angular_width, -150.0, -VV_OUTER_DEG
-            )
-        else:
-            min_azimuth, max_azimuth = _dynamic_limits(
-                sw_params.bulk_azimuth, angular_width, VV_OUTER_DEG, 150.0
-            )
-
-    return min_elevation, max_elevation, min_azimuth, max_azimuth
-
-
-N_OA_SCAN = 64
 
 
 @numba.njit(nogil=True)
@@ -853,81 +801,256 @@ def _trim_oa_azimuth_by_integrand(
 
 
 @numba.njit(nogil=True)
-def _dynamic_limits(
-    center: float, width: float, lower_bound: float, upper_bound: float
-):
-    return _clamp(center - width, lower_bound, upper_bound), _clamp(
-        center + width, lower_bound, upper_bound
+def _oa_rate_upper_bound(
+    grid: PassbandGrid,
+    central_speed: float,
+    central_effective_area: float,
+    integral_Tg: float,
+    min_elevation: float,
+    max_elevation: float,
+) -> float:
+    """Heuristic upper estimate of the OA region rate (Hz):
+        Ĉ_OA = A₀ · v₀³ · Δθ · Δv · ∫ T(φ) g(φ) dφ
+    bounding cos(θ) ≤ 1 (giving Δθ) and v³ P(v/v₀, θ) ≤ v₀³ supported on the
+    passband (giving Δv = (r_max(0) - r_min(0))·v₀ at θ = 0°). The azimuth
+    integral is supplied by `_trim_oa_azimuth_by_integrand` with full Maxwellian
+    normalization (i.e. g(φ) = f(v₀, θ_b', φ))."""
+    delta_theta_rad = (math.pi / 180.0) * (max_elevation - min_elevation)
+    delta_v = central_speed * (
+        _eval_boundary(grid, False, 0.0, False) - _eval_boundary(grid, False, 0.0, True)
+    )
+    return (
+        central_effective_area
+        * central_speed**3
+        * delta_theta_rad
+        * delta_v
+        * integral_Tg
+        * KM_TO_CM
     )
 
 
-@numba.njit(nogil=True)
-def _clamp(x: float, lower: float, upper: float) -> float:
-    return min(max(x, lower), upper)
-
-
-@numba.njit(nogil=True)
-def _interpolate_transmission(
+def _optimize(
+    count_rate: ndarray,
+    passband_grids: numba.typed.List,
+    central_speeds: ndarray,
+    central_effective_areas: ndarray,
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
-    azimuth: float,
-) -> float:
-    azimuth = (azimuth + 180) % 360 - 180
-    i_float = abs(azimuth) / azimuthal_transmission_spacing
-    i_lower = int(math.floor(i_float))
-    i_upper = i_lower + 1
+    rotation_matrices: ndarray,
+    initial_guess: ProtonSolarWindMoments,
+) -> ProtonSolarWindMoments:
+    from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
-    n = len(azimuthal_transmission)
-    if i_lower < 0:
-        i_lower = 0
-    elif i_lower >= n:
-        i_lower = n - 1
-    if i_upper < 0:
-        i_upper = 0
-    elif i_upper >= n:
-        i_upper = n - 1
+    def residuals(state):
+        return _residuals_njit(
+            state,
+            count_rate,
+            passband_grids,
+            central_speeds,
+            central_effective_areas,
+            azimuthal_transmission,
+            azimuthal_transmission_spacing,
+            rotation_matrices,
+            PROTON_MASS_KG,
+        )
 
-    weight_lower = float(i_upper) - i_float
-    weight_upper = i_float - float(i_lower)
-    return (
-        azimuthal_transmission[i_lower] * weight_lower
-        + azimuthal_transmission[i_upper] * weight_upper
+    # See docs/swapi/solar-wind-moments.md for diff_step and xtol rationale.
+    def run_lm(initial_state):
+        return scipy.optimize.least_squares(
+            residuals, initial_state, method="lm", diff_step=1e-4, xtol=_LM_XTOL,
+        )
+
+    initial_velocity_r, initial_velocity_t, initial_velocity_n = initial_guess.bulk_velocity_rtn
+    first_lm_result = run_lm(np.array([
+        np.log(initial_guess.density),
+        np.log(initial_guess.temperature),
+        initial_velocity_r, initial_velocity_t, initial_velocity_n,
+    ]))
+
+    spin_axis_rtn = _chunk_spin_axis_rtn(rotation_matrices)
+    final_result = _refine_basin_via_k_rotation_and_iter_flip(
+        first_lm_result,
+        run_lm,
+        count_rate,
+        passband_grids,
+        central_speeds,
+        central_effective_areas,
+        azimuthal_transmission,
+        azimuthal_transmission_spacing,
+        rotation_matrices,
+        spin_axis_rtn,
+    )
+
+    density, temperature, bulk_velocity_rtn = _unpack_state(final_result.x)
+    density_sigma, temperature_sigma, velocity_covariance = (
+        _estimate_parameter_uncertainties(final_result, density, temperature)
+    )
+
+    return ProtonSolarWindMoments(
+        density=ufloat(density, density_sigma),
+        temperature=ufloat(temperature, temperature_sigma),
+        bulk_velocity_rtn=make_correlated_velocity(
+            bulk_velocity_rtn, velocity_covariance
+        ),
+        bad_fit_flag=SwapiL3Flags.NONE if final_result.success else SwapiL3Flags.BAD_FIT,
     )
 
 
-@numba.njit(nogil=True)
-def interpolate_passband(
-    grid: PassbandGrid, is_sunglasses: bool, elevation: float, speed_ratio: float
-) -> float:
-    """Interpolate the V-only passband at the given (elevation, speed_ratio = v / v_0).
+def _refine_basin_via_k_rotation_and_iter_flip(
+    first_lm_result,
+    run_lm,
+    count_rate: ndarray,
+    passband_grids: numba.typed.List,
+    central_speeds: ndarray,
+    central_effective_areas: ndarray,
+    azimuthal_transmission: ndarray,
+    azimuthal_transmission_spacing: float,
+    rotation_matrices: ndarray,
+    spin_axis_rtn: ndarray,
+):
+    """Wrong-basin recovery (see solar-wind-moments.md → "Wrong-basin detection").
 
-    The grid contains passband values on a (elevation, speed_ratio) lattice so this
-    function is species-independent — convert v -> speed_ratio at the call site using
-    the species-specific `central_speed`."""
-    grid_values = grid.values_sunglasses if is_sunglasses else grid.values_open_aperture
+    The proton chi² landscape has a near-degenerate basin obtained by reflecting
+    the bulk velocity across the spin axis, plus secondary basins reachable by
+    other rotations around that axis. Recovery has three phases:
 
-    i_float = (elevation - grid.min_elevation) / grid.elevation_spacing
-    if i_float < 0 or i_float + 1 >= grid_values.shape[0]:
-        return 0.0
+    1. K-rotation analytic verifier — for each of the K-1 non-zero rotations,
+       analytically rescale density and evaluate chi². If the best rotated chi²
+       is too far above LM-1's chi² (ratio ≥ `_VERIFIER_CHI_RATIO_THRESHOLD`),
+       LM-1 has no nearby competing basin and we keep it as-is.
+    2. K-rotation restart — when the verifier triggers, run LM seeded from the
+       best rotated state. Adopt it if it improves chi² past the relative
+       tolerance.
+    3. Iter-flip-LM — from the current best, repeatedly flip 180° around the
+       spin axis and re-run LM, accepting on each chi² improvement until the
+       loop converges (max `_MAX_BASIN_FLIPS` iterations). Each flip is the
+       Rodrigues identity for π-rotation: v' = 2(v·ŝ)ŝ − v."""
+    first_lm_chi2 = float(np.sum(first_lm_result.fun**2))
 
-    j_float = (speed_ratio - grid.min_speed_ratio) / grid.speed_ratio_spacing
-    if j_float < 0 or j_float + 1 >= grid_values.shape[1]:
-        return 0.0
+    rotated_velocity, rotated_density, rotated_chi2 = _best_k_rotation_seed(
+        first_lm_result,
+        count_rate,
+        passband_grids,
+        central_speeds,
+        central_effective_areas,
+        azimuthal_transmission,
+        azimuthal_transmission_spacing,
+        rotation_matrices,
+        spin_axis_rtn,
+    )
 
-    i_lower = int(i_float)
-    i_upper = i_lower + 1
-    i_weight = i_float - i_lower
+    if rotated_chi2 >= first_lm_chi2 * _VERIFIER_CHI_RATIO_THRESHOLD:
+        return first_lm_result
 
-    j_lower = int(j_float)
-    j_upper = j_lower + 1
-    j_weight = j_float - j_lower
+    restart_state = first_lm_result.x.copy()
+    restart_state[2:5] = rotated_velocity
+    if rotated_density > 0.0 and np.isfinite(rotated_density):
+        restart_state[0] = math.log(rotated_density)
+    rotated_lm_result = run_lm(restart_state)
+    rotated_lm_chi2 = float(np.sum(rotated_lm_result.fun**2))
 
-    return (1 - i_weight) * (
-        (1 - j_weight) * grid_values[i_lower, j_lower]
-        + j_weight * grid_values[i_lower, j_upper]
-    ) + i_weight * (
-        (1 - j_weight) * grid_values[i_upper, j_lower]
-        + j_weight * grid_values[i_upper, j_upper]
+    if rotated_lm_chi2 < first_lm_chi2 * (1.0 - _BASIN_FLIP_REL_TOL):
+        current_result = rotated_lm_result
+        current_chi2 = rotated_lm_chi2
+    else:
+        current_result = first_lm_result
+        current_chi2 = first_lm_chi2
+
+    for _ in range(_MAX_BASIN_FLIPS):
+        v_rtn = current_result.x[2:5]
+        v_flipped = 2.0 * float(np.dot(v_rtn, spin_axis_rtn)) * spin_axis_rtn - v_rtn
+        flipped_state = current_result.x.copy()
+        flipped_state[2:5] = v_flipped
+        flipped_lm_result = run_lm(flipped_state)
+        flipped_lm_chi2 = float(np.sum(flipped_lm_result.fun**2))
+        if flipped_lm_chi2 < current_chi2 * (1.0 - _BASIN_FLIP_REL_TOL):
+            current_result = flipped_lm_result
+            current_chi2 = flipped_lm_chi2
+        else:
+            break
+
+    return current_result
+
+
+def _best_k_rotation_seed(
+    lm_result,
+    count_rate: ndarray,
+    passband_grids: numba.typed.List,
+    central_speeds: ndarray,
+    central_effective_areas: ndarray,
+    azimuthal_transmission: ndarray,
+    azimuthal_transmission_spacing: float,
+    rotation_matrices: ndarray,
+    spin_axis_rtn: ndarray,
+) -> tuple[ndarray, float, float]:
+    """Search the K-1 non-zero spin-axis rotations of the LM bulk velocity.
+    For each rotated state, density is analytically rescaled to minimize chi²
+    in closed form (no LM here — just a forward-model evaluation per rotation).
+    Returns (rotated_velocity, rotated_density, rotated_chi2) of the rotation
+    with the lowest chi²."""
+    density, temperature, bulk_velocity = _unpack_state(lm_result.x)
+    best_velocity = bulk_velocity
+    best_density = density
+    best_chi2 = math.inf
+    n_residuals = len(count_rate)
+    for rotation_index in range(1, _GRID_K):
+        rotation_angle_rad = 2.0 * math.pi * rotation_index / _GRID_K
+        rotated_velocity = _rotate_about_axis(
+            bulk_velocity, spin_axis_rtn, rotation_angle_rad
+        )
+        predicted_obs_rate = apply_deadtime_correction_array(
+            _model_count_rates(
+                density,
+                temperature,
+                rotated_velocity,
+                passband_grids,
+                central_speeds,
+                central_effective_areas,
+                azimuthal_transmission,
+                azimuthal_transmission_spacing,
+                rotation_matrices,
+                PROTON_MASS_KG,
+            )
+        )
+        density_scale = _optimal_density_scale(predicted_obs_rate, count_rate)
+        rotated_chi2 = float(
+            np.sum((density_scale * predicted_obs_rate - count_rate) ** 2)
+        )
+        if rotated_chi2 < best_chi2:
+            best_chi2 = rotated_chi2
+            best_velocity = rotated_velocity
+            best_density = density_scale * density
+    return best_velocity, best_density, best_chi2
+
+
+def _estimate_parameter_uncertainties(
+    lm_result, density: float, temperature: float
+) -> tuple[float, float, ndarray]:
+    """Estimate (σ_density, σ_temperature, velocity_covariance) from the LM Jacobian.
+
+    Uses the reduced-χ² scaled covariance Σ = s² (JᵀJ)⁺ where s² = Σrᵢ²/(N−p),
+    equivalent to scipy.optimize.curve_fit with absolute_sigma=False (residuals
+    are unweighted, so s² absorbs measurement noise + model imperfection).
+    See `Parameter uncertainties` in solar-wind-moments.md.
+
+    The state ordering is [log n, log T, v_R, v_T, v_N], so log-space variances
+    on indices 0,1 transform to absolute σ via σ_n = n·√Σ₀₀ and σ_T = T·√Σ₁₁."""
+    try:
+        n_residuals, n_parameters = len(lm_result.fun), len(lm_result.x)
+        reduced_chi_squared = (
+            float(np.sum(lm_result.fun**2)) / max(n_residuals - n_parameters, 1)
+        )
+        parameter_covariance = (
+            reduced_chi_squared * np.linalg.pinv(lm_result.jac.T @ lm_result.jac)
+        )
+    except np.linalg.LinAlgError:
+        return np.nan, np.nan, np.full((3, 3), np.nan)
+    log_density_variance = max(parameter_covariance[0, 0], 0.0)
+    log_temperature_variance = max(parameter_covariance[1, 1], 0.0)
+    return (
+        float(density * np.sqrt(log_density_variance)),
+        float(temperature * np.sqrt(log_temperature_variance)),
+        parameter_covariance[2:5, 2:5],
     )
 
 
@@ -935,7 +1058,6 @@ def interpolate_passband(
 def _residuals_njit(
     x,
     count_rate,
-    sigma,
     passband_grids,
     central_speeds,
     central_effective_areas,
@@ -944,9 +1066,7 @@ def _residuals_njit(
     rotation_matrices,
     mass_kg,
 ):
-    density = np.exp(x[0])
-    temperature = np.exp(x[1])
-    bulk_velocity_rtn = x[2:5]
+    density, temperature, bulk_velocity_rtn = _unpack_state(x)
     model_true = _model_count_rates(
         density,
         temperature,
@@ -960,7 +1080,30 @@ def _residuals_njit(
         mass_kg,
     )
     model_obs = apply_deadtime_correction_array(model_true)
-    return (model_obs - count_rate) / sigma
+    return model_obs - count_rate
+
+
+@numba.njit(inline="always")
+def _unpack_state(x: ndarray) -> tuple[float, float, ndarray]:
+    """Decode the LM parameter vector [log n, log T, v_R, v_T, v_N] into (n, T, v)."""
+    return math.exp(x[0]), math.exp(x[1]), x[2:5]
+
+
+def _pack_state(density: float, temperature: float, bulk_velocity: ndarray) -> ndarray:
+    return np.array([math.log(density), math.log(temperature), *bulk_velocity])
+
+
+@numba.njit(nogil=True)
+def apply_deadtime_correction_array(true_rates: ndarray) -> ndarray:
+    """Vectorized deadtime correction. Applied at the residual stage so that for the
+    two-species fit it acts on the *combined* (proton + alpha) true rate."""
+    return true_rates / (1.0 + SWAPI_DEADTIME_S * true_rates)
+
+
+def _optimal_density_scale(predicted: ndarray, observed: ndarray) -> float:
+    # Minimizes ‖scale·predicted − observed‖²; solution is scale = (m·r)/(m·m).
+    mm = float(np.dot(predicted, predicted))
+    return float(np.dot(predicted, observed)) / mm if mm > 0.0 else 1.0
 
 
 def _evaluate_rotated_chi(
@@ -973,26 +1116,17 @@ def _evaluate_rotated_chi(
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
     rotation_matrices: ndarray,
-    spin_axis_rtn: ndarray,
 ) -> tuple:
-    v_lm = lm_result.x[2:5]
-    s = spin_axis_rtn
-    cos_t = math.cos(theta)
-    sin_t = math.sin(theta)
-    cross = np.array(
-        [
-            s[1] * v_lm[2] - s[2] * v_lm[1],
-            s[2] * v_lm[0] - s[0] * v_lm[2],
-            s[0] * v_lm[1] - s[1] * v_lm[0],
-        ]
-    )
-    sdotv = float(np.dot(s, v_lm))
-    v_rot = v_lm * cos_t + cross * sin_t + s * sdotv * (1.0 - cos_t)
-    model_obs = apply_deadtime_correction_array(
+    density, temperature, bulk_velocity = _unpack_state(lm_result.x)
+
+    spin_axis = _chunk_spin_axis_rtn(rotation_matrices)
+    rotated_velocity = _rotate_about_axis(bulk_velocity, spin_axis, theta)
+
+    predicted_count_rate = apply_deadtime_correction_array(
         _model_count_rates(
-            math.exp(lm_result.x[0]),
-            math.exp(lm_result.x[1]),
-            v_rot,
+            density,
+            temperature,
+            rotated_velocity,
             passband_grids,
             central_speeds,
             central_effective_areas,
@@ -1002,131 +1136,102 @@ def _evaluate_rotated_chi(
             PROTON_MASS_KG,
         )
     )
-    s2 = float(np.dot(model_obs, model_obs))
-    alpha = float(np.dot(model_obs, count_rate)) / s2 if s2 > 0.0 else 1.0
-    chi = float(np.sum((alpha * model_obs - count_rate) ** 2))
-    n_opt = alpha * math.exp(lm_result.x[0])
-    return chi, v_rot, n_opt
+
+    density_scale = _optimal_density_scale(predicted_count_rate, count_rate)
+    mse = float(np.mean((density_scale * predicted_count_rate - count_rate) ** 2))
+    return mse, rotated_velocity, density_scale * density
 
 
-def _optimize(
-    count_rate: ndarray,
-    passband_grids: numba.typed.List,
-    central_speeds: ndarray,
-    central_effective_areas: ndarray,
-    azimuthal_transmission: ndarray,
-    azimuthal_transmission_spacing: float,
-    rotation_matrices: ndarray,
-    initial_guess: ProtonSolarWindMoments,
-    spin_axis_rtn: ndarray = None,
-) -> ProtonSolarWindMoments:
-    from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
+def _chunk_spin_axis_rtn(rotation_matrices: ndarray) -> ndarray:
+    axis = rotation_matrices[:, 1, :].mean(axis=0)
+    return axis / np.linalg.norm(axis)
 
-    vr0, vt0, vn0 = initial_guess.bulk_velocity_rtn
 
-    sigma = np.ones(len(count_rate))
-
-    if spin_axis_rtn is None:
-        spin_axis_rtn = rotation_matrices[0, 1, :].copy()
-
-    x0 = np.array(
-        [
-            np.log(initial_guess.density),
-            np.log(initial_guess.temperature),
-            vr0,
-            vt0,
-            vn0,
-        ]
+def _rotate_about_axis(v: ndarray, axis: ndarray, angle: float) -> ndarray:
+    # Rodrigues' formula: v cosθ + (axis × v) sinθ + axis (axis·v)(1 − cosθ)
+    cos_t, sin_t = math.cos(angle), math.sin(angle)
+    return (
+        v * cos_t
+        + np.cross(axis, v) * sin_t
+        + axis * float(np.dot(axis, v)) * (1.0 - cos_t)
     )
 
-    def residuals(x):
-        return _residuals_njit(
-            x,
-            count_rate,
-            sigma,
-            passband_grids,
-            central_speeds,
-            central_effective_areas,
-            azimuthal_transmission,
-            azimuthal_transmission_spacing,
-            rotation_matrices,
-            PROTON_MASS_KG,
+
+def make_correlated_velocity(
+    v_mean: ndarray, v_cov: ndarray
+) -> tuple[UFloat, UFloat, UFloat]:
+    """Build a correlated 3-tuple of UFloats from (mean, covariance). Falls
+    back to independent NaN-σ UFloats if the covariance is non-finite or
+    `correlated_values` rejects it (LinAlg failures, NaN fills, etc.)."""
+    if np.all(np.isfinite(v_cov)):
+        try:
+            return tuple(correlated_values(v_mean, v_cov))
+        except Exception:
+            pass
+    return tuple(ufloat(float(v), np.nan) for v in v_mean)
+
+
+def derive_velocity_angles(
+    fitting_result: "ProtonSolarWindMoments",
+    epoch_tt2000_ns: float,
+) -> tuple:
+    """Return (speed, clock_angle, deflection_angle) as ufloats in the DPS frame.
+
+    Speed uncertainty is propagated automatically by the ``uncertainties``
+    package (first-order delta method via ``umath.sqrt(Σ xᵢ²)``), which is
+    essentially exact whenever ``|u| >> σ``. Clock and deflection angles, by contrast, have
+    arctan2/arccos gradients that scale as ``1/v_xy²`` and ``1/(s²·v_xy)``,
+    which underestimate σ severely whenever ``σ_xy`` is comparable to
+    ``v_xy`` — the typical SWAPI regime, since the bulk velocity is
+    dominated by the spin-axis component. Their σ are computed by drawing
+    ``N_VELOCITY_ANGLE_MC_SAMPLES`` velocity samples from
+    ``MultivariateNormal(u, cov)`` and applying the transforms per-sample.
+    Clock-angle σ uses residuals wrapped to (-180°, 180°] so the 0°/360°
+    branch cut doesn't inflate the spread.
+    """
+    from imap_l3_processing.swapi.l3a.utils import rotate_rtn_to_dps
+
+    u_unc = rotate_rtn_to_dps(
+        np.array(fitting_result.bulk_velocity_rtn), epoch_tt2000_ns
+    )
+    u = unp.nominal_values(u_unc)
+    cov_DPS = np.array(covariance_matrix(u_unc))
+
+    speed_nom = float(np.linalg.norm(u))
+    clock_nom = float(np.degrees(np.arctan2(u[1], u[0])) % 360)
+    defl_nom = float(np.degrees(np.arccos(-u[2] / speed_nom)))
+
+    if not np.all(np.isfinite(cov_DPS)):
+        return (
+            ufloat(speed_nom, np.nan),
+            ufloat(clock_nom, np.nan),
+            ufloat(defl_nom, np.nan),
         )
 
-    # See docs/swapi/solar-wind-moments.md for diff_step rationale. xtol is
-    # loosened from scipy default; see _LM_XTOL.
-    result = scipy.optimize.least_squares(
-        residuals,
-        x0,
-        method="lm",
-        diff_step=1e-4,
-        xtol=_LM_XTOL,
+    speed = umath.sqrt(sum(x**2 for x in u_unc))
+
+    rng = np.random.default_rng(0)
+    samples = rng.multivariate_normal(
+        u, cov_DPS, size=N_VELOCITY_ANGLE_MC_SAMPLES, check_valid="ignore"
     )
 
-    chi2 = float(np.sum(result.fun**2))
-    best_chi = math.inf
-    best_v = None
-    best_n = None
-    for k in range(1, _GRID_K):
-        theta = 2.0 * math.pi * k / _GRID_K
-        chi_k, v_k, n_k = _evaluate_rotated_chi(
-            result,
-            theta,
-            count_rate,
-            passband_grids,
-            central_speeds,
-            central_effective_areas,
-            azimuthal_transmission,
-            azimuthal_transmission_spacing,
-            rotation_matrices,
-            spin_axis_rtn,
-        )
-        if chi_k < best_chi:
-            best_chi = chi_k
-            best_v = v_k
-            best_n = n_k
-    if best_v is not None and best_chi / max(chi2, 1e-12) < _GRID_THRESHOLD:
-        x_seed = result.x.copy()
-        x_seed[2:5] = best_v
-        if best_n is not None and best_n > 0.0 and np.isfinite(best_n):
-            x_seed[0] = math.log(best_n)
-        result_grid = scipy.optimize.least_squares(
-            residuals,
-            x_seed,
-            method="lm",
-            diff_step=1e-4,
-            xtol=_LM_XTOL,
-        )
-        chi2_grid = float(np.sum(result_grid.fun**2))
-        if chi2_grid < chi2 * (1.0 - _BASIN_FLIP_REL_TOL):
-            result = result_grid
-            chi2 = chi2_grid
+    clocks = np.degrees(np.arctan2(samples[:, 1], samples[:, 0])) % 360.0
+    clock_resid = ((clocks - clock_nom + 180.0) % 360.0) - 180.0
+    clock_sigma = float(np.std(clock_resid, ddof=1))
 
-    density = float(np.exp(result.x[0]))
-    temperature = float(np.exp(result.x[1]))
-    bulk_velocity_rtn = result.x[2:5]
-    bad_fit_flag = SwapiL3Flags.NONE if result.success else SwapiL3Flags.BAD_FIT
+    sample_speeds = np.linalg.norm(samples, axis=1)
+    defls = np.degrees(np.arccos(np.clip(-samples[:, 2] / sample_speeds, -1.0, 1.0)))
+    defl_sigma = float(np.std(defls, ddof=1))
 
-    # Covariance in (log n, log T, vR, vT, vN) space via Moore-Penrose pseudoinverse,
-    # scaled by reduced chi² so uncertainties reflect actual residual scatter rather
-    # than assumed Poisson noise (equivalent to curve_fit with absolute_sigma=False).
-    try:
-        n_data, n_params = len(result.fun), len(result.x)
-        s_sq = float(np.sum(result.fun**2)) / max(n_data - n_params, 1)
-        cov_x = s_sq * np.linalg.pinv(result.jac.T @ result.jac)
-        density_sigma = float(density * np.sqrt(max(cov_x[0, 0], 0.0)))
-        temperature_sigma = float(temperature * np.sqrt(max(cov_x[1, 1], 0.0)))
-        velocity_covariance = cov_x[2:5, 2:5]
-    except np.linalg.LinAlgError:
-        density_sigma = np.nan
-        temperature_sigma = np.nan
-        velocity_covariance = np.full((3, 3), np.nan)
-
-    return ProtonSolarWindMoments(
-        density=ufloat(density, density_sigma),
-        temperature=ufloat(temperature, temperature_sigma),
-        bulk_velocity_rtn=make_correlated_velocity(
-            bulk_velocity_rtn, velocity_covariance
-        ),
-        bad_fit_flag=bad_fit_flag,
+    return (
+        speed,
+        ufloat(clock_nom, clock_sigma),
+        ufloat(defl_nom, defl_sigma),
     )
+
+
+@numba.njit(nogil=True)
+def apply_deadtime_correction(true_rate: float) -> float:
+    """Scalar deadtime correction (kept for back-compat with tests).
+    Use `apply_deadtime_correction_array` for the vectorized form used by the residual."""
+    return true_rate / (1.0 + SWAPI_DEADTIME_S * true_rate)

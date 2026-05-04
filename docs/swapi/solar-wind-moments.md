@@ -263,21 +263,41 @@ Steps below 10% of the peak count rate are dropped: they carry essentially no pr
 
 Density and temperature are parameterized in log-space to keep them positive throughout optimization. The optimizer's `success` flag is mapped to `bad_fit_flag`: failure sets `BAD_FIT`.
 
-#### Wrong-basin detection (K-rotation grid + conditional LM)
+#### Wrong-basin detection (K-rotation verifier + iter-flip-LM)
 
-The forward model is approximately invariant under the spin-axis mirror $(v_T, v_N) \rightarrow (-v_T, -v_N)$, broken only weakly by the SG passband elevation asymmetry ($[-10.5°, +7°]$). The two basins are *not* truly degenerate — the truth is the global minimum, and the mirror is a local minimum with $\chi^2$ typically $100$–$500\times$ higher. A single LM run can converge to either basin depending on the initial guess and noise, and once committed it stays trapped at its local minimum.
+The proton fit has two nearby basins related by a mirror across the spin axis: roughly $(v_T, v_N) \rightarrow (-v_T, -v_N)$. The symmetry is not exact, because the sunglasses (SG) passband has a slightly asymmetric elevation range ($[-10.5^\circ, +7^\circ]$). In synthetic tests, the physical solution is the global minimum, while the mirror solution is only a local minimum and usually has $\chi^2$ about $100$ to $500\times$ larger. A small fraction of cases (slow, cold plasma with large transverse velocity) also expose secondary local minima reached by intermediate rotations rather than the pure 180° mirror.
 
-After LM-1 converges to $\hat{\mathbf{x}} = (\log n, \log T, \mathbf{v}_b)$, a **K-rotation grid** is evaluated around the spin axis $\hat{\mathbf{s}}$ (recovered as the second row of any rotation matrix, since $R_i \hat{\mathbf{s}} = \hat{\mathbf{y}}_\text{SWAPI}$ by design). For each non-zero rotation angle $\theta_k = k \cdot 2\pi / K$, $k = 1, \ldots, K-1$ (with $K = 4$, giving 3 evaluations at 90°, 180°, and 270°), the bulk velocity is rotated via Rodrigues' formula:
+LM is local, so the first solve can still converge to a wrong basin and stay there. The recovery procedure has three phases: (1) a cheap K-rotation analytic verifier that decides whether wrong-basin recovery should run at all, (2) one LM restart seeded from the best rotated state, and (3) iter-flip-LM that repeatedly mirrors across the spin axis until $\chi^2$ stops improving.
+
+Let the first LM result be $\hat{\mathbf{x}} = (\log n, \log T, \mathbf{v}_b)$, with residual sum-of-squares $\chi^2_\text{LM-1}$. The spin axis $\hat{\mathbf{s}}$ in RTN is recovered by averaging the second row of all RTN→SWAPI rotation matrices in the chunk and renormalizing — $R_i \hat{\mathbf{s}} = \hat{\mathbf{y}}_\text{SWAPI}$, so each $R_i[1, :]$ is $\hat{\mathbf{s}}$ at time $t_i$, and over a 5-sweep chunk the variation across $i$ is small (averaging then renormalizing absorbs sub-percent attitude motion).
+
+##### Phase 1 — K-rotation analytic verifier
+
+With $K = 4$, the grid tests the three non-zero rotations around $\hat{\mathbf{s}}$: $90^\circ$, $180^\circ$, and $270^\circ$. For each $\theta_k = 2\pi k/K$, the candidate velocity is the Rodrigues rotation
 $$\mathbf{v}_b^{(k)} = \mathbf{v}_b \cos\theta_k + (\hat{\mathbf{s}} \times \mathbf{v}_b)\sin\theta_k + \hat{\mathbf{s}}\,(\hat{\mathbf{s}} \cdot \mathbf{v}_b)(1 - \cos\theta_k).$$
-The forward model is evaluated at each rotated velocity with a closed-form density rescale: given model $\mathbf{m}$ and observed $\mathbf{r}$, the optimal scale is $\alpha = (\mathbf{m} \cdot \mathbf{r}) / (\mathbf{m} \cdot \mathbf{m})$, giving $\chi^2_k = \|\alpha\mathbf{m} - \mathbf{r}\|^2$ cheaply (one forward-model evaluation per grid point, no LM).
+Each candidate gets one forward-model evaluation; density is rescaled analytically (no LM here):
+$$\alpha = \frac{\mathbf{m} \cdot \mathbf{r}}{\mathbf{m} \cdot \mathbf{m}}, \qquad \chi^2_k = \|\alpha\mathbf{m} - \mathbf{r}\|^2.$$
+Let $\chi^2_\text{rot}$ be the minimum across $k$. The verifier triggers Phase 2 only when
+$$\frac{\chi^2_\text{rot}}{\chi^2_\text{LM-1}} < \texttt{\_VERIFIER\_CHI\_RATIO\_THRESHOLD} = 5000.$$
+The threshold is generous: even when the rotated point analytically scores far worse than LM-1, an LM solve from that seed can still walk downhill into the true basin (verified empirically — see "Wrong-basin verifier sweep" below). For LM-1 already in the truth basin, every rotated point sits at the spin-axis mirror's much-higher $\chi^2$, so the verifier doesn't trigger and there are no extra LM solves.
 
-If the best grid $\chi^2$ / LM-1 $\chi^2 < $ `_GRID_THRESHOLD` (= 50), a second LM run is launched from the grid winner with `n_opt` substituted into the log-density seed. The grid winner is accepted over LM-1 only if the second LM improves $\chi^2$ by more than `_BASIN_FLIP_REL_TOL` (= $10^{-3}$). The design is always-on (no verifier gate): the bounded cost is $K-1 = 3$ forward-model evaluations plus at most one additional LM run. Worst-case is 2 LM runs; typical is 2 LM runs (second LM does not improve because LM-1 was already in the truth basin).
+##### Phase 2 — Restart LM from the best rotated seed
 
-The grid covers the mirror basin (at $\theta = 180°$) and two intermediate rotations (90°, 270°). The $K=4$ value was chosen by sweeping $K \in \{2, 3, 4, 6, 8\}$ against the synthetic benchmark; $K=4$ is the minimum that reliably fires on truth-basin-reachable saddle starts while keeping per-fit cost bounded. A threshold of 50 is permissive enough to fire on all mirror-basin convergences without triggering unnecessary second LM runs on already-correct fits.
+When the verifier triggers, a second LM run is seeded from the rotation argmin: the rotated $\mathbf{v}_b^{(k^*)}$ for $k^* = \arg\min_k \chi^2_k$, with $\log n$ updated to the analytic rescale. The restart replaces LM-1 only if it improves $\chi^2$ by more than `_BASIN_FLIP_REL_TOL` ($10^{-3}$ relative); the relative-tolerance margin breaks ties between near-equivalent basins so Phase 3 cannot oscillate.
 
-![χ² landscape in the (v_T, v_N) plane showing the truth and spin-axis-mirror minima](figures/wrong_basin.png)
+##### Phase 3 — Iter-flip-LM until convergence
 
-*Generated by `docs/swapi/figure_src/plot_wrong_basin.py`. The mirror minimum has $\chi^2$ roughly $200\times$ the truth — the 180° grid point (at $k=2$) detects this with a single forward-model evaluation and the threshold check fires the second LM.*
+From the current best (LM-1 or the Phase-2 restart), iter-flip applies the 180° spin-axis reflection
+$$\mathbf{v}' = 2(\mathbf{v} \cdot \hat{\mathbf{s}})\hat{\mathbf{s}} - \mathbf{v}$$
+and runs LM from the flipped seed. If $\chi^2$ improves past `_BASIN_FLIP_REL_TOL`, the flipped result becomes the new best and the loop continues; otherwise it terminates. The cap is `_MAX_BASIN_FLIPS = 6`. In practice convergence happens in 1–2 flips: the loop catches the case where Phase 2 lands in the opposite mirror basin (typical of Phase-2 restarts in slow/cold-plasma cases) and a second flip from there reaches truth.
+
+##### Cost
+
+Phase 1 costs $K-1 = 3$ forward-model evaluations on every fit (cheap relative to one LM solve). Phases 2 and 3 only run when the verifier triggers, contributing 1 + (1 to `_MAX_BASIN_FLIPS`) extra LM solves on the triggered fraction. On the 10000-case synthetic benchmark this works out to ~+35% wall time over a no-recovery baseline, with all 6 spin-axis-mirror failures resolved.
+
+![Chi-squared landscape in the (v_T, v_N) plane showing the truth and spin-axis-mirror minima](figures/wrong_basin.png)
+
+*Generated by `docs/swapi/figure_src/plot_wrong_basin.py`. In this example, the mirror minimum has $\chi^2$ roughly $200\times$ the true minimum. The Phase-2 restart from the $180^\circ$ rotation reaches the opposite basin with one LM solve.*
 
 > **Note on `diff_step`.** The default finite-difference step in `least_squares` scales with the parameter magnitude, producing steps of $\sim 10^{-8}\ \text{km/s}$ for $v_T,\, v_N$ near zero. For cold plasma ($T \lesssim 60{,}000\ \text{K}$), the resulting count-rate perturbation falls below the GL-quadrature noise floor, making the numerical Jacobian for $v_T$ and $v_N$ pure noise and inflating the LM damping factor to $\sim 10^{13}$, which freezes all parameters. `diff_step=1e-4` is the empirical optimum over $\{10^{-5}, 10^{-4}, 10^{-3}, 10^{-2}, 10^{-1}\}$: it sits above the noise floor (giving a clean Jacobian and correct convergence) while keeping the linearization error small enough not to degrade accuracy ($10^{-2}$ degrades $v_N$ RMSE; $10^{-1}$ produces bad fits and a 5× slowdown).
 

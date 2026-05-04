@@ -1,5 +1,7 @@
 import math
 import unittest
+
+import scipy.optimize
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
@@ -20,6 +22,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     _compute_angles,
     _model_count_rates,
     _evaluate_rotated_chi,
+    _optimal_density_scale,
     apply_deadtime_correction_array,
     _optimize,
     apply_deadtime_correction,
@@ -27,7 +30,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     fit_solar_wind_proton_moments,
     interpolate_passband,
     _interpolate_transmission,
-    _get_angular_limits,
+    _integration_window,
     SWParams,
     ProtonSolarWindMoments,
     SWAPI_LIVETIME_S,
@@ -1546,7 +1549,7 @@ class TestInterpolateTransmissionBoundary(unittest.TestCase):
 
 
 class TestGetAngularLimits(unittest.TestCase):
-    """Verify _get_angular_limits clamps to the correct per-region passband bounds:
+    """Verify _integration_window clamps to the correct per-region passband bounds:
       SG  (region=0):  elevation ∈ [−11°, 7°],   azimuth ∈ [−20°, 20°]
       OA− (region=−1): elevation ∈ [−12°, 10°],  azimuth ∈ [−150°, −20°]
       OA+ (region=+1): elevation ∈ [−12°, 10°],  azimuth ∈ [20°, 150°]
@@ -1565,32 +1568,32 @@ class TestGetAngularLimits(unittest.TestCase):
     def test_sg_elevation_clamped_to_sg_passband_bounds(self):
         # bulk_elevation outside the SG active range should be clamped to [-10.5, 7]
         sw = _make_sw_params(bulk_elevation=12.0)
-        min_el, max_el, _, _ = _get_angular_limits(sw, 0, self.grid, self.cs)
+        min_el, max_el, _, _ = _integration_window(sw, 0, self.grid, self.cs)
         self.assertGreaterEqual(min_el, -10.5)
         self.assertLessEqual(max_el, 7.0)
 
     def test_oa_elevation_clamped_to_oa_passband_bounds(self):
         # bulk_elevation outside the OA active range should be clamped to [-12, 10.5]
         sw = _make_sw_params(bulk_elevation=15.0)
-        min_el, max_el, _, _ = _get_angular_limits(sw, 1, self.grid, self.cs)
+        min_el, max_el, _, _ = _integration_window(sw, 1, self.grid, self.cs)
         self.assertGreaterEqual(min_el, -12.0)
         self.assertLessEqual(max_el, 10.5)
 
     def test_sg_azimuth_limited_to_sg_range(self):
         sw = _make_sw_params(bulk_azimuth=0.0)
-        _, _, min_az, max_az = _get_angular_limits(sw, 0, self.grid, self.cs)
+        _, _, min_az, max_az = _integration_window(sw, 0, self.grid, self.cs)
         self.assertGreaterEqual(min_az, -20.0)
         self.assertLessEqual(max_az, 20.0)
 
     def test_oa_neg_azimuth_clamped_to_oa_neg_range(self):
         sw = _make_sw_params(bulk_azimuth=-90.0)
-        _, _, min_az, max_az = _get_angular_limits(sw, -1, self.grid, self.cs)
+        _, _, min_az, max_az = _integration_window(sw, -1, self.grid, self.cs)
         self.assertGreaterEqual(min_az, -150.0)
         self.assertLessEqual(max_az, -20.0)
 
     def test_oa_pos_azimuth_clamped_to_oa_pos_range(self):
         sw = _make_sw_params(bulk_azimuth=90.0)
-        _, _, min_az, max_az = _get_angular_limits(sw, 1, self.grid, self.cs)
+        _, _, min_az, max_az = _integration_window(sw, 1, self.grid, self.cs)
         self.assertGreaterEqual(min_az, 20.0)
         self.assertLessEqual(max_az, 150.0)
 
@@ -1599,7 +1602,7 @@ class TestGetAngularLimits(unittest.TestCase):
         sw = _make_sw_params(
             bulk_elevation=0.0, temperature_k=1.0 * EV_TO_KELVIN
         )  # narrow window
-        min_el, max_el, _, _ = _get_angular_limits(sw, 0, self.grid, self.cs)
+        min_el, max_el, _, _ = _integration_window(sw, 0, self.grid, self.cs)
         self.assertGreater(min_el, -11.0)
         self.assertLess(max_el, 7.0)
 
@@ -1822,7 +1825,8 @@ class TestEvaluateRotatedChi(unittest.TestCase):
             sr, all_voltages
         )
         cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
-        cls.spin_axis = cls.rot[0, 1, :].copy()
+        axis = cls.rot[:, 1, :].mean(axis=0)
+        cls.spin_axis = axis / np.linalg.norm(axis)
         cls.count_rate = _model_count_rates(
             cls.true_density,
             cls.true_temperature,
@@ -1858,7 +1862,6 @@ class TestEvaluateRotatedChi(unittest.TestCase):
             self.at,
             self.ats,
             self.rot,
-            self.spin_axis,
         )
 
     def test_zero_angle_returns_input_velocity(self):
@@ -1908,6 +1911,37 @@ class TestEvaluateRotatedChi(unittest.TestCase):
             self.true_density, self.true_temperature, self.true_velocity, math.pi
         )
         self.assertGreater(chi_pi, chi_zero * 100.0)
+
+
+class TestOptimalDensityScale(unittest.TestCase):
+    def _scipy_minimize(self, predicted, observed):
+        result = scipy.optimize.minimize_scalar(
+            lambda s: np.sum((s * predicted - observed) ** 2)
+        )
+        return result.x
+
+    def test_matches_scipy_random_vectors(self):
+        rng = np.random.default_rng(0)
+        predicted = rng.uniform(0.1, 100.0, size=50)
+        observed = rng.uniform(0.1, 100.0, size=50)
+        np.testing.assert_allclose(
+            _optimal_density_scale(predicted, observed),
+            self._scipy_minimize(predicted, observed),
+            rtol=1e-10,
+        )
+
+    def test_matches_scipy_when_scale_less_than_one(self):
+        rng = np.random.default_rng(1)
+        predicted = rng.uniform(10.0, 200.0, size=30)
+        observed = predicted * 0.3 + rng.normal(0, 0.5, size=30)
+        np.testing.assert_allclose(
+            _optimal_density_scale(predicted, observed),
+            self._scipy_minimize(predicted, observed),
+            rtol=1e-10,
+        )
+
+    def test_zero_predicted_returns_one(self):
+        self.assertEqual(_optimal_density_scale(np.zeros(5), np.ones(5)), 1.0)
 
 
 if __name__ == "__main__":

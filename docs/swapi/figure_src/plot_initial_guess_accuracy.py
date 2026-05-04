@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import time
 import os
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor  # noqa: F401
+import multiprocessing as mp
 import numpy as np
 import numba
 import spacepy.pycdf
@@ -235,6 +235,10 @@ def _run_cases(voltages: np.ndarray) -> dict:
     # in pure Python), so threads give no speedup. Use processes; each worker initialises
     # its own SWAPIResponse + passband-grid typed.List once via initializer, then runs
     # a contiguous chunk of cases.
+    #
+    # multiprocessing.Pool is used instead of concurrent.futures.ProcessPoolExecutor
+    # because the latter calls os.sysconf("SC_SEM_NSEMS_MAX") at construction time,
+    # which raises PermissionError under restricted sandboxes (e.g. Claude Code).
     n_workers = max(1, (os.cpu_count() or 1))
     chunks = [
         range(start, min(start + (_N_SAMPLES + n_workers - 1) // n_workers, _N_SAMPLES))
@@ -245,13 +249,13 @@ def _run_cases(voltages: np.ndarray) -> dict:
         f"({len(chunks)} chunks)..."
     )
     t0 = time.perf_counter()
-    with ProcessPoolExecutor(
-        max_workers=n_workers,
+    with mp.Pool(
+        processes=n_workers,
         initializer=_init_worker,
         initargs=(voltages, params),
     ) as pool:
         rows = []
-        for chunk_rows in pool.map(_process_chunk, chunks):
+        for chunk_rows in pool.imap(_process_chunk, chunks):
             rows.extend(chunk_rows)
     print(f"  Fits done in {time.perf_counter() - t0:.1f}s.")
 
