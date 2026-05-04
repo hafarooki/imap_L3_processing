@@ -3,11 +3,15 @@
 Scatter plots comparing the SWAPI proton-moments fit against ground truth on
 **real solar wind conditions** sampled from WIND/SWE 2-min ASCII data.
 
-Uses **only the 62 coarse-sweep bins** (indices 1..62 of the 72-bin sweep) —
-i.e., none of the 9 fine-sweep bins clustered around the proton peak. The
-motivation is to show that the fit recovers (n, T, v_R, v_T, v_N) accurately
-even when fine-sweep coverage is unavailable, relying on the coarse passband
-shape alone.
+Toggle `INCLUDE_FINE_SWEEPS` at the top of this module:
+  - False (default): use only the 62 coarse-sweep bins (indices 1..62), to
+    show the fit recovers (n, T, v_R, v_T, v_N) without fine-sweep coverage.
+  - True: include the 9 fine-sweep bins (indices 63..71) clustered near the
+    proton peak. Fine-sweep voltages come from a real example sweep
+    (imap_swapi_l2_sci_20260204_v002.cdf, sweep 0; see plot_l2_sweep.py).
+
+Per-sweep RTN→SWAPI rotation matrices are pulled from SPICE kernels at sweep
+midpoints offset from `_BASE_TIMESTAMP`.
 
 Synthetic count rates are produced from the SWAPI forward model (5 sweeps per
 fit, Poisson noise); the ground truth is read from a CSV produced by
@@ -17,7 +21,7 @@ Generate the CSV first:
   conda run -n imapL3 python scripts/swapi/sample_wind_solar_wind.py \
       --year 2025 --n 10000 --seed 7
 
-Output: docs/swapi/figures/fit_accuracy.png
+Output: docs/swapi/figures/fit_accuracy[_with_fine].png
 Usage:  conda run -n imapL3 python docs/swapi/figure_src/plot_fit_accuracy.py
 """
 
@@ -30,9 +34,12 @@ import os
 import time
 import types
 import multiprocessing
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import numba
+import spiceypy
 from tqdm.contrib.concurrent import process_map
 from uncertainties import UFloat
 import matplotlib
@@ -44,6 +51,8 @@ from imap_l3_processing.constants import (
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
+from imap_l3_processing.utils import furnish_local_spice
+from imap_processing.spice.geometry import SpiceFrame, get_rotation_matrix
 from figure_utils import load_swapi_response
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     fit_solar_wind_proton_moments,
@@ -60,13 +69,17 @@ from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
     build_solar_wind_fit_context,
 )
 
+# Toggle: include the 9 fine-sweep bins (indices 63..71) in the synthetic
+# sweeps and the fit. See module docstring.
+INCLUDE_FINE_SWEEPS = False
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _N_SWEEPS = 5
-_N_BINS = 62  # coarse-sweep only (slice(1, 63) of the 72-bin sweep); fine-sweep bins excluded.
+_SWEEP_DURATION_S = 12.0  # full 72-bin SWAPI sweep cadence
+_BASE_TIMESTAMP = datetime(2026, 1, 1)  # SPICE rotation-matrix anchor
 
-# Mean SWAPI L2 coarse-sweep voltages (V), descending. Fine-sweep bins
-# (indices 63..71 of the 72-bin sweep, clustered near the proton peak) are
-# intentionally excluded — see module docstring.
+# Mean SWAPI L2 coarse-sweep voltages (V), descending — bins 1..62 of the 72-bin
+# sweep, averaged over many real sweeps.
 _COARSE_VOLTAGES = np.array([
      9895.52,  9088.69,  8348.80,  7667.55,  7042.16,  6469.31,  5941.77,  5457.31,
      5013.22,  4603.65,  4230.77,  3886.92,  3569.16,  3278.72,  3011.13,  2766.25,
@@ -77,31 +90,39 @@ _COARSE_VOLTAGES = np.array([
       167.04,   153.46,   140.91,   129.50,   118.91,   109.20,   100.30,    92.11,
        84.61,    77.73,    71.40,    65.59,    60.23,    55.34,
 ])
-assert _COARSE_VOLTAGES.shape == (_N_BINS,)
+assert _COARSE_VOLTAGES.shape == (62,)
 
-# RTN -> SWAPI rotation matrices, one per sweep at the sweep midpoint. SPICE-derived
-# from kernels around 2026-01-01 — captures the real ~4° spin-axis tilt off -R_RTN
-# and the real ~15.13 s spin period (sweep-to-sweep phase shift). Per-bin spin
-# variation within a sweep is dropped; the 5 sweeps still span one full spin cycle,
-# so v_T and v_N remain observable.
-_ROTATION_MATRICES = np.array([
-    [[+0.0705, +0.9157, +0.3955],
-     [-0.9968, +0.0792, -0.0057],
-     [-0.0365, -0.3939, +0.9184]],
-    [[-0.0141, -0.1350, +0.9907],
-     [-0.9972, +0.0743, -0.0041],
-     [-0.0731, -0.9881, -0.1357]],
-    [[-0.0721, -0.9884, +0.1340],
-     [-0.9974, +0.0716, -0.0084],
-     [-0.0013, -0.1342, -0.9909]],
-    [[-0.0183, -0.3937, -0.9191],
-     [-0.9971, +0.0750, -0.0122],
-     [+0.0737, +0.9162, -0.3939]],
-    [[+0.0683, +0.7775, -0.6251],
-     [-0.9968, +0.0795, -0.0100],
-     [+0.0420, +0.6238, +0.7805]],
-])
-assert _ROTATION_MATRICES.shape == (_N_SWEEPS, 3, 3)
+# Fine-sweep voltages (V), bins 63..71 of the 72-bin sweep, taken from a real
+# example sweep: imap_swapi_l2_sci_20260204_v002.cdf, sweep 0 (see
+# docs/swapi/figure_src/plot_l2_sweep.py). ESA energies divided by the L2
+# k-factor (1.93) to give voltages.
+_SWAPI_L2_K_FACTOR = 1.93
+_FINE_SWEEP_VOLTAGES = np.array([
+    6.75500000e+01, 3.86000000e+01, 9.65000000e+00, 5.90960685e+02,
+    5.41903037e+02, 4.96917831e+02, 4.55666999e+02, 4.17840538e+02,
+    3.83154180e+02,
+]) / _SWAPI_L2_K_FACTOR
+assert _FINE_SWEEP_VOLTAGES.shape == (9,)
+
+if INCLUDE_FINE_SWEEPS:
+    _VOLTAGES = np.concatenate([_COARSE_VOLTAGES, _FINE_SWEEP_VOLTAGES])
+else:
+    _VOLTAGES = _COARSE_VOLTAGES
+_N_BINS = len(_VOLTAGES)
+
+
+def _compute_rotation_matrices(n_sweeps: int) -> np.ndarray:
+    """RTN→SWAPI rotation matrices at sweep midpoints, from SPICE kernels.
+
+    Per-bin spin variation within a sweep is dropped; one matrix per sweep at
+    its midpoint. Sweeps are spaced `_SWEEP_DURATION_S` apart starting from
+    `_BASE_TIMESTAMP`. The sweep-to-sweep phase shift captures the ~15 s
+    spin so v_T and v_N remain observable across 5 sweeps.
+    """
+    furnish_local_spice()
+    base_et = spiceypy.datetime2et(_BASE_TIMESTAMP)
+    midpoints_et = base_et + (np.arange(n_sweeps) + 0.5) * _SWEEP_DURATION_S
+    return get_rotation_matrix(midpoints_et, SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_SWAPI)
 
 # Set by main() before forking; children inherit via fork.
 _worker_state: types.SimpleNamespace | None = None
@@ -172,7 +193,7 @@ def _run_fits(n_samples: int) -> pd.DataFrame:
     t0 = time.perf_counter()
     rows = process_map(
         _process_one, range(n_samples),
-        max_workers=n_workers, chunksize=100, desc="fits",
+        max_workers=n_workers, chunksize=10, desc="fits",
     )
     print(f"  Fits done in {time.perf_counter() - t0:.1f}s.")
 
