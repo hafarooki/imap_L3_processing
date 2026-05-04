@@ -219,11 +219,11 @@ def fit_solar_wind_alpha_moments(
     result = scipy.optimize.least_squares(residuals, x0, method="lm", diff_step=1e-4)
 
     # Wrong-basin: signed-Δv flip (1-DOF basin ambiguity along B̂).
-    chi2 = float(np.sum(result.fun**2))
+    mse = float(np.mean(result.fun**2))
     x_flipped = result.x.copy()
     x_flipped[2] = -x_flipped[2]
-    chi2_flipped = float(np.sum(residuals(x_flipped) ** 2))
-    if chi2_flipped < chi2:
+    mse_flipped = float(np.mean(residuals(x_flipped) ** 2))
+    if mse_flipped < mse:
         result = scipy.optimize.least_squares(
             residuals, x_flipped, method="lm", diff_step=1e-4
         )
@@ -235,10 +235,10 @@ def fit_solar_wind_alpha_moments(
     if not result.success:
         bad_fit_flag |= SwapiL3Flags.BAD_FIT
 
-    # Covariance in (log n, log T, Δv) space, scaled by reduced chi² (fitting error).
+    # Covariance in (log n, log T, Δv) space, scaled by residual variance s² = Σr²/(N−p).
     n_data, n_params = len(result.fun), len(result.x)
-    s_sq = float(np.sum(result.fun**2)) / max(n_data - n_params, 1)
-    cov_x = s_sq * np.linalg.pinv(result.jac.T @ result.jac)
+    residual_variance = float(np.sum(result.fun**2)) / max(n_data - n_params, 1)
+    cov_x = residual_variance * np.linalg.pinv(result.jac.T @ result.jac)
     density_sigma = float(n_a_fit * np.sqrt(max(cov_x[0, 0], 0.0)))
     temperature_sigma = float(T_a_fit * np.sqrt(max(cov_x[1, 1], 0.0)))
     delta_v_sigma = float(np.sqrt(max(cov_x[2, 2], 0.0)))

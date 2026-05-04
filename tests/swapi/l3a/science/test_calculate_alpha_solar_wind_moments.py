@@ -205,7 +205,7 @@ def _spin_rotation_matrices(n):
     R = np.empty((n, 3, 3))
     for i, a in enumerate(alphas):
         c, s = np.cos(a), np.sin(a)
-        R[i] = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]]) @ _R_BASE
+        R[i] = np.array([[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]]) @ _R_BASE
     return R
 
 

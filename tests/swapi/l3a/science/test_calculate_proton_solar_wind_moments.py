@@ -21,7 +21,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     _get_initial_guess,
     _compute_angles,
     _model_count_rates,
-    _evaluate_rotated_chi,
+    _evaluate_rotated_mse,
     _optimal_density_scale,
     apply_deadtime_correction_array,
     _optimize,
@@ -102,7 +102,7 @@ def _realistic_rotation_matrices(n_total, n_sweeps):
     R = np.empty((n_total, 3, 3))
     for i, a in enumerate(alphas):
         c, s = np.cos(a), np.sin(a)
-        R_spin = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+        R_spin = np.array([[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]])
         R[i] = R_spin @ _R_BASE_RTN_TO_SWAPI
     return R
 
@@ -582,7 +582,7 @@ def _spin_rotation_matrices(n, spin_period_s=15.0, dt_s=0.145):
     R = np.empty((n, 3, 3))
     for i, a in enumerate(alphas):
         c, s = np.cos(a), np.sin(a)
-        R_spin = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+        R_spin = np.array([[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]])
         R[i] = R_spin @ _R_BASE_RTN_TO_SWAPI
     return R
 
@@ -1705,10 +1705,77 @@ class TestColdPlasmaTransverseRecovery(unittest.TestCase):
         self._assert_velocity_recovered(result, true_vel)
 
 
+class TestColdFastBeamRealisticSweep(unittest.TestCase):
+    """Regression: cold (~2 eV) + fast (~1210 km/s) beam on the realistic 71-bin SWAPI
+    science sweep. The peak falls between two widely-spaced log-uniform bins, leaving
+    only ~5 bins per sweep above 1% of peak. LM collapses to a spurious near-zero-
+    temperature minimum (T ≈ 0.4 K, density ~5% low, vT/vN ~25% low). Truth values
+    are full-precision from the figure-script outlier (seed=7, sample 5497); the
+    failure is sensitive to the last few decimals of the velocity components, so do
+    not truncate them.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        voltages = _load_science_voltages()
+        n_sweeps = 5
+        all_voltages = np.tile(voltages, n_sweeps)
+        cls.all_voltages = all_voltages
+        cls.sr = sr
+        cls.grids, cls.cs, cls.cea, cls.at, cls.ats = _build_proton_arrays(
+            sr, all_voltages
+        )
+        cls.rot = _realistic_rotation_matrices(n_sweeps * _N_BINS, n_sweeps)
+
+        cls.true_density = 5.163788947942239
+        cls.true_temperature = 23683.143260834928  # ~2.04 eV
+        cls.true_velocity = np.array(
+            [1210.60361813932, 35.625126636481, -33.50276344266394]
+        )
+
+        cr = _model_count_rates(
+            cls.true_density,
+            cls.true_temperature,
+            cls.true_velocity,
+            cls.grids,
+            cls.cs,
+            cls.cea,
+            cls.at,
+            cls.ats,
+            cls.rot,
+            PROTON_MASS_KG,
+        )
+        cls.count_rate = apply_deadtime_correction_array(cr)
+
+        cls.result = fit_solar_wind_proton_moments(
+            cls.count_rate,
+            all_voltages,
+            swapi_response=sr,
+            central_effective_area_scale=1.0,
+            rotation_matrices=cls.rot,
+        )
+
+    def test_temperature_recovered(self):
+        np.testing.assert_allclose(
+            self.result.temperature.nominal_value, self.true_temperature, rtol=1e-3
+        )
+
+    def test_density_recovered(self):
+        np.testing.assert_allclose(
+            self.result.density.nominal_value, self.true_density, rtol=1e-3
+        )
+
+    def test_velocity_recovered(self):
+        np.testing.assert_allclose(
+            self.result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
+        )
+
+
 class TestWrongBasinFlipCheck(unittest.TestCase):
     """_optimize recovers the truth basin regardless of which side the initial guess starts on.
 
-    Fixture chosen so the chi² landscape is bimodal: without the K-rotation grid,
+    Fixture chosen so the MSE landscape is bimodal: without the K-rotation grid,
     LM from a mirror-side initial guess converges to the mirror basin (~120 km/s
     off in the transverse components).
     """
@@ -1805,7 +1872,7 @@ class TestWrongBasinFlipCheck(unittest.TestCase):
         )
 
 
-class TestEvaluateRotatedChi(unittest.TestCase):
+class TestEvaluateRotatedMse(unittest.TestCase):
     """Direct unit tests for the spin-axis rotation + closed-form n rescale."""
 
     @classmethod
@@ -1852,7 +1919,7 @@ class TestEvaluateRotatedChi(unittest.TestCase):
                 ]
             )
         )
-        return _evaluate_rotated_chi(
+        return _evaluate_rotated_mse(
             lm_result,
             theta,
             self.count_rate,
@@ -1896,21 +1963,21 @@ class TestEvaluateRotatedChi(unittest.TestCase):
             self.assertAlmostEqual(np.linalg.norm(v_rot), speed_in, places=8)
 
     def test_n_rescale_recovers_density_at_truth(self):
-        chi, _, n_opt = self._evaluate(
+        mse, _, n_opt = self._evaluate(
             self.true_density, self.true_temperature, self.true_velocity, 0.0
         )
-        self.assertGreaterEqual(chi, 0.0)
-        self.assertTrue(np.isfinite(chi))
+        self.assertGreaterEqual(mse, 0.0)
+        self.assertTrue(np.isfinite(mse))
         np.testing.assert_allclose(n_opt, self.true_density, rtol=0.01)
 
-    def test_pi_rotation_at_truth_gives_much_higher_chi(self):
-        chi_zero, _, _ = self._evaluate(
+    def test_pi_rotation_at_truth_gives_much_higher_mse(self):
+        mse_zero, _, _ = self._evaluate(
             self.true_density, self.true_temperature, self.true_velocity, 0.0
         )
-        chi_pi, _, _ = self._evaluate(
+        mse_pi, _, _ = self._evaluate(
             self.true_density, self.true_temperature, self.true_velocity, math.pi
         )
-        self.assertGreater(chi_pi, chi_zero * 100.0)
+        self.assertGreater(mse_pi, mse_zero * 100.0)
 
 
 class TestOptimalDensityScale(unittest.TestCase):

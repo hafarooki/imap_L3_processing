@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
 """
-Scatter plots comparing the initial guess and final optimizer output against
-ground truth for 10000 random solar wind parameter sets.
+Scatter plots comparing the SWAPI proton-moments fit against ground truth on
+**real solar wind conditions** sampled from WIND/SWE 2-min ASCII data.
 
-Uses realistic SWAPI 71-bin science voltage sweep (from the test L2 CDF) with 5
-sweeps per fit — matching the production processor exactly. Synthetic count rates
-are generated from the forward model with realistic SWAPI geometry (spin axis =
-boresight = +Y_SWAPI, 15 s spin period) and Poisson noise.
+Synthetic count rates are produced from the SWAPI forward model on a
+realistic 71-bin science voltage sweep (5 sweeps per fit, Poisson noise);
+the (n, T, v_R, v_T, v_N) ground truth is read from a CSV produced by
+scripts/swapi/sample_wind_solar_wind.py.
 
-All cases share the same voltage sweep so passband grids are built once per worker.
-Cases are split into chunks across a ProcessPoolExecutor — threads don't help here
-because scipy.optimize.least_squares does most of its bookkeeping in pure Python
-and holds the GIL.
+Generate the CSV first:
+  conda run -n imapL3 python scripts/swapi/sample_wind_solar_wind.py \
+      --year 2025 --n 10000 --seed 7
 
-Solar wind parameter ranges (seed=7):
-  bulk_speed:   200–1500 km/s         (uniform)
-  temperature:  23,000–580,000 K      (log-uniform)
-  density:        2–20 cm⁻³          (uniform)
-  vT, vN:       −50–50 km/s          (uniform)
-
-Output: docs/swapi/figures/initial_guess_accuracy.png
-Usage:  python docs/swapi/figure_src/plot_initial_guess_accuracy.py
+Output: docs/swapi/figures/fit_accuracy.png
+Usage:  conda run -n imapL3 python docs/swapi/figure_src/plot_fit_accuracy.py
 """
 
 import sys
@@ -30,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import time
 import os
-import multiprocessing as mp
+import multiprocessing as _mp
 import numpy as np
 import numba
 import spacepy.pycdf
@@ -41,10 +34,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from imap_l3_processing.constants import (
-    PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
-    PROTON_CHARGE_OVER_MASS_C_PER_KG,
-    METERS_PER_KILOMETER,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
     EV_TO_KELVIN,
 )
@@ -66,53 +56,132 @@ _TEST_L2_CDF = (
     _REPO_ROOT / "tests/test_data/swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf"
 )
 _OUTPUT_DIR = _REPO_ROOT / "docs" / "swapi" / "figures"
+_DEFAULT_WIND_CSV = (
+    _REPO_ROOT / "docs" / "swapi" / "figure_src" / "wind_solar_wind_samples_2025.csv"
+)
 
-_N_SAMPLES = 10000
 _RNG_SEED = 7
 _N_SWEEPS = 5
 _SWEEP_S = 12.0
-_SPIN_S = 15.0
 _N_BINS = 71  # SWAPI_SCIENCE_BINS = slice(1, 72)
-_DT_S = _SWEEP_S / 72  # bin spacing within a 72-bin sweep
+_DT_S = _SWEEP_S / 72
 
-_R_BASE_RTN_TO_SWAPI = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+# SPICE-derived rotation matrices (RTN → SWAPI) for one 5-sweep chunk near
+# 2026-01-01, taken from the alpha-fit fixture
+# tests/test_data/swapi/alpha_fit_test_spectra.npz (`strong_alpha__rotation_matrices`).
+# That file stores 5 sweeps × 62 coarse-sweep bins (slice(1, 63)). The proton
+# plot uses 5 sweeps × 71 science bins (slice(1, 72)) — the first 62 bins per
+# sweep coincide with the fixture; the last 9 fine-sweep bins are extended by
+# spinning the fixture's last bin forward at the fixture's measured spin rate
+# around its measured spin axis. The result reflects the real ~4° offset of
+# the spin axis from -R_RTN and the real ~15.13 s spin period.
+_FIXTURE_PATH = (
+    _REPO_ROOT / "tests" / "test_data" / "swapi" / "alpha_fit_test_spectra.npz"
+)
+_FIXTURE_KEY = "strong_alpha__rotation_matrices"
+_FIXTURE_BINS_PER_SWEEP = 62  # slice(1, 63)
 
 
 def _nom(x):
-    """Return the nominal value of a UFloat, or float-cast a plain numeric."""
     return x.nominal_value if isinstance(x, UFloat) else float(x)
 
 
 def _load_science_voltages() -> np.ndarray:
-    """Return the 71 science bin voltages from a realistic L2 CDF."""
     with spacepy.pycdf.CDF(str(_TEST_L2_CDF)) as cdf:
-        esa_energy = cdf["esa_energy"][...]  # shape (n_sweeps, 72), in eV
+        esa_energy = cdf["esa_energy"][...]
     return esa_energy.mean(axis=0)[SWAPI_SCIENCE_BINS] / SWAPI_L2_K_FACTOR
 
 
-def _spin_rotation_matrices(n: int) -> np.ndarray:
-    """Rotation matrices for n consecutive bin measurements across N_SWEEPS sweeps.
+def _load_wind_samples(csv_path: Path) -> tuple[np.ndarray, ...]:
+    """Load WIND-derived ground-truth proton parameters from CSV."""
+    if not csv_path.exists():
+        raise FileNotFoundError(
+            f"Missing WIND samples CSV: {csv_path}. "
+            f"Run scripts/swapi/sample_wind_solar_wind.py first."
+        )
+    cols = np.genfromtxt(
+        csv_path,
+        delimiter=",",
+        names=True,
+        dtype=None,
+        encoding="utf-8",
+    )
+    bulk_speeds = cols["v_R_km_s"].astype(float)
+    temperatures = cols["proton_temperature_K"].astype(float)
+    densities = cols["proton_density_cm3"].astype(float)
+    vTs = cols["v_T_km_s"].astype(float)
+    vNs = cols["v_N_km_s"].astype(float)
+    return bulk_speeds, temperatures, densities, vTs, vNs
 
-    Each sweep is _SWEEP_S = 12 s with 72 bins of _DT_S = 12/72 s spacing; bin 0
-    is discarded so we use bins 1-71. Times within sweep s are
-        t = s * 12 + bin_idx * 12/72,   bin_idx in {1, ..., 71}
-    so there is a 2*_DT_S gap from bin 71 of one sweep to bin 1 of the next.
+
+def _real_rotation_matrices(n_sweeps: int) -> np.ndarray:
+    """Real SPICE-derived rotation matrices for `n_sweeps` × 71 science bins.
+
+    Bins 1..62 per sweep are loaded from the alpha-fit fixture as-is (real
+    SPICE matrices for IMAP_RTN → IMAP_SWAPI). Bins 63..71 are extended from
+    bin 62 of the same sweep by rotating around the fixture's mean spin axis
+    at the fixture's measured spin rate. Both spin axis and spin rate are
+    derived from the fixture itself, so the result inherits the real ~4°
+    spin-axis tilt and the real ~15.13 s spin period.
     """
-    sweep_idx = np.arange(n) // _N_BINS
-    bin_in_sweep = (np.arange(n) % _N_BINS) + 1
-    times = sweep_idx * _SWEEP_S + bin_in_sweep * _DT_S
-    alphas = 2.0 * np.pi * times / _SPIN_S
-    R = np.empty((n, 3, 3))
-    for i, a in enumerate(alphas):
-        c, s = np.cos(a), np.sin(a)
-        R_spin = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
-        R[i] = R_spin @ _R_BASE_RTN_TO_SWAPI
+    fixture = np.load(_FIXTURE_PATH)
+    R_fix = fixture[_FIXTURE_KEY]  # (n_fix_sweeps × 62, 3, 3)
+    if R_fix.shape[0] % _FIXTURE_BINS_PER_SWEEP != 0:
+        raise ValueError(
+            f"{_FIXTURE_KEY} length {R_fix.shape[0]} not a multiple of "
+            f"{_FIXTURE_BINS_PER_SWEEP}"
+        )
+    n_fix_sweeps = R_fix.shape[0] // _FIXTURE_BINS_PER_SWEEP
+    if n_sweeps > n_fix_sweeps:
+        raise ValueError(
+            f"requested {n_sweeps} sweeps; fixture only has {n_fix_sweeps}"
+        )
+    R_fix = R_fix.reshape(n_fix_sweeps, _FIXTURE_BINS_PER_SWEEP, 3, 3)[:n_sweeps]
+
+    # Mean spin axis: row 1 of R(RTN→SWAPI) is +Y_SWAPI in RTN, which is the
+    # SWAPI boresight (and the spacecraft spin axis).
+    spin_axis = R_fix[:, :, 1, :].reshape(-1, 3).mean(axis=0)
+    spin_axis /= np.linalg.norm(spin_axis)
+
+    # Measured spin rate: project +X_SWAPI(t) onto the plane perpendicular to
+    # the spin axis and fit a line to the unwrapped phase vs measurement time.
+    bin_offset = 1  # SWAPI_COARSE_SWEEP_BINS.start
+    times_fix = (np.arange(n_sweeps * _FIXTURE_BINS_PER_SWEEP) // _FIXTURE_BINS_PER_SWEEP) * _SWEEP_S \
+        + ((np.arange(n_sweeps * _FIXTURE_BINS_PER_SWEEP) % _FIXTURE_BINS_PER_SWEEP) + bin_offset) * _DT_S
+    x_axis = R_fix.reshape(-1, 3, 3)[:, 0, :]
+    x_perp = x_axis - (x_axis @ spin_axis)[:, None] * spin_axis
+    e1 = x_perp[0] / np.linalg.norm(x_perp[0])
+    e2 = np.cross(spin_axis, e1)
+    phases = np.unwrap(np.arctan2(x_perp @ e2, x_perp @ e1))
+    omega, _ = np.polyfit(times_fix, phases, 1)
+
+    # Build the 71-bin output: copy fixture matrices for bins 1..62, then
+    # spin bin 62 forward by Δt to fill bins 63..71.
+    n_total = n_sweeps * _N_BINS
+    R = np.empty((n_total, 3, 3))
+    for sw in range(n_sweeps):
+        out_lo = sw * _N_BINS
+        # Copy first 62 bins per sweep verbatim.
+        R[out_lo : out_lo + _FIXTURE_BINS_PER_SWEEP] = R_fix[sw]
+        # Extend by 9 fine-sweep bins (indices 63..71). Reference bin = 62
+        # (last fixture bin), at time t_ref = sw*12 + 62*dt.
+        R_ref = R_fix[sw, -1]
+        t_ref = sw * _SWEEP_S + (_FIXTURE_BINS_PER_SWEEP + bin_offset - 1) * _DT_S
+        for j, bin_idx in enumerate(range(63, 72)):
+            t = sw * _SWEEP_S + bin_idx * _DT_S
+            dphi = omega * (t - t_ref)
+            # Active rotation about the spin axis by dphi (Rodrigues' formula).
+            ax = spin_axis
+            K = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
+            R_extra = np.eye(3) + np.sin(dphi) * K + (1 - np.cos(dphi)) * (K @ K)
+            # Apply rotation in the inertial RTN frame: bring SWAPI → RTN with
+            # R_ref.T, rotate by R_extra (about spin axis in RTN), then map back
+            # to SWAPI. Since spin advances SWAPI body relative to RTN, the new
+            # SWAPI→RTN map is R_extra @ R_ref.T, so RTN→SWAPI is R_ref @ R_extra.T.
+            R[out_lo + _FIXTURE_BINS_PER_SWEEP + j] = R_ref @ R_extra.T
     return R
 
 
-# Worker-process state. Initialized once per worker via _init_worker, then reused
-# across all chunks routed to that worker. Avoids per-task pickle of SWAPIResponse
-# and per-task rebuild of the passband-grid typed.List.
 _W_SR = None
 _W_TILED = None
 _W_CS = None
@@ -121,7 +190,7 @@ _W_AT = None
 _W_ATS = None
 _W_ROT = None
 _W_ESA = None
-_W_PARAMS = None  # tuple of (bulk_speeds, temperatures, densities, vTs, vNs)
+_W_PARAMS = None
 
 
 def _init_worker(voltages, params):
@@ -136,11 +205,10 @@ def _init_worker(voltages, params):
     _W_CEA = np.array([_W_SR.get_central_effective_area(v) for v in all_voltages])
     _W_AT = np.asarray(_W_SR.azimuthal_transmission, dtype=float)
     _W_ATS = float(_W_SR.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
-    _W_ROT = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
+    _W_ROT = _real_rotation_matrices(_N_SWEEPS)
     _W_ESA = all_voltages
     _W_PARAMS = params
 
-    # Force JIT compile in this worker so the chunk loop runs at full speed from i=0.
     _model_count_rates(
         8.0,
         10.0 * EV_TO_KELVIN,
@@ -183,12 +251,9 @@ def _process_chunk(idx_range):
             / 0.145
         )
 
-        # Initial guess is reported on the unmasked input.
         ig = _get_initial_guess(
             cr, _W_ESA, _W_TILED, _W_CS, _W_CEA, _W_AT, _W_ATS, _W_ROT
         )
-        # Final fit goes through the production entry point so the half-mean mask
-        # is applied at the keep boundary before the JIT integrator runs.
         result = fit_solar_wind_proton_moments(
             cr,
             _W_ESA,
@@ -220,42 +285,29 @@ def _process_chunk(idx_range):
     return rows
 
 
-def _run_cases(voltages: np.ndarray) -> dict:
-    rng = np.random.default_rng(_RNG_SEED)
-    bulk_speeds = rng.uniform(200, 1500, _N_SAMPLES)
-    temperatures = np.exp(
-        rng.uniform(np.log(2 * EV_TO_KELVIN), np.log(50 * EV_TO_KELVIN), _N_SAMPLES)
-    )
-    densities = rng.uniform(2, 20, _N_SAMPLES)
-    vTs = rng.uniform(-50, 50, _N_SAMPLES)
-    vNs = rng.uniform(-50, 50, _N_SAMPLES)
-    params = (bulk_speeds, temperatures, densities, vTs, vNs)
-
-    # The fit is GIL-bound (scipy.optimize.least_squares does most of its bookkeeping
-    # in pure Python), so threads give no speedup. Use processes; each worker initialises
-    # its own SWAPIResponse + passband-grid typed.List once via initializer, then runs
-    # a contiguous chunk of cases.
-    #
-    # multiprocessing.Pool is used instead of concurrent.futures.ProcessPoolExecutor
-    # because the latter calls os.sysconf("SC_SEM_NSEMS_MAX") at construction time,
-    # which raises PermissionError under restricted sandboxes (e.g. Claude Code).
+def _run_cases(voltages: np.ndarray, params: tuple) -> dict:
+    n_samples = len(params[0])
     n_workers = max(1, (os.cpu_count() or 1))
+    chunk_size = (n_samples + n_workers - 1) // n_workers
     chunks = [
-        range(start, min(start + (_N_SAMPLES + n_workers - 1) // n_workers, _N_SAMPLES))
-        for start in range(0, _N_SAMPLES, (_N_SAMPLES + n_workers - 1) // n_workers)
+        range(start, min(start + chunk_size, n_samples))
+        for start in range(0, n_samples, chunk_size)
     ]
     print(
-        f"  Running {_N_SAMPLES} fits across {n_workers} processes "
+        f"  Running {n_samples} fits across {n_workers} processes "
         f"({len(chunks)} chunks)..."
     )
     t0 = time.perf_counter()
-    with mp.Pool(
+    # Use fork context to match SwapiProcessor (and to avoid the spawn-side
+    # import regression that breaks worker startup in this environment).
+    ctx = _mp.get_context("fork")
+    with ctx.Pool(
         processes=n_workers,
         initializer=_init_worker,
         initargs=(voltages, params),
     ) as pool:
         rows = []
-        for chunk_rows in pool.imap(_process_chunk, chunks):
+        for chunk_rows in pool.map(_process_chunk, chunks):
             rows.extend(chunk_rows)
     print(f"  Fits done in {time.perf_counter() - t0:.1f}s.")
 
@@ -293,6 +345,12 @@ def _rmse_label(truth, est, scale):
 
 
 def main():
+    csv_path = _DEFAULT_WIND_CSV
+    print(f"Loading WIND ground-truth samples from {csv_path}")
+    params = _load_wind_samples(csv_path)
+    n_samples = len(params[0])
+    print(f"  {n_samples} samples")
+
     print("Loading calibration data...")
     sr = load_swapi_response()
 
@@ -310,7 +368,7 @@ def main():
     _cea0 = np.array([sr.get_central_effective_area(v) for v in _esa0])
     _at0 = np.asarray(sr.azimuthal_transmission, dtype=float)
     _ats0 = float(sr.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
-    _rot0 = _spin_rotation_matrices(_N_SWEEPS * _N_BINS)
+    _rot0 = _real_rotation_matrices(_N_SWEEPS)
     _cr0 = _model_count_rates(
         8.0,
         10.0 * EV_TO_KELVIN,
@@ -335,11 +393,11 @@ def main():
     print("JIT ready.")
 
     t_total = time.perf_counter()
-    data = _run_cases(voltages)
+    data = _run_cases(voltages, params)
     print(f"Total wall time: {time.perf_counter() - t_total:.1f}s")
 
     n_bad = data["bad_flag"].sum()
-    print(f"Bad-fit flags: {n_bad}/{_N_SAMPLES}")
+    print(f"Bad-fit flags: {n_bad}/{n_samples}")
 
     good = ~data["bad_flag"]
 
@@ -353,9 +411,9 @@ def main():
 
     fig, axes = plt.subplots(1, 5, figsize=(17, 4))
     fig.suptitle(
-        f"Initial guess vs. final optimizer vs. ground truth\n"
-        f"({_N_SAMPLES} random cases, {_N_SWEEPS} sweeps × {_N_BINS} bins, "
-        f"realistic SWAPI voltage sweep, Poisson noise)",
+        f"Initial guess vs. final optimizer vs. WIND ground truth\n"
+        f"({n_samples} real solar wind cases from WIND/SWE 2-min 2025, "
+        f"{_N_SWEEPS} sweeps × {_N_BINS} bins, Poisson noise)",
         fontsize=11,
     )
 
@@ -443,7 +501,7 @@ def main():
     fig.tight_layout()
 
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = _OUTPUT_DIR / "initial_guess_accuracy.png"
+    out_path = _OUTPUT_DIR / "fit_accuracy.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved {out_path}")
 
