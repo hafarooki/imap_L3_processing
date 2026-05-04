@@ -36,14 +36,17 @@ def escape_local_minimum(
         )
 
         if rotated_mse >= current_result.mse * _ROTATED_RMSE_RATIO_THRESHOLD ** 2:
-            continue
+            break
 
         restart_result = _restart_from_rotated_seed(
             current_result, rotated_velocity, rotated_density, ctx
         )
 
-        if restart_result.mse < current_result.mse:
-            current_result = restart_result
+        if restart_result.mse > current_result.mse:
+            break
+    
+        current_result = restart_result
+
 
     return current_result
 
