@@ -45,10 +45,18 @@ from imap_l3_processing.constants import (
 )
 from figure_utils import load_swapi_response
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    _get_initial_guess,
-    _model_count_rates,
-    apply_deadtime_correction_array,
     fit_solar_wind_proton_moments,
+)
+from imap_l3_processing.swapi.l3a.science.proton_initial_guess import (
+    calculate_initial_guess,
+)
+from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
+    SolarWindParams,
+    apply_deadtime_correction_array,
+    model_solar_wind_coincidence_rates,
+)
+from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
+    build_solar_wind_fit_context,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -132,16 +140,25 @@ def _initialize_worker_state(ground_truth_params: tuple[np.ndarray, ...]) -> Non
     swapi_response = load_swapi_response()
     all_esa_voltages = np.tile(_COARSE_VOLTAGES, _N_SWEEPS)
     swapi_response.warm_cache(all_esa_voltages)
+    per_bin_rotation_matrices = np.repeat(_ROTATION_MATRICES, _N_BINS, axis=0)
+    # Base context: bundles per-bin response grids and rotation matrices. Reused
+    # for both forward modeling (synthetic count rates) and per-fit context
+    # construction. count_rate is a placeholder of ones to bypass the >0 filter.
+    base_ctx = build_solar_wind_fit_context(
+        count_rate=np.ones_like(all_esa_voltages),
+        esa_voltage=all_esa_voltages,
+        swapi_response=swapi_response,
+        central_effective_area_scale=1.0,
+        rotation_matrices=per_bin_rotation_matrices,
+        mass_kg=PROTON_MASS_KG,
+        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
+    )
     _worker_state = types.SimpleNamespace(
         ground_truth_params=ground_truth_params,
         swapi_response=swapi_response,
         all_esa_voltages=all_esa_voltages,
-        per_bin_rotation_matrices=np.repeat(_ROTATION_MATRICES, _N_BINS, axis=0),
-        passband_grids=numba.typed.List([swapi_response.create_passband_grid(v) for v in all_esa_voltages]),
-        central_speeds=np.array([swapi_response.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E) for v in all_esa_voltages]),
-        central_effective_areas=np.array([swapi_response.get_central_effective_area(v) for v in all_esa_voltages]),
-        azimuthal_transmission=np.asarray(swapi_response.azimuthal_transmission, dtype=float),
-        azimuthal_transmission_spacing_deg=float(swapi_response.AZIMUTHAL_TRANSMISSION_SPACING_DEG),
+        per_bin_rotation_matrices=per_bin_rotation_matrices,
+        base_ctx=base_ctx,
     )
 
 
@@ -176,27 +193,51 @@ def _process_chunk(idx_range):
         tangential_speed = float(tangential_speeds[i])
         normal_speed = float(normal_speeds[i])
 
-        count_rates = _model_count_rates(
-            density, temperature, np.array([radial_speed, tangential_speed, normal_speed]),
-            ws.passband_grids, ws.central_speeds, ws.central_effective_areas,
-            ws.azimuthal_transmission, ws.azimuthal_transmission_spacing_deg,
-            ws.per_bin_rotation_matrices, PROTON_MASS_KG,
+        truth_params = SolarWindParams(
+            density=density,
+            bulk_velocity_rtn=np.array([radial_speed, tangential_speed, normal_speed]),
+            temperature=temperature,
+            mass_kg=PROTON_MASS_KG,
         )
+        count_rates = model_solar_wind_coincidence_rates(truth_params, ws.base_ctx)
         count_rates = apply_deadtime_correction_array(count_rates)
         count_rates = (
             np.random.default_rng(i).poisson(np.maximum(count_rates * 0.145, 0.0)).astype(float)
             / 0.145
         )
 
-        initial_guess = _get_initial_guess(
-            count_rates, ws.all_esa_voltages, ws.passband_grids, ws.central_speeds,
-            ws.central_effective_areas, ws.azimuthal_transmission,
-            ws.azimuthal_transmission_spacing_deg, ws.per_bin_rotation_matrices,
+        fit_ctx = build_solar_wind_fit_context(
+            count_rate=count_rates,
+            esa_voltage=ws.all_esa_voltages,
+            swapi_response=ws.swapi_response,
+            central_effective_area_scale=1.0,
+            rotation_matrices=ws.per_bin_rotation_matrices,
+            mass_kg=PROTON_MASS_KG,
+            mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
         )
-        result = fit_solar_wind_proton_moments(
-            count_rates, ws.all_esa_voltages, swapi_response=ws.swapi_response,
-            central_effective_area_scale=1, rotation_matrices=ws.per_bin_rotation_matrices,
-        )
+        try:
+            initial_guess = calculate_initial_guess(fit_ctx)
+        except Exception:
+            initial_guess = SolarWindParams(
+                density=float("nan"),
+                bulk_velocity_rtn=np.array([float("nan")] * 3),
+                temperature=float("nan"),
+                mass_kg=PROTON_MASS_KG,
+            )
+        try:
+            result = fit_solar_wind_proton_moments(fit_ctx)
+        except Exception as e:
+            print(f"  case {i}: fit failed ({type(e).__name__}: {e}); flagging bad")
+            from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
+                ProtonSolarWindFitResult,
+            )
+            from uncertainties import ufloat
+            nan_uf = ufloat(float("nan"), float("nan"))
+            result = ProtonSolarWindFitResult(
+                density=nan_uf, temperature=nan_uf,
+                bulk_velocity_rtn=(nan_uf, nan_uf, nan_uf),
+                bad_fit_flag=1,
+            )
 
         rows.append({
             "true_density": density,
@@ -204,11 +245,11 @@ def _process_chunk(idx_range):
             "true_radial_speed": radial_speed,
             "true_tangential_speed": tangential_speed,
             "true_normal_speed": normal_speed,
-            "init_density": _nominal(initial_guess.density),
-            "init_temperature": _nominal(initial_guess.temperature),
-            "init_radial_speed": _nominal(initial_guess.bulk_velocity_rtn[0]),
-            "init_tangential_speed": _nominal(initial_guess.bulk_velocity_rtn[1]),
-            "init_normal_speed": _nominal(initial_guess.bulk_velocity_rtn[2]),
+            "init_density": initial_guess.density,
+            "init_temperature": initial_guess.temperature,
+            "init_radial_speed": float(initial_guess.bulk_velocity_rtn[0]),
+            "init_tangential_speed": float(initial_guess.bulk_velocity_rtn[1]),
+            "init_normal_speed": float(initial_guess.bulk_velocity_rtn[2]),
             "fit_density": _nominal(result.density),
             "fit_temperature": _nominal(result.temperature),
             "fit_radial_speed": _nominal(result.bulk_velocity_rtn[0]),

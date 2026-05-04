@@ -135,7 +135,7 @@ class ProtonChunkFitter(ChunkFitter):
                 data_chunk, epoch, SWAPI_SCIENCE_BINS, rotation_matrices
             )
             quality_flag |= result.bad_fit_flag
-            speed, clock_angle, deflection_angle = derive_velocity_angles(result, epoch)
+            speed, clock_angle, deflection_angle = derive_velocity_angles(result.bulk_velocity_rtn, epoch)
             speed_nom, speed_unc = speed.nominal_value, speed.std_dev
             clock_nom, clock_unc = clock_angle.nominal_value, clock_angle.std_dev
             defl_nom, defl_unc = (
@@ -313,7 +313,7 @@ class PuiProtonChunkFitter(ChunkFitter):
                 data_chunk, epoch, SWAPI_SCIENCE_BINS, rotation_matrices
             )
             quality_flag |= result.bad_fit_flag
-            speed, clock_angle, deflection_angle = derive_velocity_angles(result, epoch)
+            speed, clock_angle, deflection_angle = derive_velocity_angles(result.bulk_velocity_rtn, epoch)
         except Exception:
             logger.info(
                 f"Exception occurred at epoch {epoch}, continuing with fill value",
