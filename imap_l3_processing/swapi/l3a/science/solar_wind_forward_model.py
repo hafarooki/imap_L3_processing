@@ -9,11 +9,11 @@ from imap_l3_processing.constants import (
     BOLTZMANN_CONSTANT_JOULES_PER_KELVIN,
     METERS_PER_KILOMETER,
 )
-from imap_l3_processing.swapi.l3a.science.passband_grid import PassbandGrid
 from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
     SolarWindFitContext,
-    SwapiResponseGrid,
 )
+from imap_l3_processing.swapi.response.passband_grid import PassbandGrid
+from imap_l3_processing.swapi.response.response_grid import ResponseGrid
 
 
 # LM state-vector layout, also dictating jacobian column order:
@@ -143,7 +143,7 @@ def _compute_angles(bulk_velocity_rtn: ndarray, rotation_matrix: ndarray):
 
 @numba.njit(fastmath=True, nogil=True)
 def calculate_integral(
-    response_grid: SwapiResponseGrid,
+    response_grid: ResponseGrid,
     sw_params: _LocalSWParams,
 ):
     sg_rate = _integrate_sunglasses_region(response_grid, sw_params)
@@ -154,7 +154,7 @@ def calculate_integral(
 
 @numba.njit(fastmath=True, nogil=True)
 def _integrate_sunglasses_region(
-    response_grid: SwapiResponseGrid,
+    response_grid: ResponseGrid,
     sw_params: _LocalSWParams,
 ) -> float:
     min_el, max_el, min_az, max_az = _integration_window(
@@ -169,7 +169,7 @@ def _integrate_sunglasses_region(
 
 @numba.njit(fastmath=True, nogil=True)
 def _integrate_vanes_vignetting_regions(
-    response_grid: SwapiResponseGrid,
+    response_grid: ResponseGrid,
     sw_params: _LocalSWParams,
 ) -> float:
     total = 0.0
@@ -187,7 +187,7 @@ def _integrate_vanes_vignetting_regions(
 
 @numba.njit(fastmath=True, nogil=True)
 def _integrate_open_aperture_regions(
-    response_grid: SwapiResponseGrid,
+    response_grid: ResponseGrid,
     sw_params: _LocalSWParams,
     sg_rate: float,
 ) -> float:
@@ -224,7 +224,7 @@ def _integrate_open_aperture_regions(
 
 @numba.njit(nogil=True)
 def _integration_window(
-    sw_params: _LocalSWParams, region: int, response_grid: SwapiResponseGrid
+    sw_params: _LocalSWParams, region: int, response_grid: ResponseGrid
 ):
     grid = response_grid.passband_grid
     central_speed = response_grid.central_speed
@@ -282,7 +282,7 @@ def _clamp_window(
 
 @numba.njit(fastmath=True, nogil=True)
 def _integrate_region(
-    response_grid: SwapiResponseGrid,
+    response_grid: ResponseGrid,
     sw_params: _LocalSWParams,
     is_sunglasses: bool,
     min_elevation: float,
@@ -518,7 +518,7 @@ def _phase_space_integral_to_count_rate_factor(
 
 @numba.njit(nogil=True)
 def _trim_oa_azimuth_by_integrand(
-    response_grid: SwapiResponseGrid,
+    response_grid: ResponseGrid,
     sw_params: _LocalSWParams,
     min_elevation: float,
     max_elevation: float,
@@ -594,7 +594,7 @@ def _trim_oa_azimuth_by_integrand(
 
 @numba.njit(nogil=True)
 def _oa_rate_upper_bound(
-    response_grid: SwapiResponseGrid,
+    response_grid: ResponseGrid,
     transmission_maxwellian_az_integral: float,
     min_elevation: float,
     max_elevation: float,

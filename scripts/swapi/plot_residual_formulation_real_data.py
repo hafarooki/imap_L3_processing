@@ -48,7 +48,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_SCIENCE_BINS,
     esa_voltage_to_proton_speed,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
 from imap_l3_processing.utils import furnish_local_spice
 

@@ -41,7 +41,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     SolarWindParams,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 from tests.swapi.l3a.science.reference_integral import reference_integrals_batch
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]

@@ -5,11 +5,11 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
-from imap_l3_processing.swapi.l3a.science.passband_grid import (
+from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
+from imap_l3_processing.swapi.response.passband_grid import (
     PassbandGrid,
     build_passband_grid,
 )
-from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
 
 
 @dataclass
@@ -104,6 +104,25 @@ class SWAPIResponse:
             key = float(v)
             if np.isfinite(v) and key not in self._grid_cache:
                 self._grid_cache[key] = self._build_passband_grid(key)
+
+    def create_response_grid(
+        self,
+        esa_voltage: float,
+        mass_per_charge_m_p_per_e: float,
+        central_effective_area_scale: float = 1.0,
+    ) -> "ResponseGrid":
+        from imap_l3_processing.swapi.response.response_grid import ResponseGrid
+
+        return ResponseGrid(
+            passband_grid=self.create_passband_grid(esa_voltage),
+            central_speed=self.central_speed(esa_voltage, mass_per_charge_m_p_per_e),
+            central_effective_area=(
+                self.get_central_effective_area(esa_voltage)
+                * float(central_effective_area_scale)
+            ),
+            azimuthal_transmission=np.asarray(self.azimuthal_transmission, dtype=float),
+            azimuthal_transmission_spacing=float(self.AZIMUTHAL_TRANSMISSION_SPACING_DEG),
+        )
 
     def create_passband_grid(self, esa_voltage: float) -> PassbandGrid:
         """Return the cached PassbandGrid for `esa_voltage`.

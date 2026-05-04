@@ -46,7 +46,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_SCIENCE_BINS,
     esa_voltage_to_proton_speed,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"

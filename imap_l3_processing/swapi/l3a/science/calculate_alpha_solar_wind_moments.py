@@ -23,6 +23,7 @@ from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
     SolarWindFitContext,
+    build_solar_wind_fit_context,
 )
 from imap_l3_processing.swapi.l3a.science.proton_uncertainties import (
     make_correlated_velocity,
@@ -31,7 +32,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_K_FACTOR,
     get_alpha_peak_indices,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
 
@@ -113,7 +114,7 @@ def fit_solar_wind_alpha_moments(
 
         rotation_matrices = get_swapi_geometry(measurement_time)
 
-    proton_ctx = SolarWindFitContext.from_l2_data(
+    proton_ctx = build_solar_wind_fit_context(
         count_rate=count_rate,
         esa_voltage=esa_voltage,
         swapi_response=swapi_response,
@@ -122,7 +123,7 @@ def fit_solar_wind_alpha_moments(
         mass_kg=PROTON_MASS_KG,
         mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
-    alpha_ctx = SolarWindFitContext.from_l2_data(
+    alpha_ctx = build_solar_wind_fit_context(
         count_rate=count_rate,
         esa_voltage=esa_voltage,
         swapi_response=swapi_response,

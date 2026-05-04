@@ -20,7 +20,9 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     derive_velocity_angles,
     fit_solar_wind_proton_moments,
 )
-from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import SolarWindFitContext
+from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
+    build_solar_wind_fit_context,
+)
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_COARSE_SWEEP_BINS,
     SWAPI_L2_K_FACTOR,
@@ -337,7 +339,7 @@ def _fit_proton(
     efficiency_table = _shared["efficiency_table"]
     count_rates = data_chunk.coincidence_count_rate[:, bin_slice].flatten()
     voltages = data_chunk.energy[:, bin_slice].flatten() / SWAPI_L2_K_FACTOR
-    ctx = SolarWindFitContext.from_l2_data(
+    ctx = build_solar_wind_fit_context(
         count_rate=count_rates,
         esa_voltage=voltages,
         swapi_response=swapi_response,

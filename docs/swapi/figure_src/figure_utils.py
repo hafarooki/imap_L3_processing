@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 
 _INSTRUMENT_DATA_DIR = (
     Path(__file__).resolve().parents[3] / "instrument_team_data" / "swapi"

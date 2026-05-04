@@ -28,7 +28,6 @@ from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
     SolarWindParams,
     _compute_angles,
     _integration_window,
-    SwapiResponseGrid,
     _interpolate_transmission,
     _model_count_rates,
     _optimal_density_scale,
@@ -37,6 +36,7 @@ from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
     calculate_integral,
     interpolate_passband,
 )
+from imap_l3_processing.swapi.response.response_grid import ResponseGrid
 import pandas as pd
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     esa_voltage_to_proton_speed,
@@ -44,7 +44,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_L2_K_FACTOR,
     SWAPI_SCIENCE_BINS,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from tests.test_helpers import get_test_data_path, get_test_instrument_team_data_path
 
@@ -1415,7 +1415,7 @@ class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):
     def test_zero_passband_grid_returns_zero(self):
         # Build a PassbandGrid where all passband values are zero — norm will be 0
         # and the region loop should skip all regions, returning 0.
-        from imap_l3_processing.swapi.l3a.science.passband_grid import PassbandGrid
+        from imap_l3_processing.swapi.response.passband_grid import PassbandGrid
 
         zero_grid = np.zeros((23, 101), dtype=np.float64)
         transmission = np.ones(1800, dtype=np.float64)
@@ -1451,7 +1451,7 @@ class TestInterpolateTransmissionBoundary(unittest.TestCase):
     same out-of-bounds entry (weights cancel). Uses a 3-element array to trigger easily."""
 
     def setUp(self):
-        from imap_l3_processing.swapi.l3a.science.passband_grid import PassbandGrid
+        from imap_l3_processing.swapi.response.passband_grid import PassbandGrid
 
         zero_grid = np.zeros((23, 101), dtype=np.float64)
         boundary = np.array([[0.0], [0.95]])
@@ -1497,7 +1497,7 @@ class TestGetAngularLimits(unittest.TestCase):
     def setUpClass(cls):
         sr = _load_swapi_response()
         sr.warm_cache([_peak_voltage(450.0)])
-        cls.rg = SwapiResponseGrid(
+        cls.rg = ResponseGrid(
             passband_grid=sr.create_passband_grid(_peak_voltage(450.0)),
             central_speed=float(sr.central_speed(
                 _peak_voltage(450.0), PROTON_MASS_PER_CHARGE_M_P_PER_E
