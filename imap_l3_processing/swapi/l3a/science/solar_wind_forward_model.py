@@ -141,11 +141,31 @@ def _compute_angles(bulk_velocity_rtn: ndarray, rotation_matrix: ndarray):
     return phi, theta
 
 
+@numba.njit(nogil=True, inline="always")
+def _cone_outside_passband(
+    response_grid: ResponseGrid, sw_params: _LocalSWParams
+) -> bool:
+    grid = response_grid.passband_grid
+    central_speed = response_grid.central_speed
+    speed_std = _speed_std(sw_params)
+    v_lo = sw_params.bulk_speed - SPEED_HALF_WIDTH_VTH * speed_std
+    v_hi = sw_params.bulk_speed + SPEED_HALF_WIDTH_VTH * speed_std
+    sg_rmin = _min_passband_speed_ratio_at_elevation(grid, True, 0.0)
+    oa_rmin = _min_passband_speed_ratio_at_elevation(grid, False, 0.0)
+    sg_rmax = _max_passband_speed_ratio_at_elevation(grid, True, 0.0)
+    oa_rmax = _max_passband_speed_ratio_at_elevation(grid, False, 0.0)
+    r_min = sg_rmin if sg_rmin < oa_rmin else oa_rmin
+    r_max = sg_rmax if sg_rmax > oa_rmax else oa_rmax
+    return v_hi < r_min * central_speed or v_lo > r_max * central_speed
+
+
 @numba.njit(fastmath=True, nogil=True)
 def calculate_integral(
     response_grid: ResponseGrid,
     sw_params: _LocalSWParams,
 ):
+    if _cone_outside_passband(response_grid, sw_params):
+        return 0.0
     sg_rate = _integrate_sunglasses_region(response_grid, sw_params)
     vv_rate = _integrate_vanes_vignetting_regions(response_grid, sw_params)
     oa_rate = _integrate_open_aperture_regions(response_grid, sw_params, sg_rate)

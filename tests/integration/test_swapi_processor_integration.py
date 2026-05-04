@@ -173,7 +173,7 @@ class SwapiProcessorIntegration(unittest.TestCase):
         )
         np.testing.assert_allclose(
             temperatures[chk],
-            [54235.1, 66166.0, 205795.8],
+            [55181.3, 66005.4, 206159.0],
             rtol=0.01,
             err_msg="proton_sw_temperature regression",
         )

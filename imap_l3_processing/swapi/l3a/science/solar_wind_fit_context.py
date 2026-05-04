@@ -34,7 +34,7 @@ def build_solar_wind_fit_context(
     mass_kg: float,
     mass_per_charge_m_p_per_e: float,
 ) -> SolarWindFitContext:
-    keep = (esa_voltage > 0) & np.isfinite(esa_voltage) & (count_rate > 0)
+    keep = (esa_voltage > 0) & np.isfinite(esa_voltage)
     if not np.all(keep):
         esa_voltage = esa_voltage[keep]
         count_rate = count_rate[keep]
