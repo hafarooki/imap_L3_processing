@@ -550,16 +550,18 @@ class TestGetInitialGuess(unittest.TestCase):
             self._run().bulk_velocity_rtn[0], self.true_speed, rtol=0.02
         )
 
-    def test_recovers_temperature(self):
-        np.testing.assert_allclose(
-            self._run().temperature, self.true_temperature, rtol=0.2
-        )
+    def test_initial_temperature_matches_ialirt_heuristic(self):
+        # Initial T is the IALIRT-style heuristic 60000 K * (v_peak / 400)^2,
+        # which depends only on peak-bin speed — not on the true temperature.
+        result = self._run()
+        expected = 60000.0 * (self.true_speed / 400.0) ** 2
+        np.testing.assert_allclose(result.temperature, expected, rtol=0.05)
 
     def test_recovers_density(self):
         # Density is scaled against a unit model evaluated with the (incorrect) anti-sunward
-        # direction; small transverse components in the truth thus produce a few-percent bias
-        # in the initial density. The optimizer corrects this in step 3.
-        np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.2)
+        # direction and the heuristic temperature, so the initial density carries a
+        # tens-of-percent bias. The optimizer corrects it in step 3.
+        np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.4)
 
     def test_bulk_velocity_initial_guess(self):
         result = self._run()
@@ -1426,50 +1428,6 @@ class TestLogNormalUncertaintyCoverage(unittest.TestCase):
         np.testing.assert_allclose(
             np.diag(self.mean_velocity_cov), empirical_var, rtol=0.60
         )
-
-
-class TestGetInitialGuessCurveFitFailure(unittest.TestCase):
-    """Verify _get_initial_guess falls back to peak-bin speed and 50 km/s thermal speed
-    when scipy.optimize.curve_fit raises RuntimeError."""
-
-    def test_falls_back_to_peak_speed_and_default_sigma(self):
-        voltages = np.geomspace(
-            _peak_voltage(450.0) * 0.5, _peak_voltage(450.0) * 2.0, 20
-        )
-        count_rate = np.ones(len(voltages))
-        rotation_matrices = np.tile(np.eye(3), (len(voltages), 1, 1))
-        dummy_cs = np.ones(len(voltages))
-        dummy_cea = np.ones(len(voltages))
-        dummy_at = np.ones(100)
-
-        with (
-            patch(
-                "scipy.optimize.curve_fit", side_effect=RuntimeError("max iterations")
-            ),
-            patch(
-                "imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._model_count_rates",
-                return_value=np.ones(len(voltages)),
-            ),
-        ):
-            result = _get_initial_guess(
-                count_rate,
-                voltages,
-                None,
-                dummy_cs,
-                dummy_cea,
-                dummy_at,
-                0.1,
-                rotation_matrices,
-            )
-
-        # Fallback: bulk_speed = speed[peak_idx], sigma_v = 50.0 km/s
-        peak_idx = int(np.nanargmax(count_rate))
-        expected_speed = float(esa_voltage_to_proton_speed(voltages[peak_idx]))
-        np.testing.assert_allclose(
-            result.bulk_velocity_rtn[0], expected_speed, rtol=0.01
-        )
-        # Fallback sigma_v = 50 km/s → T = m_p * (50e3)^2 / k_B ≈ 302,778 K (≈ 26.1 eV)
-        np.testing.assert_allclose(result.temperature, 26.1 * EV_TO_KELVIN, rtol=0.01)
 
 
 class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):

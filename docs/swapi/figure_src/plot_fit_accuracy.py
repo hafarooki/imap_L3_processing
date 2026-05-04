@@ -26,7 +26,6 @@ import os
 import multiprocessing as _mp
 import numpy as np
 import numba
-import spacepy.pycdf
 from uncertainties import UFloat
 import matplotlib
 
@@ -39,10 +38,6 @@ from imap_l3_processing.constants import (
     EV_TO_KELVIN,
 )
 from figure_utils import load_swapi_response
-from imap_l3_processing.swapi.l3a.science.speed_calculation import (
-    SWAPI_SCIENCE_BINS,
-    SWAPI_L2_K_FACTOR,
-)
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     _get_initial_guess,
     _optimize,
@@ -52,44 +47,51 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_TEST_L2_CDF = (
-    _REPO_ROOT / "tests/test_data/swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf"
-)
-_OUTPUT_DIR = _REPO_ROOT / "docs" / "swapi" / "figures"
-_DEFAULT_WIND_CSV = (
-    _REPO_ROOT / "docs" / "swapi" / "figure_src" / "wind_solar_wind_samples_2025.csv"
-)
-
-_RNG_SEED = 7
 _N_SWEEPS = 5
-_SWEEP_S = 12.0
-_N_BINS = 71  # SWAPI_SCIENCE_BINS = slice(1, 72)
-_DT_S = _SWEEP_S / 72
+_N_BINS = 71
 
-# SPICE-derived rotation matrices (RTN → SWAPI) for one 5-sweep chunk near
-# 2026-01-01, taken from the alpha-fit fixture
-# tests/test_data/swapi/alpha_fit_test_spectra.npz (`strong_alpha__rotation_matrices`).
-# That file stores 5 sweeps × 62 coarse-sweep bins (slice(1, 63)). The proton
-# plot uses 5 sweeps × 71 science bins (slice(1, 72)) — the first 62 bins per
-# sweep coincide with the fixture; the last 9 fine-sweep bins are extended by
-# spinning the fixture's last bin forward at the fixture's measured spin rate
-# around its measured spin axis. The result reflects the real ~4° offset of
-# the spin axis from -R_RTN and the real ~15.13 s spin period.
-_FIXTURE_PATH = (
-    _REPO_ROOT / "tests" / "test_data" / "swapi" / "alpha_fit_test_spectra.npz"
-)
-_FIXTURE_KEY = "strong_alpha__rotation_matrices"
-_FIXTURE_BINS_PER_SWEEP = 62  # slice(1, 63)
+# Mean SWAPI L2 science-bin voltages (V), 71 bins. Indices 0..61 are the
+# descending coarse sweep; 62..70 are the 9 fine-sweep bins near the proton peak.
+_SCIENCE_VOLTAGES = np.array([
+     9895.52,  9088.69,  8348.80,  7667.55,  7042.16,  6469.31,  5941.77,  5457.31,
+     5013.22,  4603.65,  4230.77,  3886.92,  3569.16,  3278.72,  3011.13,  2766.25,
+     2539.54,  2333.83,  2144.24,  1969.31,  1808.74,  1660.86,  1525.75,  1401.82,
+     1287.58,  1182.24,  1085.15,   995.55,   914.31,   839.94,   771.70,   709.46,
+      651.59,   598.47,   549.91,   505.12,   463.89,   425.92,   391.18,   359.35,
+      329.94,   303.02,   278.25,   255.55,   234.77,   215.61,   197.95,   181.82,
+      167.04,   153.46,   140.91,   129.50,   118.91,   109.20,   100.30,    92.11,
+       84.61,    77.73,    71.40,    65.59,    60.23,    55.34,   769.27,   753.47,
+      737.99,   722.84,   707.99,   693.45,   679.20,   665.25,   651.59,
+])
+assert _SCIENCE_VOLTAGES.shape == (_N_BINS,)
+
+# RTN -> SWAPI rotation matrices, one per sweep at the sweep midpoint. SPICE-derived
+# from kernels around 2026-01-01 — captures the real ~4° spin-axis tilt off -R_RTN
+# and the real ~15.13 s spin period (sweep-to-sweep phase shift). Per-bin spin
+# variation within a sweep is dropped; the 5 sweeps still span one full spin cycle,
+# so v_T and v_N remain observable.
+_ROTATION_MATRICES = np.array([
+    [[+0.0705, +0.9157, +0.3955],
+     [-0.9968, +0.0792, -0.0057],
+     [-0.0365, -0.3939, +0.9184]],
+    [[-0.0141, -0.1350, +0.9907],
+     [-0.9972, +0.0743, -0.0041],
+     [-0.0731, -0.9881, -0.1357]],
+    [[-0.0721, -0.9884, +0.1340],
+     [-0.9974, +0.0716, -0.0084],
+     [-0.0013, -0.1342, -0.9909]],
+    [[-0.0183, -0.3937, -0.9191],
+     [-0.9971, +0.0750, -0.0122],
+     [+0.0737, +0.9162, -0.3939]],
+    [[+0.0683, +0.7775, -0.6251],
+     [-0.9968, +0.0795, -0.0100],
+     [+0.0420, +0.6238, +0.7805]],
+])
+assert _ROTATION_MATRICES.shape == (_N_SWEEPS, 3, 3)
 
 
 def _nom(x):
     return x.nominal_value if isinstance(x, UFloat) else float(x)
-
-
-def _load_science_voltages() -> np.ndarray:
-    with spacepy.pycdf.CDF(str(_TEST_L2_CDF)) as cdf:
-        esa_energy = cdf["esa_energy"][...]
-    return esa_energy.mean(axis=0)[SWAPI_SCIENCE_BINS] / SWAPI_L2_K_FACTOR
 
 
 def _load_wind_samples(csv_path: Path) -> tuple[np.ndarray, ...]:
@@ -114,72 +116,9 @@ def _load_wind_samples(csv_path: Path) -> tuple[np.ndarray, ...]:
     return bulk_speeds, temperatures, densities, vTs, vNs
 
 
-def _real_rotation_matrices(n_sweeps: int) -> np.ndarray:
-    """Real SPICE-derived rotation matrices for `n_sweeps` × 71 science bins.
-
-    Bins 1..62 per sweep are loaded from the alpha-fit fixture as-is (real
-    SPICE matrices for IMAP_RTN → IMAP_SWAPI). Bins 63..71 are extended from
-    bin 62 of the same sweep by rotating around the fixture's mean spin axis
-    at the fixture's measured spin rate. Both spin axis and spin rate are
-    derived from the fixture itself, so the result inherits the real ~4°
-    spin-axis tilt and the real ~15.13 s spin period.
-    """
-    fixture = np.load(_FIXTURE_PATH)
-    R_fix = fixture[_FIXTURE_KEY]  # (n_fix_sweeps × 62, 3, 3)
-    if R_fix.shape[0] % _FIXTURE_BINS_PER_SWEEP != 0:
-        raise ValueError(
-            f"{_FIXTURE_KEY} length {R_fix.shape[0]} not a multiple of "
-            f"{_FIXTURE_BINS_PER_SWEEP}"
-        )
-    n_fix_sweeps = R_fix.shape[0] // _FIXTURE_BINS_PER_SWEEP
-    if n_sweeps > n_fix_sweeps:
-        raise ValueError(
-            f"requested {n_sweeps} sweeps; fixture only has {n_fix_sweeps}"
-        )
-    R_fix = R_fix.reshape(n_fix_sweeps, _FIXTURE_BINS_PER_SWEEP, 3, 3)[:n_sweeps]
-
-    # Mean spin axis: row 1 of R(RTN→SWAPI) is +Y_SWAPI in RTN, which is the
-    # SWAPI boresight (and the spacecraft spin axis).
-    spin_axis = R_fix[:, :, 1, :].reshape(-1, 3).mean(axis=0)
-    spin_axis /= np.linalg.norm(spin_axis)
-
-    # Measured spin rate: project +X_SWAPI(t) onto the plane perpendicular to
-    # the spin axis and fit a line to the unwrapped phase vs measurement time.
-    bin_offset = 1  # SWAPI_COARSE_SWEEP_BINS.start
-    times_fix = (np.arange(n_sweeps * _FIXTURE_BINS_PER_SWEEP) // _FIXTURE_BINS_PER_SWEEP) * _SWEEP_S \
-        + ((np.arange(n_sweeps * _FIXTURE_BINS_PER_SWEEP) % _FIXTURE_BINS_PER_SWEEP) + bin_offset) * _DT_S
-    x_axis = R_fix.reshape(-1, 3, 3)[:, 0, :]
-    x_perp = x_axis - (x_axis @ spin_axis)[:, None] * spin_axis
-    e1 = x_perp[0] / np.linalg.norm(x_perp[0])
-    e2 = np.cross(spin_axis, e1)
-    phases = np.unwrap(np.arctan2(x_perp @ e2, x_perp @ e1))
-    omega, _ = np.polyfit(times_fix, phases, 1)
-
-    # Build the 71-bin output: copy fixture matrices for bins 1..62, then
-    # spin bin 62 forward by Δt to fill bins 63..71.
-    n_total = n_sweeps * _N_BINS
-    R = np.empty((n_total, 3, 3))
-    for sw in range(n_sweeps):
-        out_lo = sw * _N_BINS
-        # Copy first 62 bins per sweep verbatim.
-        R[out_lo : out_lo + _FIXTURE_BINS_PER_SWEEP] = R_fix[sw]
-        # Extend by 9 fine-sweep bins (indices 63..71). Reference bin = 62
-        # (last fixture bin), at time t_ref = sw*12 + 62*dt.
-        R_ref = R_fix[sw, -1]
-        t_ref = sw * _SWEEP_S + (_FIXTURE_BINS_PER_SWEEP + bin_offset - 1) * _DT_S
-        for j, bin_idx in enumerate(range(63, 72)):
-            t = sw * _SWEEP_S + bin_idx * _DT_S
-            dphi = omega * (t - t_ref)
-            # Active rotation about the spin axis by dphi (Rodrigues' formula).
-            ax = spin_axis
-            K = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
-            R_extra = np.eye(3) + np.sin(dphi) * K + (1 - np.cos(dphi)) * (K @ K)
-            # Apply rotation in the inertial RTN frame: bring SWAPI → RTN with
-            # R_ref.T, rotate by R_extra (about spin axis in RTN), then map back
-            # to SWAPI. Since spin advances SWAPI body relative to RTN, the new
-            # SWAPI→RTN map is R_extra @ R_ref.T, so RTN→SWAPI is R_ref @ R_extra.T.
-            R[out_lo + _FIXTURE_BINS_PER_SWEEP + j] = R_ref @ R_extra.T
-    return R
+def _per_bin_rotation_matrices() -> np.ndarray:
+    """Replicate each sweep's rotation matrix across its 71 bins → (5*71, 3, 3)."""
+    return np.repeat(_ROTATION_MATRICES, _N_BINS, axis=0)
 
 
 _W_SR = None
@@ -205,7 +144,7 @@ def _init_worker(voltages, params):
     _W_CEA = np.array([_W_SR.get_central_effective_area(v) for v in all_voltages])
     _W_AT = np.asarray(_W_SR.azimuthal_transmission, dtype=float)
     _W_ATS = float(_W_SR.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
-    _W_ROT = _real_rotation_matrices(_N_SWEEPS)
+    _W_ROT = _per_bin_rotation_matrices()
     _W_ESA = all_voltages
     _W_PARAMS = params
 
@@ -345,7 +284,7 @@ def _rmse_label(truth, est, scale):
 
 
 def main():
-    csv_path = _DEFAULT_WIND_CSV
+    csv_path = _REPO_ROOT / "docs/swapi/figure_src/wind_solar_wind_samples_2025.csv"
     print(f"Loading WIND ground-truth samples from {csv_path}")
     params = _load_wind_samples(csv_path)
     n_samples = len(params[0])
@@ -354,9 +293,9 @@ def main():
     print("Loading calibration data...")
     sr = load_swapi_response()
 
-    print("Loading realistic SWAPI science voltages...")
-    voltages = _load_science_voltages()
-    print(f"  {len(voltages)} bins, {voltages.min():.1f}–{voltages.max():.1f} V")
+    voltages = _SCIENCE_VOLTAGES
+    print(f"Using {len(voltages)} science bins, "
+          f"{voltages.min():.1f}–{voltages.max():.1f} V")
 
     print("Warming up JIT (driver process)...")
     _esa0 = np.tile(voltages, _N_SWEEPS)
@@ -368,7 +307,7 @@ def main():
     _cea0 = np.array([sr.get_central_effective_area(v) for v in _esa0])
     _at0 = np.asarray(sr.azimuthal_transmission, dtype=float)
     _ats0 = float(sr.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
-    _rot0 = _real_rotation_matrices(_N_SWEEPS)
+    _rot0 = _per_bin_rotation_matrices()
     _cr0 = _model_count_rates(
         8.0,
         10.0 * EV_TO_KELVIN,
@@ -500,8 +439,9 @@ def main():
     axes[0].legend(fontsize=8, loc="lower right", framealpha=0.8)
     fig.tight_layout()
 
-    _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = _OUTPUT_DIR / "fit_accuracy.png"
+    out_dir = _REPO_ROOT / "docs" / "swapi" / "figures"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "fit_accuracy.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved {out_path}")
 

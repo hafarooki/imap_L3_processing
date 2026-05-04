@@ -105,9 +105,6 @@ def fit_solar_wind_proton_moments(
 ) -> ProtonSolarWindMoments:
     from imap_l3_processing.constants import PROTON_MASS_PER_CHARGE_M_P_PER_E
 
-    # Drop any 0V (or non-finite) ESA steps. Some sweeps include a zero-energy
-    # step that carries no useful information and would make central_speed = 0,
-    # producing divide-by-zero deep inside the JIT integrator.
     keep = (esa_voltage > 0) & np.isfinite(esa_voltage) & (count_rate > 0)
 
     if not np.all(keep):
@@ -166,32 +163,11 @@ def _get_initial_guess(
     speed = esa_voltage_to_proton_speed(esa_voltage)
 
     peak_idx = np.nanargmax(count_rate)
-    try:
-        (_, bulk_speed_init, sigma_v), _ = scipy.optimize.curve_fit(
-            lambda v, A, mu, sigma: A * np.exp(-((v - mu) ** 2) / (2 * sigma**2)),
-            speed,
-            count_rate,
-            p0=[count_rate[peak_idx], speed[peak_idx], 50.0],
-            bounds=([0, 0, 0], [np.inf, np.inf, np.inf]),
-        )
-    except RuntimeError:
-        bulk_speed_init = speed[peak_idx]
-        sigma_v = 50.0
+    bulk_speed_init = float(speed[peak_idx])
 
-    sigma_floor_v = (
-        math.sqrt(
-            INITIAL_TEMPERATURE_FLOOR_K
-            * BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
-            / PROTON_MASS_KG
-        )
-        / METERS_PER_KILOMETER
-    )
-    sigma_thermal_v = max(sigma_v, sigma_floor_v)
-
-    temperature = float(
-        PROTON_MASS_KG
-        * (sigma_thermal_v * METERS_PER_KILOMETER) ** 2
-        / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
+    temperature = max(
+        60000.0 * (bulk_speed_init / 400.0) ** 2,
+        INITIAL_TEMPERATURE_FLOOR_K,
     )
 
     bulk_velocity_rtn = np.array(
@@ -237,9 +213,6 @@ def _model_count_rates(
     rotation_matrices: ndarray,  # shape (N, 3, 3), RTN-to-SWAPI at each measurement time
     mass_kg: float,
 ) -> ndarray:
-    # Returns true (pre-deadtime) count rate per measurement bin. Deadtime is
-    # applied by the caller (`apply_deadtime_correction_array`) so that, in the
-    # two-species fit, it acts on the combined proton + alpha rate.
     thermal_speed = (
         np.sqrt(BOLTZMANN_CONSTANT_JOULES_PER_KELVIN * temperature / mass_kg)
         / METERS_PER_KILOMETER
@@ -276,11 +249,6 @@ def _compute_angles(bulk_velocity_rtn: ndarray, rotation_matrix: ndarray):
     return phi, theta
 
 
-# Region IDs for `_integration_window`. The OA azimuth integration is split at
-# ±VV_OUTER_DEG so the steep T(φ) rise (the vanes-vignetting transition between
-# |φ|=20° and ~30°) is captured by GL boundary clustering inside the VV regions
-# instead of being smeared across a single wide OA window. Layout in azimuth:
-#    OA-  | VV-  | SG  | VV+  | OA+
 _REGION_SUNGLASSES = 0
 _REGION_OA_NEG = -1
 _REGION_OA_POS = +1
@@ -366,9 +334,6 @@ def _integrate_vanes_vignetting_regions(
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
 ) -> float:
-    # VV±: small OA azimuth bands [-VV_OUTER, -20] and [20, VV_OUTER]. T is
-    # small (≤~0.05) but rises steeply; a few GL nodes here resolve it well.
-    # No trim or skip — these regions are bounded and cheap.
     total = 0.0
     for region in (_REGION_VV_NEG, _REGION_VV_POS):
         min_el, max_el, min_az, max_az = _integration_window(
@@ -402,9 +367,6 @@ def _integrate_open_aperture_regions(
     azimuthal_transmission_spacing: float,
     sg_rate: float,
 ) -> float:
-    # OA±: full-transmission azimuth bands beyond ±VV_OUTER. The azimuth window
-    # is trimmed to the support of T(φ)·Maxwellian, then the region is skipped
-    # entirely if its upper-bound rate falls below `OA_SKIP_FRACTION × sg_rate`.
     total = 0.0
     for region in (_REGION_OA_NEG, _REGION_OA_POS):
         min_el, max_el, min_az, max_az = _integration_window(
@@ -704,9 +666,6 @@ def _max_passband_speed_ratio_at_elevation(
 
 @numba.njit(nogil=True)
 def _bracketing_boundary_values(boundary, elevation: float):
-    # Return the two stored boundary values that bracket `elevation`. The
-    # caller picks min/max so the returned interval brackets the nonzero
-    # passband region, since the boundaries are stored as piecewise constants.
     elevs = boundary[0]
     vals = boundary[1]
     n = elevs.shape[0]
@@ -738,8 +697,6 @@ def _maxwellian_exponential(
 def _phase_space_integral_to_count_rate_factor(
     sw_params: SWParams, central_effective_area: float
 ) -> float:
-    # A_eff · n / (√2π v_th)³ · (km→cm). Multiplied by a phase-space integral in
-    # (km/s × rad²) units, gives a count rate in Hz.
     return (
         central_effective_area
         * sw_params.density
@@ -759,11 +716,6 @@ def _trim_oa_azimuth_by_integrand(
     azimuthal_transmission: ndarray,
     azimuthal_transmission_spacing: float,
 ):
-    # Trim the OA azimuth window by walking both ends inward until the
-    # integrand T(φ)·f(v₀, θ_b', φ) exceeds threshold. Returns
-    # (lo_az, hi_az, ∫ T(φ) g(φ) dφ) over the trimmed window in radians,
-    # where g is the full Maxwellian (with normalization). Returns
-    # (0.0, 0.0, 0.0) to skip the region.
     if gaussian_az_hi <= gaussian_az_lo:
         return 0.0, 0.0, 0.0
 
@@ -836,10 +788,6 @@ def _oa_rate_upper_bound(
     min_elevation: float,
     max_elevation: float,
 ) -> float:
-    # Heuristic upper estimate of the OA region rate (Hz):
-    #   Ĉ_OA = A₀ · v₀³ · Δθ · Δv · ∫ T(φ) g(φ) dφ
-    # bounding cos(θ) ≤ 1 (giving Δθ) and v³ P(v/v₀, θ) ≤ v₀³ supported on the
-    # passband (giving Δv = (r_max(0) − r_min(0))·v₀ at θ = 0°).
     delta_theta_rad = (math.pi / 180.0) * (max_elevation - min_elevation)
     delta_v = central_speed * (
         _max_passband_speed_ratio_at_elevation(grid, False, 0.0)
@@ -880,7 +828,6 @@ def _optimize(
             PROTON_MASS_KG,
         )
 
-    # See docs/swapi/solar-wind-moments.md for diff_step and xtol rationale.
     def run_lm(initial_state):
         return scipy.optimize.least_squares(
             residuals, initial_state, method="lm", diff_step=1e-4, xtol=_LM_XTOL,
@@ -1031,9 +978,6 @@ def _best_k_rotation_seed(
 def _uncertainties_from_residual_scaled_jacobian(
     lm_result, density: float, temperature: float
 ) -> tuple[float, float, ndarray]:
-    # Σ = s² (JᵀJ)⁺ where s² = Σrᵢ²/(N−p) is the unbiased residual variance,
-    # equivalent to scipy.optimize.curve_fit with absolute_sigma=False.
-    # State indices 0,1 are log-space, so σ_n = n·√Σ₀₀, σ_T = T·√Σ₁₁.
     try:
         n_residuals, n_parameters = len(lm_result.fun), len(lm_result.x)
         residual_variance = (
@@ -1098,7 +1042,6 @@ def apply_deadtime_correction_array(true_rates: ndarray) -> ndarray:
 
 
 def _optimal_density_scale(predicted: ndarray, observed: ndarray) -> float:
-    # Minimizes ‖scale·predicted − observed‖²; solution is scale = (m·r)/(m·m).
     mm = float(np.dot(predicted, predicted))
     return float(np.dot(predicted, observed)) / mm if mm > 0.0 else 1.0
 
@@ -1140,15 +1083,11 @@ def _evaluate_rotated_mse(
 
 
 def _average_spin_axis_in_rtn(rotation_matrices: ndarray) -> ndarray:
-    # The spin axis is column 1 (the y-axis) of each RTN-to-SWAPI rotation
-    # matrix. Averaging across the chunk and renormalizing gives a unit vector
-    # robust to per-measurement spin-phase noise.
     axis = rotation_matrices[:, 1, :].mean(axis=0)
     return axis / np.linalg.norm(axis)
 
 
 def _rotate_vector_about_axis(v: ndarray, axis: ndarray, angle: float) -> ndarray:
-    # Rodrigues' formula: v cosθ + (axis × v) sinθ + axis (axis·v)(1 − cosθ)
     cos_t, sin_t = math.cos(angle), math.sin(angle)
     return (
         v * cos_t
@@ -1165,8 +1104,6 @@ def make_correlated_velocity(
             return tuple(correlated_values(v_mean, v_cov))
         except Exception:
             pass
-    # Fallback: covariance is non-finite or `correlated_values` rejected it
-    # (LinAlg failure, NaN fill, etc.). Drop the cross-term and emit NaN σ.
     return tuple(ufloat(float(v), np.nan) for v in v_mean)
 
 
@@ -1193,11 +1130,6 @@ def derive_velocity_angles(
             ufloat(deflection_nominal, np.nan),
         )
 
-    # Speed σ comes from first-order propagation (essentially exact whenever
-    # |u| >> σ). Clock/deflection σ use Monte Carlo because their arctan2/arccos
-    # gradients scale as 1/v_xy² and 1/(s²·v_xy) and underestimate σ severely
-    # whenever σ_xy is comparable to v_xy — the typical SWAPI regime, since the
-    # bulk velocity is dominated by the spin-axis component.
     speed = umath.sqrt(sum(x**2 for x in velocity_dps_unc))
     clock_sigma, deflection_sigma = _clock_and_deflection_sigmas_via_monte_carlo(
         velocity_dps, velocity_dps_cov, clock_nominal
@@ -1222,7 +1154,6 @@ def _clock_and_deflection_sigmas_via_monte_carlo(
     )
 
     sample_clocks = np.degrees(np.arctan2(samples[:, 1], samples[:, 0])) % 360.0
-    # Wrap residuals to (-180, 180] so the 0°/360° branch cut doesn't inflate σ.
     clock_residuals_wrapped = ((sample_clocks - clock_nominal + 180.0) % 360.0) - 180.0
     clock_sigma = float(np.std(clock_residuals_wrapped, ddof=1))
 

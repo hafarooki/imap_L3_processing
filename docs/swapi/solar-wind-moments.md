@@ -226,7 +226,7 @@ For high-rate cases ($\geq 10^3$ Hz) where the proton fit residuals are dominate
 
 Given $N$ measurements $(C_i, V_i, t_i)$, the solar wind moments $(n, T, \mathbf{v}_b^\text{SC})$ are fit in three steps:
 1. Obtain RTN $\rightarrow$ SWAPI rotation matrices $R_i$ from SPICE.
-2. Compute an initial guess: temperature and bulk speed from a Gaussian fit to $C_i$ vs. $v_i$, with bulk velocity assumed anti-sunward with a nominal transverse offset.
+2. Compute an initial guess: bulk speed from the peak ESA step, temperature from a closed-form heuristic, density from forward-model scaling, with bulk velocity assumed anti-sunward with a nominal transverse offset.
 3. Refine by nonlinear least squares.
 
 The alpha particle moments are fit in a separate two-stage procedure described in [Alpha Particle Moments](#alpha-particle-moments).
@@ -237,18 +237,21 @@ $R_i$ (shape $N \times 3 \times 3$) are precomputed for each measurement time (s
 
 ### Step 2: Initial guess
 
-**Temperature and speed magnitude** are obtained from a Gaussian fit to $C_i$ vs. $v_i = \sqrt{2 k^* q V_i / m_p}$:
-$$C_i \approx A \exp\!\left(-\frac{(v_i - v_b)^2}{2 \sigma_v^2}\right), \qquad A, v_b, \sigma_v > 0.$$
-The fitted width $\sigma_v$ is used directly as the thermal width (no passband subtraction), with a floor $\sigma_{\text{floor}, v}$ corresponding to a $\approx 11{,}600$ K temperature floor:
-$$\sigma_{\text{thermal}, v} = \max(\sigma_v,\, \sigma_{\text{floor}, v}).$$
-The initial temperature is $T_0 = m_p \sigma_{\text{thermal}, v}^2 / k_B$.
+**Bulk speed** is taken directly from the ESA step with the largest count rate. With $v_i = \sqrt{2 k^* q V_i / m_p}$,
+$$v_b^{(0)} = v_{i^*}, \qquad i^* = \arg\max_i C_i.$$
+This skips a separate spectral fit and accepts the energy-bin quantization (a few percent at the typical SWAPI step spacing); the K-rotation grid check in Step 3 absorbs any residual error.
 
-**Velocity direction** is initialized with $v_T = -30$ km/s and $v_N = 0$, with the radial component chosen so that the total speed matches the Gaussian-fit $v_b$:
-$$v_R^{(0)} = \sqrt{\max(v_b^2 - 30^2,\; 0)}, \qquad \mathbf{v}_b^\text{SC,(0)} = (v_R^{(0)},\, -30,\, 0)\ \text{km/s}.$$
-The $v_T = -30$ km/s offset is a nominal aberration-direction seed; in practice it makes no difference to the final result because the K-rotation grid check (see Wrong-basin detection below) always explores rotated candidates around the spin axis regardless of the initial transverse velocity. A $v_T = 0$ seed produces identical fits. Preserving $|\mathbf{v}_b^{(0)}| = v_b$ keeps the initial speed consistent with the Gaussian fit. The optimizer in Step 3 recovers the true transverse components from the small spin-phase modulation of the bulk azimuth/elevation in the instrument frame.
+**Temperature** uses the same closed-form heuristic as the IALIRT pseudo-moment fit (`imap_processing.ialirt.l0.process_swapi`),
+$$T_0 = \max\!\left(60{,}000\,\text{K} \cdot \left(\frac{v_b^{(0)}}{400\;\text{km/s}}\right)^2,\; T_\text{floor}\right),$$
+with a $\approx 11{,}600$ K floor. The scaling reflects the rough empirical correlation between solar wind speed and temperature; it is only a seed for the LM optimizer, which recovers the true temperature in Step 3.
 
-The initial density is scaled to match the mean observed count rate:
-$$n_0 = \frac{\langle C_i \rangle}{\langle C_i^\text{model}(n=1) \rangle}.$$
+**Velocity direction** is initialized with $v_T = -30$ km/s and $v_N = 0$, with the radial component chosen so that the total speed matches the peak-derived $v_b^{(0)}$:
+$$v_R^{(0)} = \sqrt{\max((v_b^{(0)})^2 - 30^2,\; 0)}, \qquad \mathbf{v}_b^\text{SC,(0)} = (v_R^{(0)},\, -30,\, 0)\ \text{km/s}.$$
+The $v_T = -30$ km/s offset is a nominal aberration-direction seed; in practice it makes no difference to the final result because the K-rotation grid check (see Wrong-basin detection below) always explores rotated candidates around the spin axis regardless of the initial transverse velocity. A $v_T = 0$ seed produces identical fits. The optimizer in Step 3 recovers the true transverse components from the small spin-phase modulation of the bulk azimuth/elevation in the instrument frame.
+
+The initial density is set by least-squares scaling of a unit-density forward model against the observed count rates:
+$$n_0 = \frac{\mathbf{m} \cdot \mathbf{C}}{\mathbf{m} \cdot \mathbf{m}}, \qquad \mathbf{m}_i = C_i^\text{model}(n = 1; T_0, \mathbf{v}_b^\text{SC,(0)}).$$
+This is exact for the linear $n$-dependence of the model and is robust to the (incorrect) anti-sunward direction and heuristic temperature: any residual bias is corrected by the LM optimizer in Step 3.
 
 Figure below shows initial-guess and final-fit accuracy across 10000 real solar wind cases sampled from WIND/SWE 2-min 2025 (high-quality bimaxwellian fits, fit_flag = 10), with the WIND-derived $(n, T, v_R, v_T, v_N)$ used as ground truth via a GSE→RTN approximation valid at L1. Synthetic count rates are produced from the forward model using the real SWAPI 71-step science voltage sweep (from the L2 CDF), 5 sweeps per fit, realistic spin geometry (spin axis = boresight, 15 s period), and Poisson noise — matching the production processor exactly. The K-rotation grid check (Step 3) ensures the optimizer always finds the correct basin regardless of the initial transverse velocity. Generated by `docs/swapi/figure_src/plot_fit_accuracy.py` (which consumes the CSV produced by `scripts/swapi/sample_wind_solar_wind.py`).
 
