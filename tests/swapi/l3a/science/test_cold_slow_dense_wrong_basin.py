@@ -168,5 +168,119 @@ class TestColdSlowDenseWrongBasin(unittest.TestCase):
         )
 
 
+def _setup_synthetic_fit(
+    density: float, temperature_k: float, velocity_rtn: np.ndarray, seed: int,
+):
+    swapi_response = _load_swapi_response()
+    all_voltages = np.tile(_COARSE_VOLTAGES, _N_SWEEPS)
+    swapi_response.warm_cache(all_voltages)
+    per_bin_rotation_matrices = np.repeat(_ROTATION_MATRICES, _N_BINS, axis=0)
+
+    truth_params = SolarWindParams(
+        density=density,
+        bulk_velocity_rtn=velocity_rtn.copy(),
+        temperature=temperature_k,
+        mass_kg=PROTON_MASS_KG,
+    )
+    base_ctx = build_solar_wind_fit_context(
+        count_rate=np.ones_like(all_voltages),
+        esa_voltage=all_voltages,
+        swapi_response=swapi_response,
+        central_effective_area_scale=1.0,
+        rotation_matrices=per_bin_rotation_matrices,
+        mass_kg=PROTON_MASS_KG,
+        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
+    )
+    rates = apply_deadtime_correction_array(
+        model_solar_wind_coincidence_rates(truth_params, base_ctx)
+    )
+    rng = np.random.default_rng(seed)
+    count_rate = rng.poisson(np.maximum(rates * 0.145, 0.0)).astype(float) / 0.145
+
+    ctx = build_solar_wind_fit_context(
+        count_rate=count_rate,
+        esa_voltage=all_voltages,
+        swapi_response=swapi_response,
+        central_effective_area_scale=1.0,
+        rotation_matrices=per_bin_rotation_matrices,
+        mass_kg=PROTON_MASS_KG,
+        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
+    )
+    return fit_solar_wind_proton_moments(ctx)
+
+
+class _RecoverySuite(unittest.TestCase):
+    """Common assertions for a synthetic-truth recovery test."""
+
+    __test__ = False  # only the subclasses run
+
+    TRUE_DENSITY: float
+    TRUE_TEMPERATURE_K: float
+    TRUE_VELOCITY_RTN: np.ndarray
+    POISSON_SEED: int
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = _setup_synthetic_fit(
+            cls.TRUE_DENSITY, cls.TRUE_TEMPERATURE_K,
+            cls.TRUE_VELOCITY_RTN, cls.POISSON_SEED,
+        )
+
+    def test_radial_speed_recovered(self):
+        np.testing.assert_allclose(
+            self.result.bulk_velocity_rtn[0].nominal_value,
+            self.TRUE_VELOCITY_RTN[0], atol=2.0,
+        )
+
+    def test_tangential_speed_recovered(self):
+        np.testing.assert_allclose(
+            self.result.bulk_velocity_rtn[1].nominal_value,
+            self.TRUE_VELOCITY_RTN[1], atol=2.0,
+        )
+
+    def test_normal_speed_recovered(self):
+        np.testing.assert_allclose(
+            self.result.bulk_velocity_rtn[2].nominal_value,
+            self.TRUE_VELOCITY_RTN[2], atol=2.0,
+        )
+
+    def test_density_recovered(self):
+        np.testing.assert_allclose(
+            self.result.density.nominal_value, self.TRUE_DENSITY, rtol=0.05,
+        )
+
+    def test_temperature_recovered(self):
+        np.testing.assert_allclose(
+            self.result.temperature.nominal_value,
+            self.TRUE_TEMPERATURE_K, rtol=0.05,
+        )
+
+
+class TestSlowWarmHighVtWrongBasin(_RecoverySuite):
+    """Sample 1302 of WIND/SWE 2025: slow (v_R=312), warm (T≈22 kK), low-density
+    (n=5.2) with a large positive v_T (66.7 km/s). The fit lands at v_T≈-111
+    km/s (sign-flipped, magnitude inflated), n≈3.9, T≈25.9 kK. Distinct
+    failure mode from the cold/slow/dense case 7244 — same regime as case 1305.
+    """
+    __test__ = True
+    TRUE_DENSITY = 5.218
+    TRUE_TEMPERATURE_K = 21870.0
+    TRUE_VELOCITY_RTN = np.array([312.0, 66.7, 3.4])
+    POISSON_SEED = 1302
+
+
+class TestColdSlowDenseAdjacentWrongBasin(_RecoverySuite):
+    """Sample 7246 of WIND/SWE 2025: same plasma regime as case 7244
+    (cold/slow/dense; v_R=292, v_T=34.4, v_N=-20.2, T=14550 K, n=20.0). Case
+    7244 was fixed by the Gaussian-T initial guess + iso-|v| arc basin hop;
+    7246 still flips to v_T≈-105, n≈97. Likely needs further tuning of the
+    same code path or a different basin-hopping seed."""
+    __test__ = True
+    TRUE_DENSITY = 20.035
+    TRUE_TEMPERATURE_K = 14550.0
+    TRUE_VELOCITY_RTN = np.array([292.0, 34.4, -20.2])
+    POISSON_SEED = 7246
+
+
 if __name__ == "__main__":
     unittest.main()

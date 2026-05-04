@@ -111,18 +111,48 @@ else:
 _N_BINS = len(_VOLTAGES)
 
 
-def _compute_rotation_matrices(n_sweeps: int) -> np.ndarray:
-    """RTN→SWAPI rotation matrices at sweep midpoints, from SPICE kernels.
+# SPICE-derived RTN→SWAPI rotation matrices, one per sweep at sweep midpoints
+# spaced by `_SWEEP_DURATION_S` starting from `_BASE_TIMESTAMP`. Inlined to
+# avoid requiring an attitude CK that covers _BASE_TIMESTAMP. Captures the
+# ~4° spin-axis tilt off -R_RTN and the ~15.13 s spin period (sweep-to-sweep
+# phase shift). Per-bin spin variation within a sweep is dropped; the 5
+# sweeps still span one full spin cycle, so v_T and v_N remain observable.
+_PRECOMPUTED_ROTATION_MATRICES = np.array([
+    [[+0.0705, +0.9157, +0.3955],
+     [-0.9968, +0.0792, -0.0057],
+     [-0.0365, -0.3939, +0.9184]],
+    [[-0.0141, -0.1350, +0.9907],
+     [-0.9972, +0.0743, -0.0041],
+     [-0.0731, -0.9881, -0.1357]],
+    [[-0.0721, -0.9884, +0.1340],
+     [-0.9974, +0.0716, -0.0084],
+     [-0.0013, -0.1342, -0.9909]],
+    [[-0.0183, -0.3937, -0.9191],
+     [-0.9971, +0.0750, -0.0122],
+     [+0.0737, +0.9162, -0.3939]],
+    [[+0.0683, +0.7775, -0.6251],
+     [-0.9968, +0.0795, -0.0100],
+     [+0.0420, +0.6238, +0.7805]],
+])
 
-    Per-bin spin variation within a sweep is dropped; one matrix per sweep at
-    its midpoint. Sweeps are spaced `_SWEEP_DURATION_S` apart starting from
-    `_BASE_TIMESTAMP`. The sweep-to-sweep phase shift captures the ~15 s
-    spin so v_T and v_N remain observable across 5 sweeps.
+
+def _compute_rotation_matrices(n_sweeps: int) -> np.ndarray:
+    """RTN→SWAPI rotation matrices at sweep midpoints.
+
+    Tries SPICE first; falls back to the inlined precomputed matrices if the
+    required attitude CK is unavailable. Per-bin spin variation within a sweep
+    is dropped; one matrix per sweep at its midpoint.
     """
-    furnish_local_spice()
-    base_et = spiceypy.datetime2et(_BASE_TIMESTAMP)
-    midpoints_et = base_et + (np.arange(n_sweeps) + 0.5) * _SWEEP_DURATION_S
-    return get_rotation_matrix(midpoints_et, SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_SWAPI)
+    try:
+        furnish_local_spice()
+        base_et = spiceypy.datetime2et(_BASE_TIMESTAMP)
+        midpoints_et = base_et + (np.arange(n_sweeps) + 0.5) * _SWEEP_DURATION_S
+        return get_rotation_matrix(midpoints_et, SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_SWAPI)
+    except spiceypy.utils.exceptions.SpiceyError:
+        if n_sweeps != _PRECOMPUTED_ROTATION_MATRICES.shape[0]:
+            raise
+        print("(SPICE attitude unavailable; using precomputed rotation matrices)")
+        return _PRECOMPUTED_ROTATION_MATRICES
 
 # Set by main() before forking; children inherit via fork.
 _worker_state: types.SimpleNamespace | None = None
@@ -156,13 +186,15 @@ def _load_wind_samples(csv_path: Path) -> tuple[np.ndarray, ...]:
 def _initialize_worker_state(ground_truth_params: tuple[np.ndarray, ...]) -> None:
     global _worker_state
 
-    print(f"Using {len(_COARSE_VOLTAGES)} coarse-sweep bins, "
-          f"{_COARSE_VOLTAGES.min():.1f}–{_COARSE_VOLTAGES.max():.1f} V")
+    label = "coarse+fine" if INCLUDE_FINE_SWEEPS else "coarse-only"
+    print(f"Using {_N_BINS} bins ({label}), "
+          f"{_VOLTAGES.min():.1f}–{_VOLTAGES.max():.1f} V")
 
     swapi_response = load_swapi_response()
-    all_esa_voltages = np.tile(_COARSE_VOLTAGES, _N_SWEEPS)
+    all_esa_voltages = np.tile(_VOLTAGES, _N_SWEEPS)
     swapi_response.warm_cache(all_esa_voltages)
-    per_bin_rotation_matrices = np.repeat(_ROTATION_MATRICES, _N_BINS, axis=0)
+    rotation_matrices = _compute_rotation_matrices(_N_SWEEPS)
+    per_bin_rotation_matrices = np.repeat(rotation_matrices, _N_BINS, axis=0)
     # Base context: bundles per-bin response grids and rotation matrices. Reused
     # for both forward modeling (synthetic count rates) and per-fit context
     # construction. count_rate is a placeholder of ones to bypass the >0 filter.
@@ -307,10 +339,15 @@ def _plot_results(data: pd.DataFrame) -> None:
     ]
 
     fig, axes = plt.subplots(1, 5, figsize=(17, 4))
+    bin_label = (
+        f"coarse+fine ({_N_BINS} bins/sweep)"
+        if INCLUDE_FINE_SWEEPS
+        else f"coarse only ({_N_BINS} bins/sweep)"
+    )
     fig.suptitle(
         f"Initial guess vs. final optimizer vs. WIND ground truth\n"
         f"({n_samples} real solar wind cases from WIND/SWE 2-min 2025, "
-        f"{_N_SWEEPS} sweeps × {_N_BINS} coarse-sweep bins only, Poisson noise)",
+        f"{_N_SWEEPS} sweeps, {bin_label}, Poisson noise)",
         fontsize=11,
     )
 
@@ -372,7 +409,8 @@ def _plot_results(data: pd.DataFrame) -> None:
 
     out_dir = _REPO_ROOT / "docs" / "swapi" / "figures"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "fit_accuracy.png"
+    out_name = "fit_accuracy_with_fine.png" if INCLUDE_FINE_SWEEPS else "fit_accuracy.png"
+    out_path = out_dir / out_name
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved {out_path}")
 
