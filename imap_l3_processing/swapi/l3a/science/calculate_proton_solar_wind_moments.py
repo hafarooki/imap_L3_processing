@@ -20,10 +20,6 @@ from imap_l3_processing.swapi.l3a.science.proton_uncertainties import (
 )
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
-# Duration of one ESA energy step measurement (seconds). Used by test harnesses
-# for Poisson noise generation (rate × T → counts → Poisson → ÷ T).
-SWAPI_LIVETIME_S = 0.145
-
 
 @dataclass
 class ProtonSolarWindFitResult:

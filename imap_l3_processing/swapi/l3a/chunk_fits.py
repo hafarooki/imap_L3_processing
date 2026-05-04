@@ -17,8 +17,10 @@ from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_moments imp
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     ProtonSolarWindFitResult,
-    derive_velocity_angles,
     fit_solar_wind_proton_moments,
+)
+from imap_l3_processing.swapi.l3a.science.proton_uncertainties import (
+    derive_velocity_angles,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
     build_solar_wind_fit_context,

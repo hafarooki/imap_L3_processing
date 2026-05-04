@@ -34,10 +34,10 @@ from imap_l3_processing.constants import (
     METERS_PER_KILOMETER,
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
+    SWAPI_LIVETIME_S,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     ProtonSolarWindMoments,
-    SWAPI_LIVETIME_S,
     _get_initial_guess,
     _model_count_rates,
     _optimize,

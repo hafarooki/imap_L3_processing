@@ -17,11 +17,11 @@ from imap_l3_processing.constants import (
     METERS_PER_KILOMETER,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
+from imap_l3_processing.constants import SWAPI_LIVETIME_S
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     _get_initial_guess,
     fit_solar_wind_proton_moments,
     ProtonSolarWindMoments,
-    SWAPI_LIVETIME_S,
 )
 from imap_l3_processing.swapi.l3a.science.proton_fit_context import ProtonFitContext
 from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
