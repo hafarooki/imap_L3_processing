@@ -172,12 +172,15 @@ def _run_fits(n_samples: int) -> pd.DataFrame:
     t0 = time.perf_counter()
     rows = process_map(
         _process_one, range(n_samples),
-        max_workers=n_workers, chunksize=10, desc="fits",
+        max_workers=n_workers, chunksize=100, desc="fits",
     )
     print(f"  Fits done in {time.perf_counter() - t0:.1f}s.")
 
     data = pd.DataFrame(rows)
     print(f"Bad-fit flags: {data['bad_flag'].sum()}/{n_samples}")
+    out_csv = Path("/tmp/fit_accuracy_results.csv")
+    data.to_csv(out_csv, index=False)
+    print(f"Saved fit results to {out_csv}")
     return data
 
 
