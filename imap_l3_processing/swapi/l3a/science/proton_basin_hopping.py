@@ -1,5 +1,3 @@
-import math
-
 import numpy as np
 from numpy import ndarray
 
@@ -18,7 +16,6 @@ from imap_l3_processing.swapi.l3a.science.solar_wind_optimizer import (
 )
 
 
-_GRID_K = 4
 _MAX_BASIN_REFINE_ITERS = 6
 _ROTATED_RMSE_RATIO_THRESHOLD = 10
 
@@ -31,20 +28,20 @@ def escape_local_minimum(
 
     current_result = first_result
     for _ in range(_MAX_BASIN_REFINE_ITERS):
-        rotated_velocity, rotated_density, rotated_mse = _best_k_rotation_seed(
+        flipped_velocity, flipped_density, flipped_mse = _flipped_seed(
             current_result, ctx, spin_axis_rtn,
         )
 
-        if rotated_mse >= current_result.mse * _ROTATED_RMSE_RATIO_THRESHOLD ** 2:
+        if flipped_mse >= current_result.mse * _ROTATED_RMSE_RATIO_THRESHOLD ** 2:
             break
 
         restart_result = _restart_from_rotated_seed(
-            current_result, rotated_velocity, rotated_density, ctx
+            current_result, flipped_velocity, flipped_density, ctx
         )
 
         if restart_result.mse > current_result.mse:
             break
-    
+
         current_result = restart_result
 
 
@@ -77,41 +74,26 @@ def _restart_from_rotated_seed(
     return optimize_solar_wind_params(restart_guess, ctx=ctx)
 
 
-def _best_k_rotation_seed(
+def _flipped_seed(
     lm_result: OptimizeSolarWindParamsResult,
     ctx: SolarWindFitContext,
     spin_axis_rtn: ndarray,
 ) -> tuple[ndarray, float, float]:
     sw = lm_result.sw_params
-    best_velocity = sw.bulk_velocity_rtn
-    best_density = sw.density
-    best_mse = math.inf
-    for rotation_index in range(1, _GRID_K):
-        rotation_angle_rad = 2.0 * math.pi * rotation_index / _GRID_K
-        rotated_velocity = _rotate_vector_about_axis(
-            sw.bulk_velocity_rtn, spin_axis_rtn, rotation_angle_rad
+    flipped_velocity = _flip_vector_about_axis(sw.bulk_velocity_rtn, spin_axis_rtn)
+    predicted_obs_rate = apply_deadtime_correction_array(
+        model_solar_wind_coincidence_rates(
+            SolarWindParams(sw.density, flipped_velocity, sw.temperature, sw.mass_kg),
+            ctx,
         )
-        predicted_obs_rate = apply_deadtime_correction_array(
-            model_solar_wind_coincidence_rates(
-                SolarWindParams(sw.density, rotated_velocity, sw.temperature, sw.mass_kg),
-                ctx,
-            )
-        )
-        density_scale = optimal_density_scale(predicted_obs_rate, ctx.count_rate)
-        rotated_mse = float(
-            np.mean((density_scale * predicted_obs_rate - ctx.count_rate) ** 2)
-        )
-        if rotated_mse < best_mse:
-            best_mse = rotated_mse
-            best_velocity = rotated_velocity
-            best_density = density_scale * sw.density
-    return best_velocity, best_density, best_mse
-
-
-def _rotate_vector_about_axis(v: ndarray, axis: ndarray, angle: float) -> ndarray:
-    cos_t, sin_t = math.cos(angle), math.sin(angle)
-    return (
-        v * cos_t
-        + np.cross(axis, v) * sin_t
-        + axis * float(np.dot(axis, v)) * (1.0 - cos_t)
     )
+    density_scale = optimal_density_scale(predicted_obs_rate, ctx.count_rate)
+    flipped_mse = float(
+        np.mean((density_scale * predicted_obs_rate - ctx.count_rate) ** 2)
+    )
+    return flipped_velocity, density_scale * sw.density, flipped_mse
+
+
+def _flip_vector_about_axis(v: ndarray, axis: ndarray) -> ndarray:
+    # Rodrigues' rotation formula for a 180-degree rotation
+    return 2.0 * axis * float(np.dot(axis, v)) - v
