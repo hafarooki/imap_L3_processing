@@ -36,7 +36,7 @@ from imap_l3_processing.constants import (
     EV_TO_KELVIN,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    SWParams,
+    SolarWindParams,
     calculate_integral,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
@@ -121,7 +121,7 @@ def main():
         esa_voltages = np.logspace(
             np.log10(0.4 * v_peak), np.log10(2.5 * v_peak), n_voltages
         )
-        sw = SWParams(
+        sw = SolarWindParams(
             density=density,
             bulk_speed=v_b,
             bulk_azimuth=az,

@@ -14,9 +14,17 @@ from imap_l3_processing.constants import (
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    ProtonSolarWindMoments,
-    _model_count_rates,
+    ProtonSolarWindFitResult,
+)
+from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
     apply_deadtime_correction_array,
+    model_solar_wind_coincidence_rates,
+    SolarWindParams,
+)
+from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
+    SolarWindFitContext,
+)
+from imap_l3_processing.swapi.l3a.science.proton_uncertainties import (
     make_correlated_velocity,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
@@ -61,32 +69,17 @@ def _alpha_residuals_njit(
     proton_bulk,
     magnetic_field_direction,
     proton_true_rate,
-    count_rate,
-    passband_grids,
-    alpha_central_speeds,
-    alpha_central_eff_areas,
-    az_trans,
-    az_trans_spacing,
-    rotation_matrices,
+    alpha_ctx,
 ):
     n_a = np.exp(x[0])
     T_a = np.exp(x[1])
     dv = x[2]
     v_a_rtn = proton_bulk + dv * magnetic_field_direction
-    alpha_true = _model_count_rates(
-        n_a,
-        T_a,
-        v_a_rtn,
-        passband_grids,
-        alpha_central_speeds,
-        alpha_central_eff_areas,
-        az_trans,
-        az_trans_spacing,
-        rotation_matrices,
-        ALPHA_PARTICLE_MASS_KG,
+    alpha_true = model_solar_wind_coincidence_rates(
+        SolarWindParams(n_a, v_a_rtn, T_a, alpha_ctx.mass_kg), alpha_ctx,
     )
     combined_obs = apply_deadtime_correction_array(proton_true_rate + alpha_true)
-    return combined_obs - count_rate
+    return combined_obs - alpha_ctx.count_rate
 
 
 def fit_solar_wind_alpha_moments(
@@ -94,7 +87,7 @@ def fit_solar_wind_alpha_moments(
     esa_voltage: ndarray,
     measurement_time: ndarray,
     swapi_response: SWAPIResponse,
-    proton_moments: ProtonSolarWindMoments,
+    proton_moments: ProtonSolarWindFitResult,
     magnetic_field_direction: ndarray,
     alpha_effective_area_scale: float,
     proton_effective_area_scale: float,
@@ -120,61 +113,41 @@ def fit_solar_wind_alpha_moments(
 
         rotation_matrices = get_swapi_geometry(measurement_time)
 
-    # V-only passband grids cached by V; species/V/time-dependent scalars are per-measurement.
-    passband_grids = numba.typed.List(
-        [swapi_response.create_passband_grid(v) for v in esa_voltage]
+    proton_ctx = SolarWindFitContext.from_l2_data(
+        count_rate=count_rate,
+        esa_voltage=esa_voltage,
+        swapi_response=swapi_response,
+        central_effective_area_scale=proton_effective_area_scale,
+        rotation_matrices=rotation_matrices,
+        mass_kg=PROTON_MASS_KG,
+        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
-    central_effective_areas_lab = np.array(
-        [swapi_response.get_central_effective_area(v) for v in esa_voltage]
-    )
-    az_trans = np.asarray(swapi_response.azimuthal_transmission, dtype=float)
-    az_trans_spacing = float(swapi_response.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
-
-    proton_central_speeds = np.array(
-        [
-            swapi_response.central_speed(v, PROTON_MASS_PER_CHARGE_M_P_PER_E)
-            for v in esa_voltage
-        ]
-    )
-    alpha_central_speeds = np.array(
-        [
-            swapi_response.central_speed(v, ALPHA_MASS_PER_CHARGE_M_P_PER_E)
-            for v in esa_voltage
-        ]
-    )
-    proton_central_eff_areas = central_effective_areas_lab * float(
-        proton_effective_area_scale
-    )
-    alpha_central_eff_areas = central_effective_areas_lab * float(
-        alpha_effective_area_scale
+    alpha_ctx = SolarWindFitContext.from_l2_data(
+        count_rate=count_rate,
+        esa_voltage=esa_voltage,
+        swapi_response=swapi_response,
+        central_effective_area_scale=alpha_effective_area_scale,
+        rotation_matrices=rotation_matrices,
+        mass_kg=ALPHA_PARTICLE_MASS_KG,
+        mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     )
 
     # Frozen pre-deadtime proton model rate. Deadtime acts on (proton + alpha) below.
-    proton_true_rate = _model_count_rates(
-        proton_moments.density.nominal_value,
-        proton_moments.temperature.nominal_value,
-        proton_bulk_rtn,
-        passband_grids,
-        proton_central_speeds,
-        proton_central_eff_areas,
-        az_trans,
-        az_trans_spacing,
-        rotation_matrices,
-        PROTON_MASS_KG,
+    proton_true_rate = model_solar_wind_coincidence_rates(
+        SolarWindParams(
+            density=proton_moments.density.nominal_value,
+            bulk_velocity_rtn=proton_bulk_rtn,
+            temperature=proton_moments.temperature.nominal_value,
+            mass_kg=proton_ctx.mass_kg,
+        ),
+        proton_ctx,
     )
 
     # Initial guess from the alpha bump after subtracting the deadtime-applied proton bg.
     initial_guess = _alpha_initial_guess(
-        count_rate=count_rate,
-        esa_voltage=esa_voltage,
         proton_true_rate=proton_true_rate,
         proton_temperature=proton_moments.temperature.nominal_value,
-        passband_grids=passband_grids,
-        alpha_central_speeds=alpha_central_speeds,
-        alpha_central_eff_areas=alpha_central_eff_areas,
-        az_trans=az_trans,
-        az_trans_spacing=az_trans_spacing,
-        rotation_matrices=rotation_matrices,
+        alpha_ctx=alpha_ctx,
         proton_bulk_velocity_rtn=proton_bulk_rtn,
         magnetic_field_direction=magnetic_field_direction,
     )
@@ -193,12 +166,8 @@ def fit_solar_wind_alpha_moments(
     keep = count_rate_peak > 0
     if not np.all(keep):
         peak_flat_idx = peak_flat_idx[keep]
-        count_rate_peak = count_rate_peak[keep]
     proton_true_rate_peak = proton_true_rate[peak_flat_idx]
-    alpha_central_speeds_peak = alpha_central_speeds[peak_flat_idx]
-    alpha_central_eff_areas_peak = alpha_central_eff_areas[peak_flat_idx]
-    rotation_matrices_peak = rotation_matrices[peak_flat_idx]
-    passband_grids_peak = numba.typed.List([passband_grids[i] for i in peak_flat_idx])
+    alpha_ctx_peak = alpha_ctx.subset(peak_flat_idx)
 
     def residuals(x):
         return _alpha_residuals_njit(
@@ -206,13 +175,7 @@ def fit_solar_wind_alpha_moments(
             proton_bulk,
             magnetic_field_direction,
             proton_true_rate_peak,
-            count_rate_peak,
-            passband_grids_peak,
-            alpha_central_speeds_peak,
-            alpha_central_eff_areas_peak,
-            az_trans,
-            az_trans_spacing,
-            rotation_matrices_peak,
+            alpha_ctx_peak,
         )
 
     x0 = np.array([np.log(max(n0, 1e-3)), np.log(max(T0, 1e-3)), dv0])
@@ -262,31 +225,24 @@ def fit_solar_wind_alpha_moments(
 
 
 def _alpha_initial_guess(
-    count_rate: ndarray,
-    esa_voltage: ndarray,
     proton_true_rate: ndarray,
     proton_temperature: float,
-    passband_grids: numba.typed.List,
-    alpha_central_speeds: ndarray,
-    alpha_central_eff_areas: ndarray,
-    az_trans: ndarray,
-    az_trans_spacing: float,
-    rotation_matrices: ndarray,
+    alpha_ctx: SolarWindFitContext,
     proton_bulk_velocity_rtn: ndarray,
     magnetic_field_direction: ndarray,
 ) -> Optional[tuple]:
     """Return (n_α, T_α, Δv=0, peak_bin_indices) as a starting point for LM, or None if peak-finding fails."""
 
-    n_meas = len(esa_voltage)
+    n_meas = len(alpha_ctx.esa_voltage)
     if n_meas == 0:
         return None
 
-    n_sweeps, n_bins = _infer_sweep_layout(esa_voltage)
+    n_sweeps, n_bins = _infer_sweep_layout(alpha_ctx.esa_voltage)
     if n_sweeps is None:
         return None
 
-    counts_per_sweep = count_rate.reshape(n_sweeps, n_bins)
-    voltage_per_sweep = esa_voltage.reshape(n_sweeps, n_bins)[0]
+    counts_per_sweep = alpha_ctx.count_rate.reshape(n_sweeps, n_bins)
+    voltage_per_sweep = alpha_ctx.esa_voltage.reshape(n_sweeps, n_bins)[0]
     proton_obs_per_sweep = apply_deadtime_correction_array(
         proton_true_rate.reshape(n_sweeps, n_bins)
     )
@@ -311,17 +267,9 @@ def _alpha_initial_guess(
 
     T_alpha = proton_temperature
 
-    unit_alpha = _model_count_rates(
-        1.0,
-        T_alpha,
-        proton_bulk_velocity_rtn,
-        passband_grids,
-        alpha_central_speeds,
-        alpha_central_eff_areas,
-        az_trans,
-        az_trans_spacing,
-        rotation_matrices,
-        ALPHA_PARTICLE_MASS_KG,
+    unit_alpha = model_solar_wind_coincidence_rates(
+        SolarWindParams(1.0, proton_bulk_velocity_rtn, T_alpha, alpha_ctx.mass_kg),
+        alpha_ctx,
     )
     unit_alpha_per_sweep = unit_alpha.reshape(n_sweeps, n_bins).mean(axis=0)
     denom = float(np.nanmean(unit_alpha_per_sweep[peak_idx]))
