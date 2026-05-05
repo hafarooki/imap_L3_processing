@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 from figure_utils import load_swapi_response
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -32,7 +32,7 @@ def main():
 
     transmission = swapi_response.azimuthal_transmission
     azimuths = (
-        np.arange(len(transmission)) * SWAPIResponse.AZIMUTHAL_TRANSMISSION_SPACING_DEG
+        np.arange(len(transmission)) * SwapiResponse.AZIMUTHAL_TRANSMISSION_SPACING_DEG
     )
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))

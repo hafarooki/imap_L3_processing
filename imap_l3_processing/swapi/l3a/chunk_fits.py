@@ -163,8 +163,7 @@ class ProtonChunkFitter(ChunkFitter):
             )
         except Exception:
             logger.info(
-                f"Exception occurred at epoch {epoch}, continuing with fill value",
-                exc_info=True,
+                f"Missing SPICE information at epoch {epoch}, continuing with fill value"
             )
         return dict(
             epoch=epoch,
@@ -197,8 +196,8 @@ class AlphaChunkFitter(ChunkFitter):
         try:
             rm = get_swapi_geometry(measurement_times(chunk, SWAPI_COARSE_SWEEP_BINS))
         except Exception:
-            logger.warning(
-                "SPICE gap in alpha geometry, NaN-filling chunk", exc_info=True
+            logger.info(
+                f"Missing SPICE information at epoch {epoch}, continuing with fill value"
             )
             rm = None
         b_hat = compute_direction_of_mean_magnetic_field_over_chunk(
@@ -316,8 +315,7 @@ class PuiProtonChunkFitter(ChunkFitter):
             speed, clock_angle, deflection_angle = derive_velocity_angles(result.bulk_velocity_rtn, epoch)
         except Exception:
             logger.info(
-                f"Exception occurred at epoch {epoch}, continuing with fill value",
-                exc_info=True,
+                f"Missing SPICE information at epoch {epoch}, continuing with fill value"
             )
         return dict(
             proton_sw_speed=speed,

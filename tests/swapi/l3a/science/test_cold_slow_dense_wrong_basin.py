@@ -34,7 +34,7 @@ from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
     apply_deadtime_correction_array,
     model_solar_wind_ideal_coincidence_rates,
 )
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
@@ -117,8 +117,8 @@ def _build_per_bin_rotation_matrices() -> np.ndarray:
 _PER_BIN_ROTATION_MATRICES = _build_per_bin_rotation_matrices()
 
 
-def _load_swapi_response() -> SWAPIResponse:
-    return SWAPIResponse.from_files(
+def _load_swapi_response() -> SwapiResponse:
+    return SwapiResponse.from_files(
         _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
         _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
         _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",

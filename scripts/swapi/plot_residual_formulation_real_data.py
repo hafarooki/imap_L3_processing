@@ -48,7 +48,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_SCIENCE_BINS,
     esa_voltage_to_proton_speed,
 )
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
 from imap_l3_processing.utils import furnish_local_spice
 
@@ -79,7 +79,7 @@ CHUNKS = [
 
 
 def _load_swapi_response():
-    return SWAPIResponse.from_files(
+    return SwapiResponse.from_files(
         _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
         _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
         _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",

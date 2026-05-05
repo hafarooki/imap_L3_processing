@@ -29,7 +29,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     esa_voltage_to_alpha_speed,
     esa_voltage_to_proton_speed,
 )
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from tests.test_helpers import get_test_data_path, get_test_instrument_team_data_path
 
@@ -46,7 +46,7 @@ _PASSBAND_FIT_COEFFICIENTS_PATH = get_test_instrument_team_data_path(
 
 
 def _swapi_response():
-    return SWAPIResponse.from_files(
+    return SwapiResponse.from_files(
         _AZIMUTHAL_TRANSMISSION_PATH,
         _CENTRAL_EFFECTIVE_AREA_PATH,
         _PASSBAND_FIT_COEFFICIENTS_PATH,

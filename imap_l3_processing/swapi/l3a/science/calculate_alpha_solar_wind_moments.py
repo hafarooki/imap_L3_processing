@@ -32,7 +32,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_K_FACTOR,
     get_alpha_peak_indices,
 )
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
 
@@ -87,7 +87,7 @@ def fit_solar_wind_alpha_moments(
     count_rate: ndarray,
     esa_voltage: ndarray,
     measurement_time: ndarray,
-    swapi_response: SWAPIResponse,
+    swapi_response: SwapiResponse,
     proton_moments: ProtonSolarWindFitResult,
     magnetic_field_direction: ndarray,
     alpha_effective_area_scale: float,

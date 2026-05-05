@@ -41,7 +41,7 @@ from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments im
     SolarWindParams,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 from tests.swapi.l3a.science.reference_integral import reference_integrals_batch
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -77,7 +77,7 @@ def _thermal_speed(temperature_ev: float) -> float:
 
 def main():
     print("Loading calibration data...")
-    swapi_response = SWAPIResponse.from_files(
+    swapi_response = SwapiResponse.from_files(
         _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
         _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
         _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",

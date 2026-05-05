@@ -4,7 +4,7 @@ import numba
 import numpy as np
 from numpy import ndarray
 
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 
 
 class SolarWindFitContext(NamedTuple):
@@ -28,7 +28,7 @@ class SolarWindFitContext(NamedTuple):
 def build_solar_wind_fit_context(
     count_rate: ndarray,
     esa_voltage: ndarray,
-    swapi_response: SWAPIResponse,
+    swapi_response: SwapiResponse,
     central_effective_area_scale: float,
     rotation_matrices: ndarray,
     mass_kg: float,

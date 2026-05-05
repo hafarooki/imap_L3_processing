@@ -14,7 +14,7 @@ from imap_l3_processing.swapi.response.passband_grid import (
     eval_boundary_max,
     eval_boundary_min,
 )
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 from figure_utils import load_swapi_response
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -58,7 +58,7 @@ def main():
     print(f"Saved {output_path}")
 
 
-def representative_esa_voltages(swapi_response: SWAPIResponse) -> list[float]:
+def representative_esa_voltages(swapi_response: SwapiResponse) -> list[float]:
     # min/max across both regions and geometric mean
     voltage_limits = swapi_response.passband_esa_voltage_limits
     voltage_minimum = min(low for low, _ in voltage_limits.values())

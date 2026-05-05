@@ -14,7 +14,7 @@ from imap_l3_processing.swapi.response.response_grid import ResponseGrid
 
 
 @dataclass
-class SWAPIResponse:
+class SwapiResponse:
     azimuthal_transmission: NDArray  # shape (N,), evenly spaced at 0.1 deg intervals from 0
     central_effective_area_voltage: NDArray  # shape (M,), ESA voltages in V
     central_effective_area: NDArray  # shape (M,), effective area in cm^2
@@ -33,7 +33,7 @@ class SWAPIResponse:
         azimuthal_transmission_path: Path,
         central_effective_area_path: Path,
         passband_fit_coefficients_path: Path,
-    ) -> "SWAPIResponse":
+    ) -> "SwapiResponse":
         transmission_df = pd.read_csv(azimuthal_transmission_path)
         area_df = pd.read_csv(central_effective_area_path)
         coeffs_df = pd.read_csv(

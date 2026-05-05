@@ -10,7 +10,7 @@ from imap_l3_processing.swapi.response.passband_grid import (
     eval_boundary_max,
     eval_boundary_min,
 )
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 from tests.test_helpers import get_test_instrument_team_data_path
 
 AZIMUTHAL_TRANSMISSION_PATH = get_test_instrument_team_data_path(
@@ -26,7 +26,7 @@ PASSBAND_FIT_COEFFICIENTS_PATH = get_test_instrument_team_data_path(
 
 class TestSWAPIResponseFromFiles(unittest.TestCase):
     def setUp(self):
-        self.response = SWAPIResponse.from_files(
+        self.response = SwapiResponse.from_files(
             AZIMUTHAL_TRANSMISSION_PATH,
             CENTRAL_EFFECTIVE_AREA_PATH,
             PASSBAND_FIT_COEFFICIENTS_PATH,
@@ -63,7 +63,7 @@ class TestSWAPIResponseFromFiles(unittest.TestCase):
 
 class TestGetCentralEffectiveArea(unittest.TestCase):
     def setUp(self):
-        self.response = SWAPIResponse.from_files(
+        self.response = SwapiResponse.from_files(
             AZIMUTHAL_TRANSMISSION_PATH,
             CENTRAL_EFFECTIVE_AREA_PATH,
             PASSBAND_FIT_COEFFICIENTS_PATH,
@@ -85,7 +85,7 @@ class TestGetCentralEffectiveArea(unittest.TestCase):
 
 class TestGetPassbandValues(unittest.TestCase):
     def setUp(self):
-        self.response = SWAPIResponse.from_files(
+        self.response = SwapiResponse.from_files(
             AZIMUTHAL_TRANSMISSION_PATH,
             CENTRAL_EFFECTIVE_AREA_PATH,
             PASSBAND_FIT_COEFFICIENTS_PATH,
@@ -116,7 +116,7 @@ class TestGetPassbandValues(unittest.TestCase):
 
 class TestCreatePassbandGridExtremeVoltages(unittest.TestCase):
     def setUp(self):
-        self.response = SWAPIResponse.from_files(
+        self.response = SwapiResponse.from_files(
             AZIMUTHAL_TRANSMISSION_PATH,
             CENTRAL_EFFECTIVE_AREA_PATH,
             PASSBAND_FIT_COEFFICIENTS_PATH,
@@ -149,7 +149,7 @@ class TestCreatePassbandGridExtremeVoltages(unittest.TestCase):
 
 class TestWarmCache(unittest.TestCase):
     def setUp(self):
-        self.response = SWAPIResponse.from_files(
+        self.response = SwapiResponse.from_files(
             AZIMUTHAL_TRANSMISSION_PATH,
             CENTRAL_EFFECTIVE_AREA_PATH,
             PASSBAND_FIT_COEFFICIENTS_PATH,
@@ -166,7 +166,7 @@ class TestWarmCache(unittest.TestCase):
         self.assertIs(self.response.create_passband_grid(500.0), cached)
 
     def test_warm_then_create_matches_cold_create(self):
-        fresh = SWAPIResponse.from_files(
+        fresh = SwapiResponse.from_files(
             AZIMUTHAL_TRANSMISSION_PATH,
             CENTRAL_EFFECTIVE_AREA_PATH,
             PASSBAND_FIT_COEFFICIENTS_PATH,
@@ -191,7 +191,7 @@ class TestPassbandPolynomialBoundaries(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.response = SWAPIResponse.from_files(
+        cls.response = SwapiResponse.from_files(
             AZIMUTHAL_TRANSMISSION_PATH,
             CENTRAL_EFFECTIVE_AREA_PATH,
             PASSBAND_FIT_COEFFICIENTS_PATH,

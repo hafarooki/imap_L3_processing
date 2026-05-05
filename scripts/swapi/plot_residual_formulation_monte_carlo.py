@@ -46,7 +46,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_SCIENCE_BINS,
     esa_voltage_to_proton_speed,
 )
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
@@ -79,7 +79,7 @@ def _realistic_rotation_matrices(n_total):
 
 
 def _load_swapi_response():
-    return SWAPIResponse.from_files(
+    return SwapiResponse.from_files(
         _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
         _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
         _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",

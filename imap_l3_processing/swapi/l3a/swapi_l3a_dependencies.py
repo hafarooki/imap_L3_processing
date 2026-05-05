@@ -21,7 +21,7 @@ from imap_l3_processing.swapi.l3a.utils import read_l2_swapi_data, read_mag_rtn_
 from imap_l3_processing.utils import select_mag_path
 from imap_l3_processing.swapi.l3b.science.efficiency_calibration_table import EfficiencyCalibrationTable
 from imap_l3_processing.swapi.l3b.science.geometric_factor_calibration_table import GeometricFactorCalibrationTable
-from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 from imap_l3_processing.swapi.l3b.science.instrument_response_lookup_table import \
     InstrumentResponseLookupTableCollection
 
@@ -35,7 +35,7 @@ class SwapiL3ADependencies:
     density_of_neutral_helium_calibration_table: DensityOfNeutralHeliumLookupTable
     hydrogen_inflow_vector: InflowVector
     helium_inflow_vector: InflowVector
-    swapi_response: SWAPIResponse
+    swapi_response: SwapiResponse
     mag_data: Optional[MagData] = None
     mag_is_preliminary: bool = False
 
@@ -91,7 +91,7 @@ class SwapiL3ADependencies:
                 neutral_helium_path),
             hydrogen_inflow_vector=InflowVector.from_file(hydrogen_inflow_vector_path),
             helium_inflow_vector=InflowVector.from_file(helium_inflow_vector_path),
-            swapi_response=SWAPIResponse.from_files(
+            swapi_response=SwapiResponse.from_files(
                 azimuthal_transmission_path, central_effective_area_path, passband_fit_coefficients_path),
             mag_data=read_mag_rtn_data(mag_path) if mag_path is not None else None,
             mag_is_preliminary=mag_is_preliminary,
