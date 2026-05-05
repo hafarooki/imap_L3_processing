@@ -20,13 +20,14 @@ import numpy as np
 import pandas as pd
 
 from imap_l3_processing.constants import (
+    EV_TO_KELVIN,
     METERS_PER_KILOMETER,
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
-from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    SolarWindParams,
+from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
+    _LocalSWParams,
     calculate_integral,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
@@ -106,9 +107,6 @@ def main():
     references = df["integral"].to_numpy()
     optimized = np.empty(len(df))
 
-    az_trans = np.asarray(swapi_response.azimuthal_transmission, dtype=float)
-    az_trans_spacing = float(swapi_response.AZIMUTHAL_TRANSMISSION_SPACING_DEG)
-
     print(f"Warming passband cache for {len(df)} rows...")
     peak_voltages = [
         _peak_voltage(float(row.bulk_speed)) for row in df.itertuples(index=False)
@@ -117,22 +115,18 @@ def main():
 
     print(f"Computing {len(df)} optimized integrals...")
     for i, row in enumerate(df.itertuples(index=False)):
-        thermal_speed = float(
-            np.sqrt(row.temperature_ev * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG)
-            / METERS_PER_KILOMETER
-        )
-        sw = SolarWindParams(
+        sw = _LocalSWParams(
             density=float(row.density),
             bulk_speed=float(row.bulk_speed),
             bulk_azimuth=float(row.bulk_azimuth),
             bulk_elevation=float(row.bulk_elevation),
-            thermal_speed=thermal_speed,
+            temperature=float(row.temperature_ev) * EV_TO_KELVIN,
+            mass_kg=PROTON_MASS_KG,
         )
-        v_peak = peak_voltages[i]
-        grid = swapi_response.create_passband_grid(v_peak)
-        cs = swapi_response.central_speed(v_peak, PROTON_MASS_PER_CHARGE_M_P_PER_E)
-        cea = swapi_response.get_central_effective_area(v_peak)
-        optimized[i] = calculate_integral(grid, sw, cs, cea, az_trans, az_trans_spacing)
+        response_grid = swapi_response.create_response_grid(
+            peak_voltages[i], PROTON_MASS_PER_CHARGE_M_P_PER_E
+        )
+        optimized[i] = calculate_integral(response_grid, sw)
         if (i + 1) % 1000 == 0:
             print(f"  {i + 1}/{len(df)}", flush=True)
 
