@@ -3,15 +3,12 @@
 Scatter plots comparing the SWAPI proton-moments fit against ground truth on
 **real solar wind conditions** sampled from WIND/SWE 2-min ASCII data.
 
-Toggle `INCLUDE_FINE_SWEEPS` at the top of this module:
-  - False (default): use only the 62 coarse-sweep bins (indices 1..62), to
-    show the fit recovers (n, T, v_R, v_T, v_N) without fine-sweep coverage.
-  - True: include the 9 fine-sweep bins (indices 63..71) clustered near the
-    proton peak. Fine-sweep voltages come from a real example sweep
-    (imap_swapi_l2_sci_20260204_v002.cdf, sweep 0; see plot_l2_sweep.py).
+Uses the 62 coarse-sweep bins (indices 1..62 of a 72-bin sweep) to show that
+the fit recovers (n, T, v_R, v_T, v_N) without fine-sweep coverage.
 
-Per-sweep RTN→SWAPI rotation matrices are pulled from SPICE kernels at sweep
-midpoints offset from `_BASE_TIMESTAMP`.
+Per-bin RTN→SWAPI rotation matrices are generated synthetically by spinning a
+single anchor matrix (a real SPICE attitude near 2026-01-01) about its own
+spin axis at the nominal SWAPI spin period.
 
 Synthetic count rates are produced from the SWAPI forward model (5 sweeps per
 fit, Poisson noise); the ground truth is read from a CSV produced by
@@ -21,7 +18,7 @@ Generate the CSV first:
   conda run -n imapL3 python scripts/swapi/sample_wind_solar_wind.py \
       --year 2025 --n 10000 --seed 7
 
-Output: docs/swapi/figures/fit_accuracy[_with_fine].png
+Output: docs/swapi/figures/fit_accuracy.png
 Usage:  conda run -n imapL3 python docs/swapi/figure_src/plot_fit_accuracy.py
 """
 
@@ -34,12 +31,10 @@ import os
 import time
 import types
 import multiprocessing
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import numba
-import spiceypy
 from tqdm.contrib.concurrent import process_map
 from uncertainties import UFloat
 import matplotlib
@@ -51,8 +46,6 @@ from imap_l3_processing.constants import (
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
-from imap_l3_processing.utils import furnish_local_spice
-from imap_processing.spice.geometry import SpiceFrame, get_rotation_matrix
 from figure_utils import load_swapi_response
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     fit_solar_wind_proton_moments,
@@ -69,24 +62,19 @@ from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
     build_solar_wind_fit_context,
 )
 
-# Toggle: include the 9 fine-sweep bins (indices 63..71) in the synthetic
-# sweeps and the fit. See module docstring.
-INCLUDE_FINE_SWEEPS = False
-
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _N_SWEEPS = 5
 _SWEEP_DURATION_S = 12.0  # full 72-bin SWAPI sweep cadence
 _BINS_PER_SWEEP = 72
 _DT_S = _SWEEP_DURATION_S / _BINS_PER_SWEEP
-_BASE_TIMESTAMP = datetime(2026, 1, 1)  # SPICE rotation-matrix anchor
+_SPIN_PERIOD_S = 15.13  # typical IMAP spin period
 
-# Bin indices within a 72-bin sweep (1-indexed): 1..62 coarse, 63..71 fine.
-_COARSE_BIN_INDICES = np.arange(1, 63)
-_FINE_BIN_INDICES = np.arange(63, 72)
+# Coarse-sweep bin indices within a 72-bin sweep (1-indexed): 1..62.
+_BIN_INDICES_IN_SWEEP = np.arange(1, 63)
 
-# Mean SWAPI L2 coarse-sweep voltages (V), descending — bins 1..62 of the 72-bin
-# sweep, averaged over many real sweeps.
-_COARSE_VOLTAGES = np.array([
+# Mean SWAPI L2 coarse-sweep voltages (V), descending — bins 1..62 of the
+# 72-bin sweep, averaged over many real sweeps.
+_VOLTAGES = np.array([
      9895.52,  9088.69,  8348.80,  7667.55,  7042.16,  6469.31,  5941.77,  5457.31,
      5013.22,  4603.65,  4230.77,  3886.92,  3569.16,  3278.72,  3011.13,  2766.25,
      2539.54,  2333.83,  2144.24,  1969.31,  1808.74,  1660.86,  1525.75,  1401.82,
@@ -96,131 +84,24 @@ _COARSE_VOLTAGES = np.array([
       167.04,   153.46,   140.91,   129.50,   118.91,   109.20,   100.30,    92.11,
        84.61,    77.73,    71.40,    65.59,    60.23,    55.34,
 ])
-assert _COARSE_VOLTAGES.shape == (62,)
-
-# Fine-sweep voltages (V), bins 63..71 of the 72-bin sweep, taken from a real
-# example sweep: imap_swapi_l2_sci_20260204_v002.cdf, sweep 0 (see
-# docs/swapi/figure_src/plot_l2_sweep.py). ESA energies divided by the L2
-# k-factor (1.93) to give voltages.
-_SWAPI_L2_K_FACTOR = 1.93
-_FINE_SWEEP_VOLTAGES = np.array([
-    6.75500000e+01, 3.86000000e+01, 9.65000000e+00, 5.90960685e+02,
-    5.41903037e+02, 4.96917831e+02, 4.55666999e+02, 4.17840538e+02,
-    3.83154180e+02,
-]) / _SWAPI_L2_K_FACTOR
-assert _FINE_SWEEP_VOLTAGES.shape == (9,)
-
-if INCLUDE_FINE_SWEEPS:
-    _VOLTAGES = np.concatenate([_COARSE_VOLTAGES, _FINE_SWEEP_VOLTAGES])
-    _BIN_INDICES_IN_SWEEP = np.concatenate([_COARSE_BIN_INDICES, _FINE_BIN_INDICES])
-else:
-    _VOLTAGES = _COARSE_VOLTAGES
-    _BIN_INDICES_IN_SWEEP = _COARSE_BIN_INDICES
 _N_BINS = len(_VOLTAGES)
+assert _VOLTAGES.shape == _BIN_INDICES_IN_SWEEP.shape == (62,)
 
 
-# SPICE-derived RTN→SWAPI rotation matrices at sweep midpoints, used as
-# anchors for the per-bin rotation in the SPICE-unavailable fallback path.
-# Captures the ~4° spin-axis tilt off -R_RTN and the ~15.13 s spin period.
-_PRECOMPUTED_SWEEP_MIDPOINT_MATRICES = np.array([
-    [[+0.0705, +0.9157, +0.3955],
-     [-0.9968, +0.0792, -0.0057],
-     [-0.0365, -0.3939, +0.9184]],
-    [[-0.0141, -0.1350, +0.9907],
-     [-0.9972, +0.0743, -0.0041],
-     [-0.0731, -0.9881, -0.1357]],
-    [[-0.0721, -0.9884, +0.1340],
-     [-0.9974, +0.0716, -0.0084],
-     [-0.0013, -0.1342, -0.9909]],
-    [[-0.0183, -0.3937, -0.9191],
-     [-0.9971, +0.0750, -0.0122],
-     [+0.0737, +0.9162, -0.3939]],
-    [[+0.0683, +0.7775, -0.6251],
-     [-0.9968, +0.0795, -0.0100],
-     [+0.0420, +0.6238, +0.7805]],
+# Single RTN→SWAPI anchor matrix from a real SPICE attitude near 2026-01-01,
+# at the first sweep midpoint (t = _ANCHOR_TIME_S). Reflects the ~4° spin-axis
+# tilt off -R̂_RTN. Per-bin matrices are built by spinning this anchor about
+# its own +Y row (the spin axis in RTN) at the nominal SWAPI spin period.
+_ANCHOR_ROTATION_MATRIX = np.array([
+    [+0.0705, +0.9157, +0.3955],
+    [-0.9968, +0.0792, -0.0057],
+    [-0.0365, -0.3939, +0.9184],
 ])
+_ANCHOR_TIME_S = 0.5 * _SWEEP_DURATION_S
+# Sign chosen so R(t) = anchor @ Rot(δφ, spin_axis_RTN) reproduces independent
+# SPICE-derived sweep midpoints over a 5-sweep cycle.
+_SPIN_OMEGA_RAD_S = -2.0 * np.pi / _SPIN_PERIOD_S
 
-
-def _compute_per_bin_rotation_matrices(
-    n_sweeps: int, bin_indices_in_sweep: np.ndarray,
-) -> np.ndarray:
-    """RTN→SWAPI rotation matrix per (sweep, bin) sample, capturing within-
-    sweep spin.
-
-    Each bin is sampled at time t = sw·_SWEEP_DURATION_S + bin_idx·_DT_S,
-    where bin_idx is the 1-indexed position of the bin within a 72-bin
-    sweep. Tries SPICE first; falls back to rotating the inlined
-    sweep-midpoint matrices forward/backward about the spin axis at the
-    spacecraft's measured spin rate.
-
-    Returns shape (n_sweeps · n_bins, 3, 3) flattened in (sweep-major,
-    bin-minor) order — matches the per-bin layout expected by
-    `solar_wind_fit_context`.
-    """
-    n_bins = len(bin_indices_in_sweep)
-    sweep_index = np.repeat(np.arange(n_sweeps), n_bins)
-    bin_index = np.tile(bin_indices_in_sweep, n_sweeps)
-    bin_offsets_s = sweep_index * _SWEEP_DURATION_S + bin_index * _DT_S
-    try:
-        furnish_local_spice()
-        base_et = spiceypy.datetime2et(_BASE_TIMESTAMP)
-        sample_et = base_et + bin_offsets_s
-        return get_rotation_matrix(sample_et, SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_SWAPI)
-    except spiceypy.utils.exceptions.SpiceyError:
-        if n_sweeps != _PRECOMPUTED_SWEEP_MIDPOINT_MATRICES.shape[0]:
-            raise
-        print("(SPICE attitude unavailable; spinning precomputed matrices per bin)")
-        return _spin_per_bin_from_midpoints(
-            _PRECOMPUTED_SWEEP_MIDPOINT_MATRICES, sweep_index, bin_index,
-        )
-
-
-def _spin_per_bin_from_midpoints(
-    midpoint_matrices: np.ndarray,
-    sweep_index: np.ndarray,
-    bin_index: np.ndarray,
-) -> np.ndarray:
-    """Rotate the sweep-midpoint matrices about the spin axis to per-bin times.
-
-    Spin axis is the mean Y row (SWAPI boresight, also spacecraft spin axis)
-    of the midpoint matrices. Spin rate is recovered by least-squares fit of
-    the unwrapped phase of the +X SWAPI axis (projected onto the plane
-    perpendicular to the spin axis) versus sweep-midpoint time.
-    """
-    spin_axis = midpoint_matrices[:, 1, :].mean(axis=0)
-    spin_axis = spin_axis / np.linalg.norm(spin_axis)
-
-    x_axis = midpoint_matrices[:, 0, :]
-    x_perp = x_axis - (x_axis @ spin_axis)[:, None] * spin_axis
-    e1 = x_perp[0] / np.linalg.norm(x_perp[0])
-    e2 = np.cross(spin_axis, e1)
-    phase_raw = np.arctan2(x_perp @ e2, x_perp @ e1)
-    phase = np.unwrap(phase_raw)
-    midpoint_times_s = (np.arange(midpoint_matrices.shape[0]) + 0.5) * _SWEEP_DURATION_S
-    omega, _ = np.polyfit(midpoint_times_s, phase, 1)
-
-    sample_times_s = sweep_index * _SWEEP_DURATION_S + bin_index * _DT_S
-    midpoint_times_for_samples = (sweep_index + 0.5) * _SWEEP_DURATION_S
-    delta_phi = omega * (sample_times_s - midpoint_times_for_samples)
-
-    cos_dp = np.cos(delta_phi)
-    sin_dp = np.sin(delta_phi)
-    one_minus_cos = 1.0 - cos_dp
-    ax, ay, az = spin_axis
-    K = np.array([
-        [cos_dp + ax * ax * one_minus_cos,
-         ax * ay * one_minus_cos - az * sin_dp,
-         ax * az * one_minus_cos + ay * sin_dp],
-        [ay * ax * one_minus_cos + az * sin_dp,
-         cos_dp + ay * ay * one_minus_cos,
-         ay * az * one_minus_cos - ax * sin_dp],
-        [az * ax * one_minus_cos - ay * sin_dp,
-         az * ay * one_minus_cos + ax * sin_dp,
-         cos_dp + az * az * one_minus_cos],
-    ]).transpose(2, 0, 1)
-
-    base = midpoint_matrices[sweep_index]
-    return np.einsum("nij,njk->nik", base, K)
 
 # Set by main() before forking; children inherit via fork.
 _worker_state: types.SimpleNamespace | None = None
@@ -254,8 +135,7 @@ def _load_wind_samples(csv_path: Path) -> tuple[np.ndarray, ...]:
 def _initialize_worker_state(ground_truth_params: tuple[np.ndarray, ...]) -> None:
     global _worker_state
 
-    label = "coarse+fine" if INCLUDE_FINE_SWEEPS else "coarse-only"
-    print(f"Using {_N_BINS} bins ({label}), "
+    print(f"Using {_N_BINS} coarse-sweep bins, "
           f"{_VOLTAGES.min():.1f}–{_VOLTAGES.max():.1f} V")
 
     swapi_response = load_swapi_response()
@@ -283,6 +163,29 @@ def _initialize_worker_state(ground_truth_params: tuple[np.ndarray, ...]) -> Non
         per_bin_rotation_matrices=per_bin_rotation_matrices,
         base_ctx=base_ctx,
     )
+
+
+def _compute_per_bin_rotation_matrices(
+    n_sweeps: int, bin_indices_in_sweep: np.ndarray,
+) -> np.ndarray:
+    """Synthetic per-bin RTN→SWAPI matrices: anchor spun about its spin axis.
+
+    Bin sample times are t = sw·_SWEEP_DURATION_S + bin_idx·_DT_S. Returns
+    shape (n_sweeps · n_bins, 3, 3) in (sweep-major, bin-minor) order.
+    """
+    sweep_index = np.repeat(np.arange(n_sweeps), len(bin_indices_in_sweep))
+    bin_index = np.tile(bin_indices_in_sweep, n_sweeps)
+    sample_times_s = sweep_index * _SWEEP_DURATION_S + bin_index * _DT_S
+
+    spin_axis = _ANCHOR_ROTATION_MATRIX[1] / np.linalg.norm(_ANCHOR_ROTATION_MATRIX[1])
+    delta_phi = _SPIN_OMEGA_RAD_S * (sample_times_s - _ANCHOR_TIME_S)
+
+    ax, ay, az = spin_axis
+    K = np.array([[0, -az, ay], [az, 0, -ax], [-ay, ax, 0]])
+    sin_dp = np.sin(delta_phi)[:, None, None]
+    one_minus_cos = (1.0 - np.cos(delta_phi))[:, None, None]
+    rot = np.eye(3) + sin_dp * K + one_minus_cos * (K @ K)
+    return _ANCHOR_ROTATION_MATRIX @ rot
 
 
 def _run_fits(n_samples: int) -> pd.DataFrame:
@@ -408,15 +311,10 @@ def _plot_results(data: pd.DataFrame) -> None:
     ]
 
     fig, axes = plt.subplots(1, 5, figsize=(17, 4))
-    bin_label = (
-        f"coarse+fine ({_N_BINS} bins/sweep)"
-        if INCLUDE_FINE_SWEEPS
-        else f"coarse only ({_N_BINS} bins/sweep)"
-    )
     fig.suptitle(
         f"Initial guess vs. final optimizer vs. WIND ground truth\n"
         f"({n_samples} real solar wind cases from WIND/SWE 2-min 2025, "
-        f"{_N_SWEEPS} sweeps, {bin_label}, Poisson noise)",
+        f"{_N_SWEEPS} sweeps × {_N_BINS} coarse-sweep bins, Poisson noise)",
         fontsize=11,
     )
 
@@ -478,8 +376,7 @@ def _plot_results(data: pd.DataFrame) -> None:
 
     out_dir = _REPO_ROOT / "docs" / "swapi" / "figures"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_name = "fit_accuracy_with_fine.png" if INCLUDE_FINE_SWEEPS else "fit_accuracy.png"
-    out_path = out_dir / out_name
+    out_path = out_dir / "fit_accuracy.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved {out_path}")
 
