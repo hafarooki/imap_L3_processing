@@ -17,7 +17,7 @@ from imap_l3_processing.swapi.l3a.science.solar_wind_optimizer import (
 
 
 _MAX_BASIN_REFINE_ITERS = 6
-_ROTATED_RMSE_RATIO_THRESHOLD = 30
+_ROTATED_RMSE_RATIO_THRESHOLD = 10
 
 
 def escape_local_minimum(

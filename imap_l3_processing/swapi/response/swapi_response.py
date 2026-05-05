@@ -10,6 +10,7 @@ from imap_l3_processing.swapi.response.passband_grid import (
     PassbandGrid,
     build_passband_grid,
 )
+from imap_l3_processing.swapi.response.response_grid import ResponseGrid
 
 
 @dataclass
@@ -110,7 +111,7 @@ class SWAPIResponse:
         esa_voltage: float,
         mass_per_charge_m_p_per_e: float,
         central_effective_area_scale: float = 1.0,
-    ) -> "ResponseGrid":
+    ) -> ResponseGrid:
         from imap_l3_processing.swapi.response.response_grid import ResponseGrid
 
         return ResponseGrid(
