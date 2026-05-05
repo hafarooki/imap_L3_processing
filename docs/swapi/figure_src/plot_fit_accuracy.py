@@ -56,7 +56,7 @@ from imap_l3_processing.swapi.l3a.science.proton_initial_guess import (
 from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
     SolarWindParams,
     apply_deadtime_correction_array,
-    model_solar_wind_coincidence_rates,
+    model_solar_wind_ideal_coincidence_rates,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
     build_solar_wind_fit_context,
@@ -224,7 +224,7 @@ def _process_one(i):
         temperature=temperature,
         mass_kg=PROTON_MASS_KG,
     )
-    count_rates = model_solar_wind_coincidence_rates(truth_params, ws.base_ctx)
+    count_rates = model_solar_wind_ideal_coincidence_rates(truth_params, ws.base_ctx)
     count_rates = apply_deadtime_correction_array(count_rates)
     count_rates = (
         np.random.default_rng(i).poisson(np.maximum(count_rates * 0.145, 0.0)).astype(float)

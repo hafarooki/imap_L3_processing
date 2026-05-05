@@ -32,7 +32,7 @@ from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
 from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
     SolarWindParams,
     apply_deadtime_correction_array,
-    model_solar_wind_coincidence_rates,
+    model_solar_wind_ideal_coincidence_rates,
 )
 from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 
@@ -157,7 +157,7 @@ class TestColdSlowDenseWrongBasin(unittest.TestCase):
             mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
         )
         rates = apply_deadtime_correction_array(
-            model_solar_wind_coincidence_rates(truth_params, base_ctx)
+            model_solar_wind_ideal_coincidence_rates(truth_params, base_ctx)
         )
         rng = np.random.default_rng(cls.POISSON_SEED)
         count_rate = (
@@ -231,7 +231,7 @@ def _setup_synthetic_fit(
         mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     rates = apply_deadtime_correction_array(
-        model_solar_wind_coincidence_rates(truth_params, base_ctx)
+        model_solar_wind_ideal_coincidence_rates(truth_params, base_ctx)
     )
     rng = np.random.default_rng(seed)
     count_rate = rng.poisson(np.maximum(rates * 0.145, 0.0)).astype(float) / 0.145

@@ -109,7 +109,7 @@ _REGION_VV_POS = +2
 
 
 @numba.njit(nogil=True)
-def model_solar_wind_coincidence_rates(
+def model_solar_wind_ideal_coincidence_rates(
     sw_params: SolarWindParams,
     ctx: SolarWindFitContext,
 ) -> ndarray:

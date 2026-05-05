@@ -8,7 +8,7 @@ from numpy import ndarray
 from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import SolarWindFitContext
 from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
     apply_deadtime_correction_array,
-    model_solar_wind_coincidence_rates,
+    model_solar_wind_ideal_coincidence_rates,
     SolarWindParams,
 )
 
@@ -47,6 +47,6 @@ def optimize_solar_wind_params(
 
 @numba.njit
 def _calculate_residuals(sw_params: SolarWindParams, ctx: SolarWindFitContext) -> ndarray:
-    model_true = model_solar_wind_coincidence_rates(sw_params, ctx)
+    model_true = model_solar_wind_ideal_coincidence_rates(sw_params, ctx)
     model_obs = apply_deadtime_correction_array(model_true)
     return model_obs - ctx.count_rate
