@@ -56,10 +56,11 @@ _COARSE_VOLTAGES = np.array([
 _N_BINS = 62
 _N_SWEEPS = 5
 
-# RTN -> SWAPI rotation matrices, one per sweep at sweep midpoints. SPICE-
-# derived, captures ~4° spin-axis tilt off -R_RTN and the ~15.13 s spin
-# period. Matches plot_fit_accuracy.py.
-_ROTATION_MATRICES = np.array([
+# RTN -> SWAPI rotation matrices at sweep midpoints. SPICE-derived, captures
+# ~4° spin-axis tilt off -R_RTN and the ~15.13 s spin period. Used as
+# anchors for per-bin rotation that captures within-sweep spin (~285° of
+# rotation across the 12 s sweep). Matches plot_fit_accuracy.py.
+_SWEEP_MIDPOINT_MATRICES = np.array([
     [[+0.0705, +0.9157, +0.3955],
      [-0.9968, +0.0792, -0.0057],
      [-0.0365, -0.3939, +0.9184]],
@@ -76,6 +77,44 @@ _ROTATION_MATRICES = np.array([
      [-0.9968, +0.0795, -0.0100],
      [+0.0420, +0.6238, +0.7805]],
 ])
+_BINS_PER_SWEEP = 72
+_SWEEP_DURATION_S = 12.0
+_DT_S = _SWEEP_DURATION_S / _BINS_PER_SWEEP
+_BIN_INDICES_IN_SWEEP = np.arange(1, 63)  # 62 coarse bins, 1-indexed
+
+
+def _build_per_bin_rotation_matrices() -> np.ndarray:
+    """Spin midpoint matrices about the spin axis to per-bin times, so each
+    coincidence-rate bin samples a different spacecraft phase."""
+    spin_axis = _SWEEP_MIDPOINT_MATRICES[:, 1, :].mean(axis=0)
+    spin_axis = spin_axis / np.linalg.norm(spin_axis)
+    x_axis = _SWEEP_MIDPOINT_MATRICES[:, 0, :]
+    x_perp = x_axis - (x_axis @ spin_axis)[:, None] * spin_axis
+    e1 = x_perp[0] / np.linalg.norm(x_perp[0])
+    e2 = np.cross(spin_axis, e1)
+    phase = np.unwrap(np.arctan2(x_perp @ e2, x_perp @ e1))
+    midpoint_times_s = (np.arange(_N_SWEEPS) + 0.5) * _SWEEP_DURATION_S
+    omega, _ = np.polyfit(midpoint_times_s, phase, 1)
+
+    sweep_index = np.repeat(np.arange(_N_SWEEPS), _N_BINS)
+    bin_index = np.tile(_BIN_INDICES_IN_SWEEP, _N_SWEEPS)
+    sample_times_s = sweep_index * _SWEEP_DURATION_S + bin_index * _DT_S
+    midpoint_times_for_samples = (sweep_index + 0.5) * _SWEEP_DURATION_S
+    delta_phi = omega * (sample_times_s - midpoint_times_for_samples)
+
+    cos_dp, sin_dp = np.cos(delta_phi), np.sin(delta_phi)
+    one_minus_cos = 1.0 - cos_dp
+    ax, ay, az = spin_axis
+    K = np.array([
+        [cos_dp + ax*ax*one_minus_cos, ax*ay*one_minus_cos - az*sin_dp, ax*az*one_minus_cos + ay*sin_dp],
+        [ay*ax*one_minus_cos + az*sin_dp, cos_dp + ay*ay*one_minus_cos, ay*az*one_minus_cos - ax*sin_dp],
+        [az*ax*one_minus_cos - ay*sin_dp, az*ay*one_minus_cos + ax*sin_dp, cos_dp + az*az*one_minus_cos],
+    ]).transpose(2, 0, 1)
+    base = _SWEEP_MIDPOINT_MATRICES[sweep_index]
+    return np.einsum("nij,njk->nik", base, K)
+
+
+_PER_BIN_ROTATION_MATRICES = _build_per_bin_rotation_matrices()
 
 
 def _load_swapi_response() -> SWAPIResponse:
@@ -100,7 +139,7 @@ class TestColdSlowDenseWrongBasin(unittest.TestCase):
         swapi_response = _load_swapi_response()
         all_voltages = np.tile(_COARSE_VOLTAGES, _N_SWEEPS)
         swapi_response.warm_cache(all_voltages)
-        per_bin_rotation_matrices = np.repeat(_ROTATION_MATRICES, _N_BINS, axis=0)
+        per_bin_rotation_matrices = _PER_BIN_ROTATION_MATRICES
 
         truth_params = SolarWindParams(
             density=cls.TRUE_DENSITY,
@@ -174,7 +213,7 @@ def _setup_synthetic_fit(
     swapi_response = _load_swapi_response()
     all_voltages = np.tile(_COARSE_VOLTAGES, _N_SWEEPS)
     swapi_response.warm_cache(all_voltages)
-    per_bin_rotation_matrices = np.repeat(_ROTATION_MATRICES, _N_BINS, axis=0)
+    per_bin_rotation_matrices = _PER_BIN_ROTATION_MATRICES
 
     truth_params = SolarWindParams(
         density=density,
@@ -280,6 +319,50 @@ class TestColdSlowDenseAdjacentWrongBasin(_RecoverySuite):
     TRUE_TEMPERATURE_K = 14550.0
     TRUE_VELOCITY_RTN = np.array([292.0, 34.4, -20.2])
     POISSON_SEED = 7246
+
+
+class TestSlowWarmPositiveVtNegativeVN(_RecoverySuite):
+    """Sample 1307 of WIND/SWE 2025: v_R=315, T≈22.6 kK, n=6.78, v_T=+79.6,
+    v_N=-4.4. With per-bin rotation and spin-axis-aligned IG (vT≈-25), LM still
+    walks into the v_T≈-129 antipodal basin."""
+    __test__ = True
+    TRUE_DENSITY = 6.784
+    TRUE_TEMPERATURE_K = 22560.0
+    TRUE_VELOCITY_RTN = np.array([315.1, 79.6, -4.4])
+    POISSON_SEED = 1307
+
+
+class TestFastLowDensityNoiseDominated(_RecoverySuite):
+    """Sample 6763 of WIND/SWE 2025: v_R=531, T≈166 kK, very low n=0.14, v_T=-18.3,
+    v_N=+10.7. Low SNR — the fit pulls v_N to ~0 instead of +10.7. Borderline
+    between basin-flip and noise-limited miss."""
+    __test__ = True
+    TRUE_DENSITY = 0.143
+    TRUE_TEMPERATURE_K = 165700.0
+    TRUE_VELOCITY_RTN = np.array([531.3, -18.3, 10.7])
+    POISSON_SEED = 6763
+
+
+class TestFastVeryHotLargeNegativeVt(_RecoverySuite):
+    """Sample 4093 of WIND/SWE 2025: v_R=577, very hot (T≈843 kK), n=7.3,
+    v_T=-118.8, v_N=+28.2. Recovered correctly by single-shot LM on dual-basin;
+    flipped by 3-stage method."""
+    __test__ = True
+    TRUE_DENSITY = 7.306
+    TRUE_TEMPERATURE_K = 843400.0
+    TRUE_VELOCITY_RTN = np.array([577.1, -118.8, 28.2])
+    POISSON_SEED = 4093
+
+
+class TestFastHotLargeNegativeVtNegativeVN(_RecoverySuite):
+    """Sample 7285 of WIND/SWE 2025: v_R=519, hot (T≈667 kK), n=11.4,
+    v_T=-95.9, v_N=-46.6. Recovered correctly by single-shot LM on dual-basin;
+    flipped by 3-stage method."""
+    __test__ = True
+    TRUE_DENSITY = 11.395
+    TRUE_TEMPERATURE_K = 666600.0
+    TRUE_VELOCITY_RTN = np.array([518.8, -95.9, -46.6])
+    POISSON_SEED = 7285
 
 
 if __name__ == "__main__":

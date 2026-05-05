@@ -41,12 +41,9 @@ def calculate_initial_guess(ctx: SolarWindFitContext) -> SolarWindParams:
         speed, ctx.count_rate, bulk_speed_seed, temperature_seed, ctx.mass_kg,
     )
 
-    nominal_earth_speed = -30
-    derived_radial_speed = math.sqrt(
-        max(bulk_speed_init ** 2 - nominal_earth_speed ** 2, 0.0)
-    )
-
-    bulk_velocity_rtn = np.array([derived_radial_speed, nominal_earth_speed, 0.0])
+    spin_axis_rtn = ctx.rotation_matrices[:, 1, :].mean(axis=0)
+    spin_axis_rtn = spin_axis_rtn / np.linalg.norm(spin_axis_rtn)
+    bulk_velocity_rtn = -bulk_speed_init * spin_axis_rtn
 
     unit_density_rate = model_solar_wind_coincidence_rates(
         SolarWindParams(1.0, bulk_velocity_rtn, temperature, ctx.mass_kg), ctx,

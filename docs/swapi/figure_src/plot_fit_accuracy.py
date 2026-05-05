@@ -76,7 +76,13 @@ INCLUDE_FINE_SWEEPS = False
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _N_SWEEPS = 5
 _SWEEP_DURATION_S = 12.0  # full 72-bin SWAPI sweep cadence
+_BINS_PER_SWEEP = 72
+_DT_S = _SWEEP_DURATION_S / _BINS_PER_SWEEP
 _BASE_TIMESTAMP = datetime(2026, 1, 1)  # SPICE rotation-matrix anchor
+
+# Bin indices within a 72-bin sweep (1-indexed): 1..62 coarse, 63..71 fine.
+_COARSE_BIN_INDICES = np.arange(1, 63)
+_FINE_BIN_INDICES = np.arange(63, 72)
 
 # Mean SWAPI L2 coarse-sweep voltages (V), descending — bins 1..62 of the 72-bin
 # sweep, averaged over many real sweeps.
@@ -106,18 +112,17 @@ assert _FINE_SWEEP_VOLTAGES.shape == (9,)
 
 if INCLUDE_FINE_SWEEPS:
     _VOLTAGES = np.concatenate([_COARSE_VOLTAGES, _FINE_SWEEP_VOLTAGES])
+    _BIN_INDICES_IN_SWEEP = np.concatenate([_COARSE_BIN_INDICES, _FINE_BIN_INDICES])
 else:
     _VOLTAGES = _COARSE_VOLTAGES
+    _BIN_INDICES_IN_SWEEP = _COARSE_BIN_INDICES
 _N_BINS = len(_VOLTAGES)
 
 
-# SPICE-derived RTN→SWAPI rotation matrices, one per sweep at sweep midpoints
-# spaced by `_SWEEP_DURATION_S` starting from `_BASE_TIMESTAMP`. Inlined to
-# avoid requiring an attitude CK that covers _BASE_TIMESTAMP. Captures the
-# ~4° spin-axis tilt off -R_RTN and the ~15.13 s spin period (sweep-to-sweep
-# phase shift). Per-bin spin variation within a sweep is dropped; the 5
-# sweeps still span one full spin cycle, so v_T and v_N remain observable.
-_PRECOMPUTED_ROTATION_MATRICES = np.array([
+# SPICE-derived RTN→SWAPI rotation matrices at sweep midpoints, used as
+# anchors for the per-bin rotation in the SPICE-unavailable fallback path.
+# Captures the ~4° spin-axis tilt off -R_RTN and the ~15.13 s spin period.
+_PRECOMPUTED_SWEEP_MIDPOINT_MATRICES = np.array([
     [[+0.0705, +0.9157, +0.3955],
      [-0.9968, +0.0792, -0.0057],
      [-0.0365, -0.3939, +0.9184]],
@@ -136,23 +141,86 @@ _PRECOMPUTED_ROTATION_MATRICES = np.array([
 ])
 
 
-def _compute_rotation_matrices(n_sweeps: int) -> np.ndarray:
-    """RTN→SWAPI rotation matrices at sweep midpoints.
+def _compute_per_bin_rotation_matrices(
+    n_sweeps: int, bin_indices_in_sweep: np.ndarray,
+) -> np.ndarray:
+    """RTN→SWAPI rotation matrix per (sweep, bin) sample, capturing within-
+    sweep spin.
 
-    Tries SPICE first; falls back to the inlined precomputed matrices if the
-    required attitude CK is unavailable. Per-bin spin variation within a sweep
-    is dropped; one matrix per sweep at its midpoint.
+    Each bin is sampled at time t = sw·_SWEEP_DURATION_S + bin_idx·_DT_S,
+    where bin_idx is the 1-indexed position of the bin within a 72-bin
+    sweep. Tries SPICE first; falls back to rotating the inlined
+    sweep-midpoint matrices forward/backward about the spin axis at the
+    spacecraft's measured spin rate.
+
+    Returns shape (n_sweeps · n_bins, 3, 3) flattened in (sweep-major,
+    bin-minor) order — matches the per-bin layout expected by
+    `solar_wind_fit_context`.
     """
+    n_bins = len(bin_indices_in_sweep)
+    sweep_index = np.repeat(np.arange(n_sweeps), n_bins)
+    bin_index = np.tile(bin_indices_in_sweep, n_sweeps)
+    bin_offsets_s = sweep_index * _SWEEP_DURATION_S + bin_index * _DT_S
     try:
         furnish_local_spice()
         base_et = spiceypy.datetime2et(_BASE_TIMESTAMP)
-        midpoints_et = base_et + (np.arange(n_sweeps) + 0.5) * _SWEEP_DURATION_S
-        return get_rotation_matrix(midpoints_et, SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_SWAPI)
+        sample_et = base_et + bin_offsets_s
+        return get_rotation_matrix(sample_et, SpiceFrame.IMAP_RTN, SpiceFrame.IMAP_SWAPI)
     except spiceypy.utils.exceptions.SpiceyError:
-        if n_sweeps != _PRECOMPUTED_ROTATION_MATRICES.shape[0]:
+        if n_sweeps != _PRECOMPUTED_SWEEP_MIDPOINT_MATRICES.shape[0]:
             raise
-        print("(SPICE attitude unavailable; using precomputed rotation matrices)")
-        return _PRECOMPUTED_ROTATION_MATRICES
+        print("(SPICE attitude unavailable; spinning precomputed matrices per bin)")
+        return _spin_per_bin_from_midpoints(
+            _PRECOMPUTED_SWEEP_MIDPOINT_MATRICES, sweep_index, bin_index,
+        )
+
+
+def _spin_per_bin_from_midpoints(
+    midpoint_matrices: np.ndarray,
+    sweep_index: np.ndarray,
+    bin_index: np.ndarray,
+) -> np.ndarray:
+    """Rotate the sweep-midpoint matrices about the spin axis to per-bin times.
+
+    Spin axis is the mean Y row (SWAPI boresight, also spacecraft spin axis)
+    of the midpoint matrices. Spin rate is recovered by least-squares fit of
+    the unwrapped phase of the +X SWAPI axis (projected onto the plane
+    perpendicular to the spin axis) versus sweep-midpoint time.
+    """
+    spin_axis = midpoint_matrices[:, 1, :].mean(axis=0)
+    spin_axis = spin_axis / np.linalg.norm(spin_axis)
+
+    x_axis = midpoint_matrices[:, 0, :]
+    x_perp = x_axis - (x_axis @ spin_axis)[:, None] * spin_axis
+    e1 = x_perp[0] / np.linalg.norm(x_perp[0])
+    e2 = np.cross(spin_axis, e1)
+    phase_raw = np.arctan2(x_perp @ e2, x_perp @ e1)
+    phase = np.unwrap(phase_raw)
+    midpoint_times_s = (np.arange(midpoint_matrices.shape[0]) + 0.5) * _SWEEP_DURATION_S
+    omega, _ = np.polyfit(midpoint_times_s, phase, 1)
+
+    sample_times_s = sweep_index * _SWEEP_DURATION_S + bin_index * _DT_S
+    midpoint_times_for_samples = (sweep_index + 0.5) * _SWEEP_DURATION_S
+    delta_phi = omega * (sample_times_s - midpoint_times_for_samples)
+
+    cos_dp = np.cos(delta_phi)
+    sin_dp = np.sin(delta_phi)
+    one_minus_cos = 1.0 - cos_dp
+    ax, ay, az = spin_axis
+    K = np.array([
+        [cos_dp + ax * ax * one_minus_cos,
+         ax * ay * one_minus_cos - az * sin_dp,
+         ax * az * one_minus_cos + ay * sin_dp],
+        [ay * ax * one_minus_cos + az * sin_dp,
+         cos_dp + ay * ay * one_minus_cos,
+         ay * az * one_minus_cos - ax * sin_dp],
+        [az * ax * one_minus_cos - ay * sin_dp,
+         az * ay * one_minus_cos + ax * sin_dp,
+         cos_dp + az * az * one_minus_cos],
+    ]).transpose(2, 0, 1)
+
+    base = midpoint_matrices[sweep_index]
+    return np.einsum("nij,njk->nik", base, K)
 
 # Set by main() before forking; children inherit via fork.
 _worker_state: types.SimpleNamespace | None = None
@@ -193,8 +261,9 @@ def _initialize_worker_state(ground_truth_params: tuple[np.ndarray, ...]) -> Non
     swapi_response = load_swapi_response()
     all_esa_voltages = np.tile(_VOLTAGES, _N_SWEEPS)
     swapi_response.warm_cache(all_esa_voltages)
-    rotation_matrices = _compute_rotation_matrices(_N_SWEEPS)
-    per_bin_rotation_matrices = np.repeat(rotation_matrices, _N_BINS, axis=0)
+    per_bin_rotation_matrices = _compute_per_bin_rotation_matrices(
+        _N_SWEEPS, _BIN_INDICES_IN_SWEEP,
+    )
     # Base context: bundles per-bin response grids and rotation matrices. Reused
     # for both forward modeling (synthetic count rates) and per-fit context
     # construction. count_rate is a placeholder of ones to bypass the >0 filter.
