@@ -117,24 +117,35 @@ When an integration elevation falls between stored passband-bound rows, the wide
 `SwapiProcessor` precomputes a `PassbandGrid` for each unique ESA voltage in an L2 file once, before fitting any of the 5-sweep chunks.
 At fit setup, each ESA voltage step is wrapped in a `ResponseGrid` that bundles the precomputed passband grid with the species-dependent central speed $v_0$, central effective area, and azimuthal transmission.
 
-## Solar Wind Model
+## Forward Model
+
+#### Velocity Distribution Function
+
 The solar wind proton velocity distribution function (VDF) is modeled as a drifting Maxwellian. In instrument coordinates, it is parameterized by bulk velocity ($v_b, \theta_b, \phi_b$), proton temperature $T_p$ in Kelvin, and density $n$.
 The VDF is given by:
 $$f_p(\mathbf{v}) = f_p(v, \theta, \phi) = \frac{n}{(\sqrt{2\pi}\, v_\text{th})^3} \exp\!\left(-\frac{v^2 + v_b^2 - 2 v\, v_b \cos\alpha(\theta, \phi)}{2 v_\text{th}^2}\right),$$
 where $\theta$ is elevation, $\phi$ is azimuth, $\cos\alpha = \sin\theta_b \sin\theta + \cos\theta_b \cos\theta \cos(\phi - \phi_b)$, and $v_\text{th} = \sqrt{k_B T_p/m_p}$.
 
-Substituting into the count rate integral in spherical velocity coordinates $(v, \theta, \phi)$:
+#### Coincidence Rate Integral
+
+Substituting the VDF into the count rate integral in spherical velocity coordinates $(v, \theta, \phi)$:
 $$C(V) = \frac{n\, \mathcal{A}_0(V)}{(\sqrt{2\pi}\, v_\text{th})^3} \sum_\text{region} \int \cos\theta\, d\theta \int \mathcal{T}(\phi)\, d\phi \int v^3\, P\!\left(\tfrac{v}{v_0}, \theta\right) \exp\!\left(-\frac{v^2 + v_b^2 - 2vv_b\cos\alpha}{2v_\text{th}^2}\right) dv.$$
 The $v^3\cos\theta$ factor comes from the velocity-space volume element $v^2\cos\theta\,dv\,d\theta\,d\phi$ times the particle speed $v$ in the flux term.
 
-The sum runs over five azimuth regions: sunglasses (SG, $|\phi| \leq 20°$), and the open aperture split into a vanes-vignetting (VV) sub-region adjacent to each vane ($20° < |\phi| \leq 26°$) plus a full-transmission OA sub-region ($26° < |\phi| < 150°$).
-They are integrated separately so that only one passband is used for each integral and because the integral will generally have separate peaks in each of these regions due to the vanes at $\pm 20^\circ$.
+#### Azimuthal Regions
 
-Splitting the open aperture at $\pm 26°$ anchors a Gauss-Legendre boundary at the inflection of $\mathcal{T}(\phi)$, which is identically zero at $|\phi| = 20°$ (vanes fully blocking) and rises smoothly to $\sim 1$ by $|\phi| \approx 30°$. Without the split, the steep rise sits in the interior of one wide GL window and is poorly resolved. The $26°$ cut was chosen by sweeping $23°$–$30°$ against `reference_integrals.csv` (best high-rate failure count); $27°$ puts the steepest $d\mathcal{T}/d\phi$ point right at the boundary, undoing the benefit. The constant `VV_OUTER_DEG` in `calculate_proton_solar_wind_moments.py` controls the cut.
+The "region" sum runs over five azimuth regions: sunglasses (SG, $|\phi| \leq 20°$), and the open aperture split into a vanes-vignetting (VV) sub-region adjacent to each vane ($20° \leq |\phi| \leq 26°$) and the primary open aperture region (OA) away from the influence of the sunglasses ($26° \leq |\phi| \leq 150°$).
+
+Splitting the open aperture at $\pm 26°$ anchors a boundary at the inflection of $\mathcal{T}(\phi)$, which is identically zero at $|\phi| = 20°$ (vanes fully blocking) and rises to $\sim 1$ by $|\phi| \approx 30°$ with a sharply increasing slope.
+The sharp change in slope is because the sunglasses grid itself introduces a vignetting effect that extends about as far as the vanes' vignetting.
+
+Another advantage of splitting the azimuthal integration is that only one passband needs to be used for each region.
 
 ### Angular limits
 
-For each azimuth region, the angular cutoff $\Delta\alpha$ is chosen from the VDF angular falloff at the passband central speed $v_0$:
+For each azimuth region, the angular cutoff $\Delta\alpha$ is chosen from the VDF angular falloff at the passband central speed $v_0$. At fixed speed $v$, the Maxwellian's angular dependence relative to its on-axis value is
+$$\frac{f(v, \alpha)}{f(v, 0)} = \exp\!\left(\frac{v v_b (\cos\alpha - 1)}{v_\text{th}^2}\right).$$
+Setting this ratio to $\varepsilon$ at $v = v_0$ and solving for $\alpha$:
 $$\Delta\alpha = \frac{180}{\pi}\arccos\!\left(\mathrm{clamp}\!\left(\frac{v_\text{th}^2 \ln\varepsilon}{v_0 v_b} + 1;\; -1,\; 1\right)\right),$$
 with $\varepsilon_\text{SG} = \varepsilon_\text{OA} = 10^{-6}$. If the VDF is broad enough that the arccos argument would leave $[-1, 1]$, the clamp makes $\Delta\alpha = 180^\circ$.
 
@@ -156,11 +167,10 @@ If either clamped dimension has zero width, that region is skipped.
 
 For OA± only, the azimuth window is trimmed once more using the product of the VDF and azimuthal transmission. `_trim_oa_azimuth_by_integrand` samples 64 points of $f(v_0, \theta_b', \phi)\mathcal{T}(\phi)$ across the clamped OA azimuth window, where $\theta_b'$ is $\theta_b$ clamped into the OA elevation range. It keeps the portion above $10^{-6}$ of its maximum and expands by one sample on each side.
 
-After this trim, OA± is skipped when the heuristic upper estimate
+After this trim, OA$\pm$ is skipped when the heuristic upper estimate
 $$\hat{C}_\text{OA} = \mathcal{A}_0(V)\,v_0^3\,\Delta\theta\,\Delta v\,\int_{\phi_\text{lo}}^{\phi_\text{hi}} \mathcal{T}(\phi)\,g(\phi)\,d\phi$$
 falls below $\max(0.1\;\text{Hz},\; 10^{-3} C_\text{SG})$. Here $g(\phi) = f(v_0, \theta_b', \phi)$, $\Delta\theta$ is the clamped OA elevation width in radians, and $\Delta v = (r_\text{max}(0) - r_\text{min}(0))v_0$ is the OA passband speed width at $\theta = 0^\circ$.
 
-The VV± regions are not trimmed or skipped: they are bounded ($\leq 6°$ wide), $\mathcal{T}(\phi)$ is small (peak $\sim 0.05$) but rises steeply, and a few GL nodes resolve them cheaply.
 
 ### Speed limits
 
@@ -171,33 +181,37 @@ For each Gauss-Legendre elevation node, the speed integral only needs to cover s
 
 The VDF speed interval is taken to be
 $$[v_b - \Delta v_\text{VDF},\; v_b + \Delta v_\text{VDF}], \qquad \Delta v_\text{VDF} = 6v_\text{th},$$
-where $v_b = |\mathbf{v}_b|$ and $v_\text{th}$ is the thermal speed. For the Maxwellian VDF used here, this captures essentially all of the distribution: at $6\sigma$ the radial factor is $e^{-18} \approx 1.5 \times 10^{-8}$ of peak. A much wider window (e.g.\ the previous $10v_\text{th}$) makes Gauss-Legendre concentrate nodes far from the integrand peak for cold plasma where the passband already extends well beyond $6v_\text{th}$, and the resulting polynomial overshoots the near-delta peak by a few percent at high count rate; a much narrower one ($3v_\text{th}$) clips the Maxwellian wings and fails catastrophically when the angular geometry shifts the per-elevation speed peak off-center.
+where $v_b = |\mathbf{v}_b|$ and $v_\text{th}$ is the thermal speed. For the Maxwellian VDF used here, this captures essentially all of the distribution: at $6\sigma$ the radial factor is $e^{-18} \approx 10^{-8}$ of peak. A much wider window (e.g., $10v_\text{th}$) makes Gauss-Legendre concentrate nodes far from the integrand peak for cold plasma where the passband already extends well beyond $6v_\text{th}$; a much narrower one (e.g., $3v_\text{th}$) clips the Maxwellian wings too much for off-peak passband alignments.
 
 The passband speed range is stored as speed-ratio bounds relative to the central passband speed $v_0$:
 $$[r_\text{min}(\theta)v_0,\; r_\text{max}(\theta)v_0].$$
 Here $r_\text{min}(\theta)$ and $r_\text{max}(\theta)$ depend on both elevation and aperture region (SG or OA). They describe where the passband at that elevation remains above the integration cutoff.
 
-The integration limits are the intersection of those two windows:
+The speed integration limits are the intersection of those two windows:
 $$v_\text{lo}(\theta) = \max\!\left(v_b - \Delta v_\text{VDF},\; r_\text{min}(\theta)v_0\right),$$
 $$v_\text{hi}(\theta) = \min\!\left(v_b + \Delta v_\text{VDF},\; r_\text{max}(\theta)v_0\right).$$
 
 #### Quadrature behavior
 
-`calculate_integral` evaluates each region as nested Gauss-Legendre quadratures in elevation, azimuth, and speed:
-$$(N_\text{elev}, N_\text{az}, N_\text{speed}) = (21,\;21,\;15).$$
-SG and OA use the same azimuth-node count; the OA window is already tightened by the transmission-aware trim. $N_\text{speed} = 15$ (rather than 11) is required for cold plasma: when the Maxwellian width $v_\text{th}$ is small relative to the (passband-bounded) speed window, the per-node spacing at $N_\text{speed} = 11$ is comparable to $\sigma$ and GL undersamples the peak. With the $\Delta v_\text{VDF} = 6 v_\text{th}$ window above, $N_\text{speed} = 15$ gives $\sim 0.8\sigma$ spacing — sufficient for GL convergence on the bilinear-interpolated integrand. Bumping further to $N_\text{speed} = 21$ marginally reduces the median error but does not improve the high-rate tail (the residual $\sim 2\%$ failures at $\geq 10^4$ Hz come from elevation-dimension integrand kinks, not speed quadrature).
+`calculate_integral` evaluates each region as nested Gauss-Legendre quadratures with a fixed number of integration points:
+$$(N_\theta, N_\phi, N_v) = (21,\;21,\;15).$$
 
-The loop order is elevation → azimuth → speed. The implementation computes terms in the outermost loop where they are constant as much as possible.
+The nested integration loop order is $\theta$ → $\phi$ → $v$
+The code implementation computes terms in the outermost loop where they are constant as much as possible and attempts to maximize CPU cache usage efficiency.
 
 ### Integrator Validation
 
-Representative model spectra below exercise the integrator's edges. Most configurations stay within $\sim 1.5\%$ of the reference; the cold-plasma case ($T = 11{,}605$ K, on-axis) reaches $\sim 13\%$ at the spectrum peak because the polynomial-fit passband tail outside the 1%-of-max threshold-crossing carries non-negligible signal that the production integrator deliberately truncates while the fixed-limit reference does not.
+The optimized integrator (`calculate_integral`) is validated against a high-resolution fixed-limit reference integrator (`reference_integral_fixed_limits`) — the same forward model evaluated on a much denser fixed grid with no dynamic integration limits.
+
+The figure below compares the two integrators on six solar wind configurations: cold and hot temperatures, bulk elevation past the SG passband edge, bulk azimuth straddling the SG/OA boundary, and high speed.
 
 ![Production vs ground-truth spectra for six representative SW configurations](figures/spectra.png)
 
 *Generated by `docs/swapi/figure_src/plot_spectra.py`.*
 
-The optimized integrator is validated against a high-resolution fixed-limit reference (`reference_integral_fixed_limits`) over 10000 random solar-wind configurations (`reference_integrals.csv`). Each configuration is evaluated at the ESA voltage whose central proton speed equals its `bulk_speed`. The table below summarizes the distribution of $|$ratio $-1|$ stratified by reference count rate.
+For aggregate accuracy, the optimized integrator is evaluated against the same reference integral over 10000 random solar-wind configurations (`reference_integrals.csv`).
+Each configuration is evaluated at the ESA voltage whose central proton speed equals its `bulk_speed`. 
+The table below summarizes the distribution of $|\text{ratio} - 1|$ grouped by reference coincidence rate.
 
 <!-- BEGIN: validation_table (auto-generated by docs/swapi/figure_src/build_validation_table.py — do not edit by hand) -->
 | Reference (Hz)  |     N |  Median |     95% |     99% |     Max |
@@ -212,7 +226,8 @@ The optimized integrator is validated against a high-resolution fixed-limit refe
 | $\geq 10^5$     |  3841 |   0.09% |   0.35% |   0.60% |   1.52% |
 <!-- END: validation_table -->
 
-For high-rate cases ($\geq 10^3$ Hz) where the proton fit residuals are dominated by Poisson noise rather than integrator error, $|$ratio $-1|$ stays within a few percent of unity at the 99th percentile. The $< 0.1$ Hz band is configurations where the bulk direction sits many sigma outside the FOV — both integrators round to $\sim 0$, well below the noise floor, so the ratio is meaningless and clamped to $100\%$ above. The remaining percent-level worst-cases at $\geq 10^4$ Hz cluster around bulk elevations within $\sim 1°$ of the SG passband elevation edges ($\pm 5.93°$, $-9.94°$), where the bilinear-interpolated passband has a near-cliff in the integrand that Gauss-Legendre at $N_\text{elev}=21$ does not fully resolve.
+For high-rate cases ($\geq 10^3$ Hz) where proton fit residuals are dominated by Poisson noise rather than integrator error, $|\text{ratio} - 1|$ stays within a few percent of unity at the 99th percentile. The $< 0.1$ Hz band is configurations where the bulk direction sits many sigma outside the FOV — both integrators round to well below SWAPI's noise floor (which varies between 0.1 Hz and 10 Hz, typically closer to 10 Hz), so the ratio is clamped to $100\%$.
+The worst cases at typical solar wind coincidence rate ($\geq 10^4$ Hz) are primarily due to bulk flow directions near the edge of the instrument response, which is rare by design because of the alignment of SWAPI's boresight and the spacecraft spin axis with the nominal average solar wind direction.
 
 *Run `docs/swapi/figure_src/build_validation_table.py` after non-trivial integrator changes to regenerate the table in place.*
 
@@ -287,9 +302,11 @@ Not accounting for this would result in an overestimate of the model count rate 
 
 #### Parameter uncertainties
 
-The optimizer returns the Jacobian $J$ of the residuals with respect to $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ at the solution. The parameter covariance is
+The optimizer returns the Jacobian $J$ of the residuals with respect to $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ at the solution.
+The parameter covariance related to the Jacobian (Vugrin et al., 2007).
+We calculate it as:
 $$\Sigma_x = s^2\,(J^\top J)^+, \qquad s^2 = \frac{\sum_i r_i^2}{N - p},$$
-where ${}^+$ is the Moore–Penrose pseudoinverse. Residuals are unweighted, so the $s^2$ scaling absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, intra-window variability) — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`. The directly fitted scalars get
+where ${}^+$ is the Moore–Penrose pseudoinverse $N$ is the number of measurements, and $p$ is the number of parameters (five). Residuals are unweighted, so the $s^2$ scaling absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, intra-window variability) — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`. The directly fitted scalars get
 $$\sigma_n = n\,\sqrt{\Sigma_{x,00}}, \qquad \sigma_T = T\,\sqrt{\Sigma_{x,11}}.$$
 
 The fitted velocity $\mathbf{v}_b^\text{SC}$ (RTN) is built as a 3-tuple of correlated `uncertainties.UFloat` components carrying $\Sigma_v = \Sigma_x[2{:}5,\,2{:}5]$. `derive_velocity_angles` rotates this tuple into the IMAP DPS (despun spacecraft) frame so the angles describe plasma flow relative to the spacecraft attitude:
@@ -406,3 +423,4 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 
 - Rankin, J. S., McComas, D. J., et al. (2025). Solar Wind and Pickup Ion (SWAPI) Instrument on NASA's Interstellar Mapping and Acceleration Probe (IMAP). *Space Science Reviews*, 221(8), 108. https://doi.org/10.1007/s11214-025-01229-8 — SWAPI instrument paper; sign conventions and coordinate system (Step 3).
 - Tsoulfanidis, N. (1995). *Measurement and Detection of Radiation* (2nd ed.). Taylor & Francis. p. 74. — Deadtime formula: $n = g / (1 - g\tau)$.
+- Vugrin, K. W., et al. (2007). Confidence region estimation techniques for nonlinear regression in groundwater flow: Three case studies. *Water Resources Research*, 43, W03423. https://doi.org/10.1029/2005WR004804 — Parameter covariance $\Sigma_x = s^2 (J^\top J)^+$ with residual-scaled $s^2$.
