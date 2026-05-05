@@ -1,6 +1,9 @@
 import math
 import unittest
+
+import scipy.optimize
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import numba
@@ -14,22 +17,26 @@ from imap_l3_processing.constants import (
     METERS_PER_KILOMETER,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
+from imap_l3_processing.constants import SWAPI_LIVETIME_S
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     _get_initial_guess,
-    _compute_angles,
-    _model_count_rates,
-    apply_deadtime_correction_array,
-    _optimize,
-    apply_deadtime_correction,
-    calculate_integral,
     fit_solar_wind_proton_moments,
-    interpolate_passband,
-    _interpolate_transmission,
-    _get_angular_limits,
-    SWParams,
     ProtonSolarWindMoments,
-    SWAPI_LIVETIME_S,
 )
+from imap_l3_processing.swapi.l3a.science.proton_fit_context import ProtonFitContext
+from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
+    SolarWindParams,
+    _compute_angles,
+    _integration_window,
+    _interpolate_transmission,
+    _model_count_rates,
+    _optimal_density_scale,
+    apply_deadtime_correction,
+    apply_deadtime_correction_array,
+    calculate_integral,
+    interpolate_passband,
+)
+from imap_l3_processing.swapi.response.response_grid import ResponseGrid
 import pandas as pd
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     esa_voltage_to_proton_speed,
@@ -37,7 +44,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_L2_K_FACTOR,
     SWAPI_SCIENCE_BINS,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from tests.test_helpers import get_test_data_path, get_test_instrument_team_data_path
 
@@ -64,13 +71,14 @@ _coverage_shared = {}
 
 
 def _coverage_worker(noisy_rate):
-    return fit_solar_wind_proton_moments(
-        noisy_rate,
-        _coverage_shared["voltages"],
-        _coverage_shared["sr"],
-        1.0,
-        _coverage_shared["rot"],
+    ctx = ProtonFitContext.from_l2_data(
+        count_rate=noisy_rate,
+        esa_voltage=_coverage_shared["voltages"],
+        swapi_response=_coverage_shared["sr"],
+        central_effective_area_scale=1.0,
+        rotation_matrices=_coverage_shared["rot"],
     )
+    return fit_solar_wind_proton_moments(ctx)
 
 
 _R_BASE_RTN_TO_SWAPI = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
@@ -97,7 +105,7 @@ def _realistic_rotation_matrices(n_total, n_sweeps):
     R = np.empty((n_total, 3, 3))
     for i, a in enumerate(alphas):
         c, s = np.cos(a), np.sin(a)
-        R_spin = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+        R_spin = np.array([[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]])
         R[i] = R_spin @ _R_BASE_RTN_TO_SWAPI
     return R
 
@@ -127,7 +135,7 @@ def _make_sw_params(
     bulk_elevation=-5.0,
 ):
     """Build an SWParams with defaults that produce a nonzero integral for all three azimuth regions."""
-    return SWParams(
+    return SolarWindParams(
         density=density,
         bulk_speed=bulk_speed,
         bulk_azimuth=bulk_azimuth,
@@ -371,7 +379,7 @@ class TestCalculateIntegral(unittest.TestCase):
                 np.sqrt(row.temperature_ev * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG)
                 / METERS_PER_KILOMETER
             )
-            sw = SWParams(
+            sw = SolarWindParams(
                 density=float(row.density),
                 bulk_speed=float(row.bulk_speed),
                 bulk_azimuth=float(row.bulk_azimuth),
@@ -503,9 +511,8 @@ class TestGetInitialGuess(unittest.TestCase):
         )
         self.voltages = np.tile(voltages_one_sweep, n_sweeps)
 
-        all_voltages = np.tile(voltages_one_sweep, n_sweeps)
         self.grids, self.cs, self.cea, self.at, self.ats = _build_proton_arrays(
-            self.sr, all_voltages
+            self.sr, self.voltages
         )
 
         self.rotation_matrices = _spin_rotation_matrices(
@@ -528,16 +535,11 @@ class TestGetInitialGuess(unittest.TestCase):
         )
 
     def _run(self):
-        return _get_initial_guess(
-            self.count_rate,
-            self.voltages,
-            self.grids,
-            self.cs,
-            self.cea,
-            self.at,
-            self.ats,
-            self.rotation_matrices,
+        ctx = ProtonFitContext(
+            self.count_rate, self.voltages, self.grids, self.cs, self.cea,
+            self.at, self.ats, self.rotation_matrices,
         )
+        return _get_initial_guess(ctx)
 
     def test_recovers_bulk_speed(self):
         # Initial guess returns the radial speed only; compare to v_R, not |v_true|.
@@ -545,16 +547,18 @@ class TestGetInitialGuess(unittest.TestCase):
             self._run().bulk_velocity_rtn[0], self.true_speed, rtol=0.02
         )
 
-    def test_recovers_temperature(self):
-        np.testing.assert_allclose(
-            self._run().temperature, self.true_temperature, rtol=0.2
-        )
+    def test_initial_temperature_matches_ialirt_heuristic(self):
+        # Initial T is the IALIRT-style heuristic 60000 K * (v_peak / 400)^2,
+        # which depends only on peak-bin speed — not on the true temperature.
+        result = self._run()
+        expected = 60000.0 * (self.true_speed / 400.0) ** 2
+        np.testing.assert_allclose(result.temperature, expected, rtol=0.05)
 
     def test_recovers_density(self):
         # Density is scaled against a unit model evaluated with the (incorrect) anti-sunward
-        # direction; small transverse components in the truth thus produce a few-percent bias
-        # in the initial density. The optimizer corrects this in step 3.
-        np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.2)
+        # direction and the heuristic temperature, so the initial density carries a
+        # tens-of-percent bias. The optimizer corrects it in step 3.
+        np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.4)
 
     def test_bulk_velocity_initial_guess(self):
         result = self._run()
@@ -577,7 +581,7 @@ def _spin_rotation_matrices(n, spin_period_s=15.0, dt_s=0.145):
     R = np.empty((n, 3, 3))
     for i, a in enumerate(alphas):
         c, s = np.cos(a), np.sin(a)
-        R_spin = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+        R_spin = np.array([[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]])
         R[i] = R_spin @ _R_BASE_RTN_TO_SWAPI
     return R
 
@@ -600,9 +604,9 @@ class TestOptimize(unittest.TestCase):
             20,
         )
         n_sweeps = 5
-        all_voltages = np.tile(voltages, n_sweeps)
+        cls.all_voltages = np.tile(voltages, n_sweeps)
         cls.grids, cls.cs, cls.cea, cls.at, cls.ats = _build_proton_arrays(
-            sr, all_voltages
+            sr, cls.all_voltages
         )
 
         cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
@@ -627,16 +631,11 @@ class TestOptimize(unittest.TestCase):
         )
 
     def _run(self):
-        return _optimize(
-            self.count_rate,
-            self.grids,
-            self.cs,
-            self.cea,
-            self.at,
-            self.ats,
-            self.rot,
-            self.initial_guess,
+        ctx = ProtonFitContext(
+            self.count_rate, self.all_voltages, self.grids, self.cs, self.cea,
+            self.at, self.ats, self.rot,
         )
+        return fit_solar_wind_proton_moments(ctx, self.initial_guess)
 
     def test_recovers_density(self):
         np.testing.assert_allclose(self._run().density, self.true_density, rtol=0.05)
@@ -677,9 +676,9 @@ class TestUncertainties(unittest.TestCase):
             20,
         )
         n_sweeps = 5
-        all_voltages = np.tile(voltages, n_sweeps)
+        cls.all_voltages = np.tile(voltages, n_sweeps)
         cls.grids, cls.cs, cls.cea, cls.at, cls.ats = _build_proton_arrays(
-            sr, all_voltages
+            sr, cls.all_voltages
         )
 
         cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
@@ -702,16 +701,11 @@ class TestUncertainties(unittest.TestCase):
             bulk_velocity_rtn=np.array([cls.true_speed * 1.05, 0.0, 0.0]),
             bad_fit_flag=0,
         )
-        cls.result = _optimize(
-            cls.count_rate,
-            cls.grids,
-            cls.cs,
-            cls.cea,
-            cls.at,
-            cls.ats,
-            cls.rot,
-            cls.initial_guess,
+        ctx = ProtonFitContext(
+            cls.count_rate, cls.all_voltages, cls.grids, cls.cs, cls.cea,
+            cls.at, cls.ats, cls.rot,
         )
+        cls.result = fit_solar_wind_proton_moments(ctx, cls.initial_guess)
 
     def test_density_sigma_is_finite_and_positive(self):
         self.assertTrue(np.isfinite(self.result.density_sigma))
@@ -774,7 +768,8 @@ class TestUncertainties(unittest.TestCase):
                 bulk_velocity_rtn=np.array([self.true_speed * 1.05, 0.0, 0.0]),
                 bad_fit_flag=0,
             )
-            return _optimize(cr, grids, cs, cea, at, ats, rot, ig)
+            ctx = ProtonFitContext(cr, all_v, grids, cs, cea, at, ats, rot)
+            return fit_solar_wind_proton_moments(ctx, ig)
 
         r5 = run_with_n_sweeps(5)
         r10 = run_with_n_sweeps(10)
@@ -1073,26 +1068,11 @@ class TestIntegrationRealL2Spectrum(unittest.TestCase):
         cls.rot = _L2_ROTATION_MATRICES.reshape(n_sweeps * n_bins, 3, 3)
         cls.count_rate = _L2_COUNT_RATES.ravel()
 
-        ig = _get_initial_guess(
-            cls.count_rate,
-            all_voltages,
-            cls.grids,
-            cls.cs,
-            cls.cea,
-            cls.at,
-            cls.ats,
-            cls.rot,
+        ctx = ProtonFitContext(
+            cls.count_rate, all_voltages, cls.grids, cls.cs, cls.cea,
+            cls.at, cls.ats, cls.rot,
         )
-        cls.result = _optimize(
-            cls.count_rate,
-            cls.grids,
-            cls.cs,
-            cls.cea,
-            cls.at,
-            cls.ats,
-            cls.rot,
-            ig,
-        )
+        cls.result = fit_solar_wind_proton_moments(ctx)
 
     def test_fit_succeeds(self):
         self.assertEqual(self.result.bad_fit_flag, SwapiL3Flags.NONE)
@@ -1147,11 +1127,17 @@ class TestFitSolarWindProtonMoments(unittest.TestCase):
     """Tests for the top-level fit_solar_wind_proton_moments entry point."""
 
     def setUp(self):
-        from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-            fit_solar_wind_proton_moments,
-        )
+        def fit(count_rate, voltages, sr, scale, rot):
+            ctx = ProtonFitContext.from_l2_data(
+                count_rate=count_rate,
+                esa_voltage=voltages,
+                swapi_response=sr,
+                central_effective_area_scale=scale,
+                rotation_matrices=rot,
+            )
+            return fit_solar_wind_proton_moments(ctx)
 
-        self.fit = fit_solar_wind_proton_moments
+        self.fit = fit
 
     def test_returns_proton_solar_wind_moments(self):
         sr = _load_swapi_response()
@@ -1423,57 +1409,13 @@ class TestLogNormalUncertaintyCoverage(unittest.TestCase):
         )
 
 
-class TestGetInitialGuessCurveFitFailure(unittest.TestCase):
-    """Verify _get_initial_guess falls back to peak-bin speed and 50 km/s thermal speed
-    when scipy.optimize.curve_fit raises RuntimeError."""
-
-    def test_falls_back_to_peak_speed_and_default_sigma(self):
-        voltages = np.geomspace(
-            _peak_voltage(450.0) * 0.5, _peak_voltage(450.0) * 2.0, 20
-        )
-        count_rate = np.ones(len(voltages))
-        rotation_matrices = np.tile(np.eye(3), (len(voltages), 1, 1))
-        dummy_cs = np.ones(len(voltages))
-        dummy_cea = np.ones(len(voltages))
-        dummy_at = np.ones(100)
-
-        with (
-            patch(
-                "scipy.optimize.curve_fit", side_effect=RuntimeError("max iterations")
-            ),
-            patch(
-                "imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments._model_count_rates",
-                return_value=np.ones(len(voltages)),
-            ),
-        ):
-            result = _get_initial_guess(
-                count_rate,
-                voltages,
-                None,
-                dummy_cs,
-                dummy_cea,
-                dummy_at,
-                0.1,
-                rotation_matrices,
-            )
-
-        # Fallback: bulk_speed = speed[peak_idx], sigma_v = 50.0 km/s
-        peak_idx = int(np.nanargmax(count_rate))
-        expected_speed = float(esa_voltage_to_proton_speed(voltages[peak_idx]))
-        np.testing.assert_allclose(
-            result.bulk_velocity_rtn[0], expected_speed, rtol=0.01
-        )
-        # Fallback sigma_v = 50 km/s → T = m_p * (50e3)^2 / k_B ≈ 302,778 K (≈ 26.1 eV)
-        np.testing.assert_allclose(result.temperature, 26.1 * EV_TO_KELVIN, rtol=0.01)
-
-
 class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):
     """Verify calculate_integral returns 0 when all passband values are zero (skips division by norm)."""
 
     def test_zero_passband_grid_returns_zero(self):
         # Build a PassbandGrid where all passband values are zero — norm will be 0
         # and the region loop should skip all regions, returning 0.
-        from imap_l3_processing.swapi.l3a.science.passband_grid import PassbandGrid
+        from imap_l3_processing.swapi.response.passband_grid import PassbandGrid
 
         zero_grid = np.zeros((23, 101), dtype=np.float64)
         transmission = np.ones(1800, dtype=np.float64)
@@ -1492,7 +1434,7 @@ class TestCalculateIntegralZeroPassbandNorm(unittest.TestCase):
             oa_elevation_range=(-12.0, 10.5),
             sg_elevation_range=(-10.5, 7.0),
         )
-        sw_params = SWParams(
+        sw_params = SolarWindParams(
             density=5.0,
             bulk_speed=450.0,
             bulk_azimuth=0.0,
@@ -1509,7 +1451,7 @@ class TestInterpolateTransmissionBoundary(unittest.TestCase):
     same out-of-bounds entry (weights cancel). Uses a 3-element array to trigger easily."""
 
     def setUp(self):
-        from imap_l3_processing.swapi.l3a.science.passband_grid import PassbandGrid
+        from imap_l3_processing.swapi.response.passband_grid import PassbandGrid
 
         zero_grid = np.zeros((23, 101), dtype=np.float64)
         boundary = np.array([[0.0], [0.95]])
@@ -1544,7 +1486,7 @@ class TestInterpolateTransmissionBoundary(unittest.TestCase):
 
 
 class TestGetAngularLimits(unittest.TestCase):
-    """Verify _get_angular_limits clamps to the correct per-region passband bounds:
+    """Verify _integration_window clamps to the correct per-region passband bounds:
       SG  (region=0):  elevation ∈ [−11°, 7°],   azimuth ∈ [−20°, 20°]
       OA− (region=−1): elevation ∈ [−12°, 10°],  azimuth ∈ [−150°, −20°]
       OA+ (region=+1): elevation ∈ [−12°, 10°],  azimuth ∈ [20°, 150°]
@@ -1555,40 +1497,45 @@ class TestGetAngularLimits(unittest.TestCase):
     def setUpClass(cls):
         sr = _load_swapi_response()
         sr.warm_cache([_peak_voltage(450.0)])
-        cls.grid = sr.create_passband_grid(_peak_voltage(450.0))
-        cls.cs = sr.central_speed(
-            _peak_voltage(450.0), PROTON_MASS_PER_CHARGE_M_P_PER_E
+        cls.rg = ResponseGrid(
+            passband_grid=sr.create_passband_grid(_peak_voltage(450.0)),
+            central_speed=float(sr.central_speed(
+                _peak_voltage(450.0), PROTON_MASS_PER_CHARGE_M_P_PER_E
+            )),
+            central_effective_area=0.0,
+            azimuthal_transmission=np.zeros(1),
+            azimuthal_transmission_spacing=1.0,
         )
 
     def test_sg_elevation_clamped_to_sg_passband_bounds(self):
         # bulk_elevation outside the SG active range should be clamped to [-10.5, 7]
         sw = _make_sw_params(bulk_elevation=12.0)
-        min_el, max_el, _, _ = _get_angular_limits(sw, 0, self.grid, self.cs)
+        min_el, max_el, _, _ = _integration_window(sw, 0, self.rg)
         self.assertGreaterEqual(min_el, -10.5)
         self.assertLessEqual(max_el, 7.0)
 
     def test_oa_elevation_clamped_to_oa_passband_bounds(self):
         # bulk_elevation outside the OA active range should be clamped to [-12, 10.5]
         sw = _make_sw_params(bulk_elevation=15.0)
-        min_el, max_el, _, _ = _get_angular_limits(sw, 1, self.grid, self.cs)
+        min_el, max_el, _, _ = _integration_window(sw, 1, self.rg)
         self.assertGreaterEqual(min_el, -12.0)
         self.assertLessEqual(max_el, 10.5)
 
     def test_sg_azimuth_limited_to_sg_range(self):
         sw = _make_sw_params(bulk_azimuth=0.0)
-        _, _, min_az, max_az = _get_angular_limits(sw, 0, self.grid, self.cs)
+        _, _, min_az, max_az = _integration_window(sw, 0, self.rg)
         self.assertGreaterEqual(min_az, -20.0)
         self.assertLessEqual(max_az, 20.0)
 
     def test_oa_neg_azimuth_clamped_to_oa_neg_range(self):
         sw = _make_sw_params(bulk_azimuth=-90.0)
-        _, _, min_az, max_az = _get_angular_limits(sw, -1, self.grid, self.cs)
+        _, _, min_az, max_az = _integration_window(sw, -1, self.rg)
         self.assertGreaterEqual(min_az, -150.0)
         self.assertLessEqual(max_az, -20.0)
 
     def test_oa_pos_azimuth_clamped_to_oa_pos_range(self):
         sw = _make_sw_params(bulk_azimuth=90.0)
-        _, _, min_az, max_az = _get_angular_limits(sw, 1, self.grid, self.cs)
+        _, _, min_az, max_az = _integration_window(sw, 1, self.rg)
         self.assertGreaterEqual(min_az, 20.0)
         self.assertLessEqual(max_az, 150.0)
 
@@ -1597,7 +1544,7 @@ class TestGetAngularLimits(unittest.TestCase):
         sw = _make_sw_params(
             bulk_elevation=0.0, temperature_k=1.0 * EV_TO_KELVIN
         )  # narrow window
-        min_el, max_el, _, _ = _get_angular_limits(sw, 0, self.grid, self.cs)
+        min_el, max_el, _, _ = _integration_window(sw, 0, self.rg)
         self.assertGreater(min_el, -11.0)
         self.assertLess(max_el, 7.0)
 
@@ -1630,7 +1577,6 @@ class TestColdPlasmaTransverseRecovery(unittest.TestCase):
         all_voltages = np.tile(voltages, n_sweeps)
         grids, cs, cea, at, ats = _build_proton_arrays(self.sr, all_voltages)
         rot = _spin_rotation_matrices(n_sweeps * len(voltages))
-        esa_full = np.tile(voltages, n_sweeps)
         true_vel = np.array([bulk_speed, vT, vN])
         cr = _model_count_rates(
             density,
@@ -1646,8 +1592,8 @@ class TestColdPlasmaTransverseRecovery(unittest.TestCase):
         )
         rng = np.random.default_rng(seed)
         cr_noisy = rng.poisson(np.maximum(cr, 0.0)).astype(float)
-        ig = _get_initial_guess(cr_noisy, esa_full, grids, cs, cea, at, ats, rot)
-        return _optimize(cr_noisy, grids, cs, cea, at, ats, rot, ig), true_vel
+        ctx = ProtonFitContext(cr_noisy, all_voltages, grids, cs, cea, at, ats, rot)
+        return fit_solar_wind_proton_moments(ctx), true_vel
 
     def _assert_velocity_recovered(self, result, true_vel):
         np.testing.assert_allclose(
@@ -1700,14 +1646,80 @@ class TestColdPlasmaTransverseRecovery(unittest.TestCase):
         self._assert_velocity_recovered(result, true_vel)
 
 
-class TestWrongBasinFlipCheck(unittest.TestCase):
-    """Regression tests for the spin-axis mirror flip check in _optimize.
+class TestColdFastBeamRealisticSweep(unittest.TestCase):
+    """Regression: cold (~2 eV) + fast (~1210 km/s) beam on the realistic 71-bin SWAPI
+    science sweep. The peak falls between two widely-spaced log-uniform bins, leaving
+    only ~5 bins per sweep above 1% of peak. LM collapses to a spurious near-zero-
+    temperature minimum (T ≈ 0.4 K, density ~5% low, vT/vN ~25% low). Truth values
+    are full-precision from the figure-script outlier (seed=7, sample 5497); the
+    failure is sensitive to the last few decimals of the velocity components, so do
+    not truncate them.
+    """
 
-    The count-rate model is approximately invariant under (vT, vN) → (-vT, -vN)
-    (a 180° rotation about the spin axis), creating two chi² basins. Without
-    the dual-LM flip check, LM can converge to the wrong (higher-chi²) basin
-    depending on the initial guess sign. These tests verify that _optimize
-    always recovers the correct basin regardless of which side it starts from.
+    @classmethod
+    def setUpClass(cls):
+        sr = _load_swapi_response()
+        voltages = _load_science_voltages()
+        n_sweeps = 5
+        all_voltages = np.tile(voltages, n_sweeps)
+        cls.all_voltages = all_voltages
+        cls.sr = sr
+        cls.grids, cls.cs, cls.cea, cls.at, cls.ats = _build_proton_arrays(
+            sr, all_voltages
+        )
+        cls.rot = _realistic_rotation_matrices(n_sweeps * _N_BINS, n_sweeps)
+
+        cls.true_density = 5.163788947942239
+        cls.true_temperature = 23683.143260834928  # ~2.04 eV
+        cls.true_velocity = np.array(
+            [1210.60361813932, 35.625126636481, -33.50276344266394]
+        )
+
+        cr = _model_count_rates(
+            cls.true_density,
+            cls.true_temperature,
+            cls.true_velocity,
+            cls.grids,
+            cls.cs,
+            cls.cea,
+            cls.at,
+            cls.ats,
+            cls.rot,
+            PROTON_MASS_KG,
+        )
+        cls.count_rate = apply_deadtime_correction_array(cr)
+
+        ctx = ProtonFitContext.from_l2_data(
+            count_rate=cls.count_rate,
+            esa_voltage=all_voltages,
+            swapi_response=sr,
+            central_effective_area_scale=1.0,
+            rotation_matrices=cls.rot,
+        )
+        cls.result = fit_solar_wind_proton_moments(ctx)
+
+    def test_temperature_recovered(self):
+        np.testing.assert_allclose(
+            self.result.temperature.nominal_value, self.true_temperature, rtol=1e-3
+        )
+
+    def test_density_recovered(self):
+        np.testing.assert_allclose(
+            self.result.density.nominal_value, self.true_density, rtol=1e-3
+        )
+
+    def test_velocity_recovered(self):
+        np.testing.assert_allclose(
+            self.result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
+        )
+
+
+class TestWrongBasinFlipCheck(unittest.TestCase):
+    """_optimize recovers the truth basin regardless of which side the initial guess starts on.
+
+    Fixture chosen so the MSE landscape is bimodal: without the K-rotation grid,
+    LM from a mirror-side initial guess converges to the mirror basin (~120 km/s
+    off in the transverse components).
     """
 
     @classmethod
@@ -1715,15 +1727,17 @@ class TestWrongBasinFlipCheck(unittest.TestCase):
         sr = _load_swapi_response()
         cls.true_density = 8.0
         cls.true_temperature = 10.0 * EV_TO_KELVIN
-        cls.true_velocity = np.array([450.0, -40.0, 35.0])
+        cls.true_velocity = np.array([350.0, -50.0, 45.0])
 
         voltages = np.geomspace(
-            _peak_voltage(450.0) * 0.75, _peak_voltage(450.0) * 1.35, 20
+            _peak_voltage(cls.true_velocity[0]) * 0.75,
+            _peak_voltage(cls.true_velocity[0]) * 1.35,
+            30,
         )
-        n_sweeps = 5
-        all_voltages = np.tile(voltages, n_sweeps)
+        n_sweeps = 8
+        cls.all_voltages = np.tile(voltages, n_sweeps)
         cls.grids, cls.cs, cls.cea, cls.at, cls.ats = _build_proton_arrays(
-            sr, all_voltages
+            sr, cls.all_voltages
         )
         cls.rot = _spin_rotation_matrices(n_sweeps * len(voltages))
         cls.spin_axis = cls.rot[0, 1, :].copy()
@@ -1750,51 +1764,81 @@ class TestWrongBasinFlipCheck(unittest.TestCase):
         )
 
     def _run(self, ig):
-        return _optimize(
-            self.count_rate,
-            self.grids,
-            self.cs,
-            self.cea,
-            self.at,
-            self.ats,
-            self.rot,
-            ig,
+        ctx = ProtonFitContext(
+            self.count_rate, self.all_voltages, self.grids, self.cs, self.cea,
+            self.at, self.ats, self.rot,
         )
+        return fit_solar_wind_proton_moments(ctx, ig)
+
+    def _spin_axis_mirror(self, v):
+        return 2.0 * np.dot(v, self.spin_axis) * self.spin_axis - v
 
     def test_correct_basin_from_true_init(self):
-        result = self._run(self._make_ig([450.0, -40.0, 35.0]))
+        result = self._run(self._make_ig(self.true_velocity))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+            result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
         )
 
     def test_correct_basin_from_mirror_init(self):
-        v_mirror = (
-            2.0 * np.dot(self.true_velocity, self.spin_axis) * self.spin_axis
-            - self.true_velocity
-        )
-        result = self._run(self._make_ig(v_mirror))
+        result = self._run(self._make_ig(self._spin_axis_mirror(self.true_velocity)))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+            result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
         )
 
     def test_correct_basin_from_zero_transverse_init(self):
-        result = self._run(self._make_ig([450.0, 0.0, 0.0]))
+        result = self._run(self._make_ig([self.true_velocity[0], 0.0, 0.0]))
         np.testing.assert_allclose(
-            result.bulk_velocity_rtn, self.true_velocity, atol=0.5
+            result.bulk_velocity_rtn_nominal(), self.true_velocity, atol=0.5
         )
 
     def test_both_inits_give_same_result(self):
-        r_true = self._run(self._make_ig([450.0, -40.0, 35.0]))
-        v_mirror = (
-            2.0 * np.dot(self.true_velocity, self.spin_axis) * self.spin_axis
-            - self.true_velocity
-        )
-        r_mirror = self._run(self._make_ig(v_mirror))
+        r_true = self._run(self._make_ig(self.true_velocity))
+        r_mirror = self._run(self._make_ig(self._spin_axis_mirror(self.true_velocity)))
         np.testing.assert_allclose(
-            r_true.bulk_velocity_rtn, r_mirror.bulk_velocity_rtn, atol=1e-6
+            r_true.bulk_velocity_rtn_nominal(),
+            r_mirror.bulk_velocity_rtn_nominal(),
+            atol=0.01,
         )
-        np.testing.assert_allclose(r_true.density, r_mirror.density, rtol=1e-6)
-        np.testing.assert_allclose(r_true.temperature, r_mirror.temperature, rtol=1e-6)
+        np.testing.assert_allclose(
+            r_true.density.nominal_value, r_mirror.density.nominal_value, rtol=1e-3
+        )
+        np.testing.assert_allclose(
+            r_true.temperature.nominal_value,
+            r_mirror.temperature.nominal_value,
+            rtol=1e-3,
+        )
+
+
+
+class TestOptimalDensityScale(unittest.TestCase):
+    def _scipy_minimize(self, predicted, observed):
+        result = scipy.optimize.minimize_scalar(
+            lambda s: np.sum((s * predicted - observed) ** 2)
+        )
+        return result.x
+
+    def test_matches_scipy_random_vectors(self):
+        rng = np.random.default_rng(0)
+        predicted = rng.uniform(0.1, 100.0, size=50)
+        observed = rng.uniform(0.1, 100.0, size=50)
+        np.testing.assert_allclose(
+            _optimal_density_scale(predicted, observed),
+            self._scipy_minimize(predicted, observed),
+            rtol=1e-10,
+        )
+
+    def test_matches_scipy_when_scale_less_than_one(self):
+        rng = np.random.default_rng(1)
+        predicted = rng.uniform(10.0, 200.0, size=30)
+        observed = predicted * 0.3 + rng.normal(0, 0.5, size=30)
+        np.testing.assert_allclose(
+            _optimal_density_scale(predicted, observed),
+            self._scipy_minimize(predicted, observed),
+            rtol=1e-10,
+        )
+
+    def test_zero_predicted_returns_one(self):
+        self.assertEqual(_optimal_density_scale(np.zeros(5), np.ones(5)), 1.0)
 
 
 if __name__ == "__main__":

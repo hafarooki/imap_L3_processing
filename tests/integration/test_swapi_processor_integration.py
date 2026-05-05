@@ -173,7 +173,7 @@ class SwapiProcessorIntegration(unittest.TestCase):
         )
         np.testing.assert_allclose(
             temperatures[chk],
-            [54235.1, 66166.0, 205795.8],
+            [55181.3, 66005.4, 206159.0],
             rtol=0.01,
             err_msg="proton_sw_temperature regression",
         )
@@ -377,25 +377,25 @@ class SwapiProcessorIntegration(unittest.TestCase):
                 chk = [0, 4, 9]
                 np.testing.assert_allclose(
                     speeds[chk],
-                    [492.264, 492.264, 492.264],
+                    [492.295, 492.295, 492.295],
                     rtol=0.01,
                     err_msg="proton_sw_speed regression",
                 )
                 np.testing.assert_allclose(
                     temperatures[chk],
-                    [87690.3, 87690.2, 87690.2],
+                    [87925.5, 87925.5, 87925.5],
                     rtol=0.01,
                     err_msg="proton_sw_temperature regression",
                 )
                 np.testing.assert_allclose(
                     densities[chk],
-                    [0.30525, 0.30525, 0.30525],
+                    [0.30587, 0.30587, 0.30587],
                     rtol=0.01,
                     err_msg="proton_sw_density regression",
                 )
                 np.testing.assert_allclose(
                     clock_angles[chk],
-                    [320.43, 322.47, 320.21],
+                    [317.72, 320.01, 318.60],
                     rtol=0.01,
                     err_msg="proton_sw_clock_angle regression",
                 )
@@ -408,9 +408,9 @@ class SwapiProcessorIntegration(unittest.TestCase):
                 np.testing.assert_allclose(
                     bulk_vel_sun[chk],
                     [
-                        [490.866, -8.775, 0.5805],
-                        [490.864, -8.799, 0.5827],
-                        [490.862, -8.829, 0.5854],
+                        [490.897, -8.777, 0.5807],
+                        [490.895, -8.801, 0.5829],
+                        [490.893, -8.831, 0.5856],
                     ],
                     rtol=0.01,
                     err_msg="proton_sw_bulk_velocity_rtn_sun regression",
@@ -418,28 +418,28 @@ class SwapiProcessorIntegration(unittest.TestCase):
                 np.testing.assert_allclose(
                     bulk_vel_sc[chk],
                     [
-                        [490.741, -38.548, 3.327],
-                        [490.739, -38.572, 3.329],
-                        [490.737, -38.602, 3.331],
+                        [490.772, -38.550, 3.327],
+                        [490.771, -38.574, 3.329],
+                        [490.768, -38.604, 3.332],
                     ],
                     rtol=0.01,
                     err_msg="proton_sw_bulk_velocity_rtn_sc regression",
                 )
                 np.testing.assert_allclose(
                     speed_uncerts[chk],
-                    [0.013839, 0.013839, 0.013838],
+                    [0.048957, 0.048957, 0.048957],
                     rtol=0.01,
                     err_msg="proton_sw_speed_uncert regression",
                 )
                 np.testing.assert_allclose(
                     temp_uncerts[chk],
-                    [98.236, 98.234, 98.230],
+                    [334.71, 334.71, 334.71],
                     rtol=0.01,
                     err_msg="proton_sw_temperature_uncert regression",
                 )
                 np.testing.assert_allclose(
                     density_uncerts[chk],
-                    [0.000169, 0.000169, 0.000169],
+                    [0.000584, 0.000584, 0.000584],
                     rtol=0.01,
                     err_msg="proton_sw_density_uncert regression",
                 )
@@ -450,13 +450,13 @@ class SwapiProcessorIntegration(unittest.TestCase):
                 # reflects the one-sided distribution near 0°.
                 np.testing.assert_allclose(
                     clock_angle_uncerts[chk],
-                    [100.644, 100.579, 100.609],
+                    [100.89, 100.83, 100.84],
                     rtol=0.01,
                     err_msg="proton_sw_clock_angle_uncert regression",
                 )
                 np.testing.assert_allclose(
                     deflection_angle_uncerts[chk],
-                    [0.004777, 0.004777, 0.004777],
+                    [0.01715, 0.01715, 0.01715],
                     rtol=0.01,
                     err_msg="proton_sw_deflection_angle_uncert regression",
                 )

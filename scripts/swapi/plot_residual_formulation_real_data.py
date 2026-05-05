@@ -34,10 +34,10 @@ from imap_l3_processing.constants import (
     METERS_PER_KILOMETER,
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
+    SWAPI_LIVETIME_S,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     ProtonSolarWindMoments,
-    SWAPI_LIVETIME_S,
     _get_initial_guess,
     _model_count_rates,
     _optimize,
@@ -48,7 +48,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_SCIENCE_BINS,
     esa_voltage_to_proton_speed,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3a.utils import get_swapi_geometry
 from imap_l3_processing.utils import furnish_local_spice
 

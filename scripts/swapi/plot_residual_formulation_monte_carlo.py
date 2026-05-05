@@ -31,13 +31,13 @@ from imap_l3_processing.constants import (
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
+    SWAPI_LIVETIME_S,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
     _model_count_rates,
     _optimize,
     apply_deadtime_correction_array,
     ProtonSolarWindMoments,
-    SWAPI_LIVETIME_S,
     _get_initial_guess,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
@@ -46,7 +46,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_SCIENCE_BINS,
     esa_voltage_to_proton_speed,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"

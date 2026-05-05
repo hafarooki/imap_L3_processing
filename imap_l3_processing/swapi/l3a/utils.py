@@ -70,14 +70,11 @@ def rotate_rtn_to_dps(vector_rtn, epoch_tt2000_ns: float):
 
 
 def get_spacecraft_velocity_rtn(epoch_tt2000_ns: float) -> ndarray:
-    """Return the spacecraft velocity at `epoch_tt2000_ns` (TT2000 ns) in RTN, km/s.
-
-    Uses the SPKEZR-backed `imap_state` with `IMAP_RTN` as the reference frame,
-    so the returned velocity is the kinematic 6D state transform (includes the
-    rotation-rate term of the dynamic RTN frame), not just the inertial velocity
-    rotated into RTN axes."""
+    """Return the spacecraft velocity at `epoch_tt2000_ns` (TT2000 ns) in RTN, km/s."""
     et = float(ttj2000ns_to_et(epoch_tt2000_ns))
-    return imap_state(et, SpiceFrame.IMAP_RTN)[3:]
+    state_eclipj2000 = imap_state(et, SpiceFrame.ECLIPJ2000)
+    rtn_from_eclipj2000 = get_rotation_matrix(et, SpiceFrame.ECLIPJ2000, SpiceFrame.IMAP_RTN)
+    return np.einsum("ij,j->i", rtn_from_eclipj2000, state_eclipj2000[3:])
 
 
 def compute_direction_of_mean_magnetic_field_over_chunk(

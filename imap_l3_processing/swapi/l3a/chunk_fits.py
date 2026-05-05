@@ -7,14 +7,23 @@ from typing import Any
 import numpy as np
 from uncertainties import ufloat, umath
 
-from imap_l3_processing.constants import THIRTY_SECONDS_IN_NANOSECONDS
+from imap_l3_processing.constants import (
+    PROTON_MASS_KG,
+    PROTON_MASS_PER_CHARGE_M_P_PER_E,
+    THIRTY_SECONDS_IN_NANOSECONDS,
+)
 from imap_l3_processing.swapi.l3a.science.calculate_alpha_solar_wind_moments import (
     fit_solar_wind_alpha_moments,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    ProtonSolarWindMoments,
-    derive_velocity_angles,
+    ProtonSolarWindFitResult,
     fit_solar_wind_proton_moments,
+)
+from imap_l3_processing.swapi.l3a.science.proton_uncertainties import (
+    derive_velocity_angles,
+)
+from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
+    build_solar_wind_fit_context,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     SWAPI_COARSE_SWEEP_BINS,
@@ -126,7 +135,7 @@ class ProtonChunkFitter(ChunkFitter):
                 data_chunk, epoch, SWAPI_SCIENCE_BINS, rotation_matrices
             )
             quality_flag |= result.bad_fit_flag
-            speed, clock_angle, deflection_angle = derive_velocity_angles(result, epoch)
+            speed, clock_angle, deflection_angle = derive_velocity_angles(result.bulk_velocity_rtn, epoch)
             speed_nom, speed_unc = speed.nominal_value, speed.std_dev
             clock_nom, clock_unc = clock_angle.nominal_value, clock_angle.std_dev
             defl_nom, defl_unc = (
@@ -304,7 +313,7 @@ class PuiProtonChunkFitter(ChunkFitter):
                 data_chunk, epoch, SWAPI_SCIENCE_BINS, rotation_matrices
             )
             quality_flag |= result.bad_fit_flag
-            speed, clock_angle, deflection_angle = derive_velocity_angles(result, epoch)
+            speed, clock_angle, deflection_angle = derive_velocity_angles(result.bulk_velocity_rtn, epoch)
         except Exception:
             logger.info(
                 f"Exception occurred at epoch {epoch}, continuing with fill value",
@@ -327,15 +336,18 @@ def _eff_scale(efficiency_table, epoch, kind):
 
 def _fit_proton(
     data_chunk, epoch, bin_slice, rotation_matrices
-) -> ProtonSolarWindMoments:
+) -> ProtonSolarWindFitResult:
     swapi_response = _shared["swapi_response"]
     efficiency_table = _shared["efficiency_table"]
     count_rates = data_chunk.coincidence_count_rate[:, bin_slice].flatten()
     voltages = data_chunk.energy[:, bin_slice].flatten() / SWAPI_L2_K_FACTOR
-    return fit_solar_wind_proton_moments(
-        count_rates,
-        voltages,
-        swapi_response,
+    ctx = build_solar_wind_fit_context(
+        count_rate=count_rates,
+        esa_voltage=voltages,
+        swapi_response=swapi_response,
         central_effective_area_scale=_eff_scale(efficiency_table, epoch, "proton"),
         rotation_matrices=rotation_matrices,
+        mass_kg=PROTON_MASS_KG,
+        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
+    return fit_solar_wind_proton_moments(ctx)

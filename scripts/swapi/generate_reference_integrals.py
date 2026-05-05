@@ -38,10 +38,10 @@ from imap_l3_processing.constants import (
     PROTON_CHARGE_OVER_MASS_C_PER_KG,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    SWParams,
+    SolarWindParams,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 from tests.swapi.l3a.science.reference_integral import reference_integrals_batch
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -94,7 +94,7 @@ def main():
 
     print(f"Building grids and SWParams for {_N_SAMPLES} samples...")
     sws = [
-        SWParams(
+        SolarWindParams(
             density=float(densities[i]),
             bulk_speed=float(bulk_speeds[i]),
             bulk_azimuth=float(bulk_azimuths[i]),

@@ -21,7 +21,7 @@ from imap_l3_processing.swapi.l3a.utils import read_l2_swapi_data, read_mag_rtn_
 from imap_l3_processing.utils import select_mag_path
 from imap_l3_processing.swapi.l3b.science.efficiency_calibration_table import EfficiencyCalibrationTable
 from imap_l3_processing.swapi.l3b.science.geometric_factor_calibration_table import GeometricFactorCalibrationTable
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.l3b.science.instrument_response_lookup_table import \
     InstrumentResponseLookupTableCollection
 

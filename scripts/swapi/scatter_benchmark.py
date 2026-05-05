@@ -30,11 +30,11 @@ from imap_l3_processing.constants import (
     PROTON_CHARGE_OVER_MASS_C_PER_KG,
 )
 from imap_l3_processing.swapi.l3a.science.calculate_proton_solar_wind_moments import (
-    SWParams,
+    SolarWindParams,
     calculate_integral,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import SWAPI_K_FACTOR
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
@@ -81,7 +81,7 @@ def main():
             np.sqrt(row.temperature_ev * PROTON_CHARGE_COULOMBS / PROTON_MASS_KG)
             / METERS_PER_KILOMETER
         )
-        sw = SWParams(
+        sw = SolarWindParams(
             density=float(row.density),
             bulk_speed=float(row.bulk_speed),
             bulk_azimuth=float(row.bulk_azimuth),

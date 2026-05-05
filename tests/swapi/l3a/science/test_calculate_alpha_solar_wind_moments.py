@@ -29,7 +29,7 @@ from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     esa_voltage_to_alpha_speed,
     esa_voltage_to_proton_speed,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from tests.test_helpers import get_test_data_path, get_test_instrument_team_data_path
 
@@ -205,7 +205,7 @@ def _spin_rotation_matrices(n):
     R = np.empty((n, 3, 3))
     for i, a in enumerate(alphas):
         c, s = np.cos(a), np.sin(a)
-        R[i] = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]]) @ _R_BASE
+        R[i] = np.array([[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]]) @ _R_BASE
     return R
 
 

@@ -9,12 +9,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from imap_l3_processing.swapi.l3a.science.passband_grid import (
+from imap_l3_processing.swapi.response.passband_grid import (
     PassbandGrid,
     eval_boundary_max,
     eval_boundary_min,
 )
-from imap_l3_processing.swapi.l3a.science.swapi_response import SWAPIResponse
+from imap_l3_processing.swapi.response.swapi_response import SWAPIResponse
 from figure_utils import load_swapi_response
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
