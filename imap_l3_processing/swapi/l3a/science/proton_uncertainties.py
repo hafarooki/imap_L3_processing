@@ -1,5 +1,6 @@
 import numpy as np
 from numpy import ndarray
+from scipy.stats import circstd
 import uncertainties.umath as umath
 import uncertainties.unumpy as unp
 from uncertainties import UFloat, correlated_values, covariance_matrix, ufloat
@@ -22,13 +23,11 @@ def uncertainties_from_residual_scaled_jacobian(
 ) -> tuple[float, float, ndarray]:
     n_state_params = result.jacobian.shape[1]
     try:
-        residual_variance = (
-            float(np.sum(result.residuals ** 2))
-            / max(len(result.residuals) - n_state_params, 1)
+        residual_variance = float(np.sum(result.residuals**2)) / max(
+            len(result.residuals) - n_state_params, 1
         )
-        parameter_covariance = (
-            residual_variance
-            * np.linalg.pinv(result.jacobian.T @ result.jacobian)
+        parameter_covariance = residual_variance * np.linalg.pinv(
+            result.jacobian.T @ result.jacobian
         )
     except np.linalg.LinAlgError:
         return np.nan, np.nan, np.full((3, 3), np.nan)
@@ -47,14 +46,11 @@ def make_correlated_velocity(
     nominal: ndarray, covariance: ndarray
 ) -> tuple[UFloat, UFloat, UFloat]:
     is_finite = np.all(np.isfinite(covariance))
-    is_positive_semidefinite = (
-        is_finite and np.linalg.eigvalsh(covariance)[0] >= 0
-    )
+    is_positive_semidefinite = is_finite and np.linalg.eigvalsh(covariance)[0] >= 0
     if not is_positive_semidefinite:
         return tuple(ufloat(float(v), np.nan) for v in nominal)
-    
+
     return tuple(correlated_values(nominal, covariance))
-    
 
 
 def derive_velocity_angles(
@@ -63,14 +59,14 @@ def derive_velocity_angles(
 ) -> tuple:
     from imap_l3_processing.swapi.l3a.utils import rotate_rtn_to_dps
 
-    velocity_dps_unc = rotate_rtn_to_dps(
-        np.array(bulk_velocity_rtn), epoch_tt2000_ns
-    )
+    velocity_dps_unc = rotate_rtn_to_dps(np.array(bulk_velocity_rtn), epoch_tt2000_ns)
     velocity_dps = unp.nominal_values(velocity_dps_unc)
     velocity_dps_cov = np.array(covariance_matrix(velocity_dps_unc))
 
     speed_nominal = float(np.linalg.norm(velocity_dps))
-    clock_nominal = float(np.degrees(np.arctan2(velocity_dps[1], velocity_dps[0])) % 360)
+    clock_nominal = float(
+        np.degrees(np.arctan2(-velocity_dps[1], -velocity_dps[0])) % 360
+    )
     deflection_nominal = float(np.degrees(np.arccos(-velocity_dps[2] / speed_nominal)))
 
     if not np.all(np.isfinite(velocity_dps_cov)):
@@ -82,7 +78,7 @@ def derive_velocity_angles(
 
     speed = umath.sqrt(sum(x**2 for x in velocity_dps_unc))
     clock_sigma, deflection_sigma = _clock_and_deflection_sigmas_via_monte_carlo(
-        velocity_dps, velocity_dps_cov, clock_nominal
+        velocity_dps, velocity_dps_cov
     )
 
     return (
@@ -93,7 +89,7 @@ def derive_velocity_angles(
 
 
 def _clock_and_deflection_sigmas_via_monte_carlo(
-    velocity_mean: ndarray, velocity_cov: ndarray, clock_nominal: float
+    velocity_mean: ndarray, velocity_cov: ndarray
 ) -> tuple[float, float]:
     rng = np.random.default_rng(0)
     samples = rng.multivariate_normal(
@@ -103,13 +99,12 @@ def _clock_and_deflection_sigmas_via_monte_carlo(
         check_valid="ignore",
     )
 
-    sample_clocks = np.degrees(np.arctan2(samples[:, 1], samples[:, 0])) % 360.0
-    clock_residuals_wrapped = ((sample_clocks - clock_nominal + 180.0) % 360.0) - 180.0
-    clock_sigma = float(np.std(clock_residuals_wrapped, ddof=1))
+    sample_clocks = np.degrees(np.arctan2(-samples[:, 1], -samples[:, 0])) % 360
+    clock_sigma = float(circstd(sample_clocks, high=360))
 
     sample_speeds = np.linalg.norm(samples, axis=1)
     sample_deflections = np.degrees(
-        np.arccos(np.clip(-samples[:, 2] / sample_speeds, -1.0, 1.0))
+        np.arccos(np.clip(-samples[:, 2] / sample_speeds, -1, 1))
     )
     deflection_sigma = float(np.std(sample_deflections, ddof=1))
 
