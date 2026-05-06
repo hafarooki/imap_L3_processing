@@ -132,6 +132,8 @@ Substituting the VDF into the count rate integral in spherical velocity coordina
 $$C(V) = \frac{n\, \mathcal{A}_0(V)}{(\sqrt{2\pi}\, v_\text{th})^3} \sum_\text{region} \int \cos\theta\, d\theta \int \mathcal{T}(\phi)\, d\phi \int v^3\, P\!\left(\tfrac{v}{v_0}, \theta\right) \exp\!\left(-\frac{v^2 + v_b^2 - 2vv_b\cos\alpha}{2v_\text{th}^2}\right) dv.$$
 The $v^3\cos\theta$ factor comes from the velocity-space volume element $v^2\cos\theta\,dv\,d\theta\,d\phi$ times the particle speed $v$ in the flux term.
 
+### Integration Method
+
 #### Azimuthal Regions
 
 The "region" sum runs over five azimuth regions: sunglasses (SG, $|\phi| \leq 20°$), and the open aperture split into a vanes-vignetting (VV) sub-region adjacent to each vane ($20° \leq |\phi| \leq 26°$) and the primary open aperture region (OA) away from the influence of the sunglasses ($26° \leq |\phi| \leq 150°$).
@@ -141,7 +143,14 @@ The sharp change in slope is because the sunglasses grid itself introduces a vig
 
 Another advantage of splitting the azimuthal integration is that only one passband needs to be used for each region.
 
-### Angular limits
+#### Quadrature Method
+
+Each region is evaluated as a nested Gauss-Legendre quadrature with a fixed number of integration points:
+$$(N_\theta, N_\phi, N_v) = (21,\;21,\;15).$$
+
+The loops are nested $\theta \to \phi \to v$, with terms that depend only on outer-loop variables hoisted out of the inner loops.
+
+#### Angular limits
 
 For each azimuth region, the angular cutoff $\Delta\alpha$ is chosen from the VDF angular falloff at the passband central speed $v_0$. At fixed speed $v$, the Maxwellian's angular dependence relative to its on-axis value is
 $$\frac{f(v, \alpha)}{f(v, 0)} = \exp\!\left(\frac{v v_b (\cos\alpha - 1)}{v_\text{th}^2}\right).$$
@@ -172,7 +181,7 @@ $$\hat{C}_\text{OA} = \mathcal{A}_0(V)\,v_0^3\,\Delta\theta\,\Delta v\,\int_{\ph
 falls below $\max(0.1\;\text{Hz},\; 10^{-3} C_\text{SG})$. Here $g(\phi) = f(v_0, \theta_b', \phi)$, $\Delta\theta$ is the clamped OA elevation width in radians, and $\Delta v = (r_\text{max}(0) - r_\text{min}(0))v_0$ is the OA passband speed width at $\theta = 0^\circ$.
 
 
-### Speed limits
+#### Speed limits
 
 For each Gauss-Legendre elevation node, the speed integral only needs to cover speeds where both of these are true:
 
@@ -190,14 +199,6 @@ Here $r_\text{min}(\theta)$ and $r_\text{max}(\theta)$ depend on both elevation 
 The speed integration limits are the intersection of those two windows:
 $$v_\text{lo}(\theta) = \max\!\left(v_b - \Delta v_\text{VDF},\; r_\text{min}(\theta)v_0\right),$$
 $$v_\text{hi}(\theta) = \min\!\left(v_b + \Delta v_\text{VDF},\; r_\text{max}(\theta)v_0\right).$$
-
-#### Quadrature behavior
-
-`calculate_integral` evaluates each region as nested Gauss-Legendre quadratures with a fixed number of integration points:
-$$(N_\theta, N_\phi, N_v) = (21,\;21,\;15).$$
-
-The nested integration loop order is $\theta$ → $\phi$ → $v$
-The code implementation computes terms in the outermost loop where they are constant as much as possible and attempts to maximize CPU cache usage efficiency.
 
 ### Integrator Validation
 
@@ -231,113 +232,153 @@ For high-rate cases ($\geq 10^3$ Hz) where proton fit residuals are dominated by
 The worst cases at typical solar wind coincidence rate ($\geq 10^4$ Hz) are primarily due to bulk flow directions near the edge of the instrument response, which is rare by design because of the alignment of SWAPI's boresight and the spacecraft spin axis with the nominal average solar wind direction.
 
 
-## Fitting Procedure
+## Proton Fitting Procedure
 
-Given $N$ measurements $(C_i, V_i, t_i)$, the solar wind moments $(n, T, \mathbf{v}_b^\text{SC})$ are fit in three steps:
-1. Obtain RTN $\rightarrow$ SWAPI rotation matrices $R_i$ from SPICE.
-2. Compute an initial guess: bulk speed and temperature from a Gaussian curve fit on the per-bin count rate, bulk velocity direction anti-parallel to the mean RTN spin axis, density from forward-model scaling.
-3. Refine by nonlinear least squares, with a spin-axis-flip wrong-basin escape after LM.
+This section describes the per-chunk pipeline that takes one 5-sweep window of L2 coincidence count rates and produces one row of L3A proton variables for the CDF output. The subsections below walk through each stage — fit preparation, initial-guess construction, the least-squares fit, and the postprocessing — and close with an end-to-end accuracy check on synthetic count rates derived from real WIND/SWE measurements.
 
 The alpha particle moments are fit in a separate two-stage procedure described in [Alpha Particle Moments](#alpha-particle-moments).
 
-### Step 1: SPICE
+### Fit preparation
 
-$R_i$ (shape $N \times 3 \times 3$) are precomputed for each measurement time (see [SPICE Kernels](#spice-kernels)).
+Each chunk is prepared in the parent process before it is dispatched to a worker. Two pieces of geometry are queried from SPICE (see [SPICE Kernels](#spice-kernels)):
 
-### Step 2: Initial guess
+- An RTN→SWAPI rotation matrix per measurement bin, shape $(N, 3, 3)$.
+- The spacecraft RTN velocity at the chunk-center epoch — used downstream for the Sun-frame derivation.
 
-**Bulk speed and temperature** are seeded from the peak ESA bin and a closed-form $T(v)$ scaling, then refined by a Gaussian curve fit on the per-bin count rate. The peak-bin seed is
-$$v_b^{(0)} = v_{i^*}, \qquad i^* = \arg\max_i C_i, \qquad T_0 = \max\!\left(60{,}000\,\text{K} \cdot \left(\frac{v_b^{(0)}}{400\;\text{km/s}}\right)^2,\; T_\text{floor}\right),$$
-with $T_\text{floor} \approx 11{,}600$ K. Multiple sweeps over the same voltage produce repeated samples that `scipy.optimize.curve_fit` treats independently. The fit yields a refined $(v_b, \sigma_v)$, and the temperature seed becomes $T_0 = m\,(\sigma_v\cdot 10^3)^2 / k_B$ (floored at $T_\text{floor}$). On `curve_fit` failure or non-positive $\sigma_v$, the seed values are kept.
+The fit is skipped, and the output row is written with fill values, in two cases:
 
-**Velocity direction** is anti-parallel to the mean RTN spin axis (extracted by averaging $R_i[1, :]$ — the second row of each RTN→SWAPI matrix — and renormalizing):
+- The input count rates contain fill values.
+- A SPICE query fails. In this case, `EPHEMERIS_GAP` is set in the quality flag.
+
+### Initial guess
+
+#### Bulk speed and temperature
+
+Our initial guess for bulk speed and temperature is obtained as follows:
+1. Let $v_b^{(0)}$ be the speed corresponding to the ESA voltage (related to speed through $k^*$) of the measurement with the highest coincidence rate.
+2. Set the temperature based on the relationship used in the I-ALiRT code derived from the typical temperature as a function of bulk speed: $$T^{(0)} = \text{max}\!\left(1\,\text{eV}, 60{,}000\,\text{K} \cdot \left(\dfrac{v_b^{(0)}}{400\;\text{km/s}}\right)^2\right).$$
+3. Refine $v_b^{(0)}$ and $T^{(0)}$ through an arbitrarily normalized Gaussian fit (with $\sigma_v$ related to $T$ through $T = m\sigma_v^2 / k_B$).
+The temperature output of the fit is clamped to be at least $1\,\text{eV}$. If the curve fit fails or yields a non-finite mean or non-positive $\sigma_v$, the original seed values are kept.
+
+#### Velocity direction
+
+Let $\hat{\mathbf{s}}^\text{RTN}$ be the chunk's spin axis in RTN, taken as the unit-normalized mean of the per-sweep body $+\hat{\mathbf{Y}}$ axes (the second row of each RTN→SWAPI rotation matrix, corresponding to SWAPI's boresight, which is parallel to the spin axis). The velocity is seeded anti-parallel to this axis:
 $$\mathbf{v}_b^\text{SC,(0)} = -v_b\,\hat{\mathbf{s}}^\text{RTN}.$$
-This is the natural seed for solar wind, which flows nearly along the spin axis in RTN, and avoids hardcoding any frame velocity. The optimizer in Step 3 recovers the small transverse components from the spin-phase modulation of the bulk azimuth/elevation in the instrument frame.
+Because of IMAP's consistent orientation, the solar wind bulk velocity is close to $\hat{\mathbf{s}}^\text{RTN}$ on average.
 
-**Density** is set by least-squares scaling of a unit-density forward model against the observed count rates:
+#### Density
+
+The initial density is set by least-squares scaling of a unit-density forward model against the observed count rates:
 $$n_0 = \frac{\mathbf{m} \cdot \mathbf{C}}{\mathbf{m} \cdot \mathbf{m}}, \qquad \mathbf{m}_i = C_i^\text{model}(n = 1; T_0, \mathbf{v}_b^\text{SC,(0)}).$$
-This is exact for the linear $n$-dependence of the model and is robust to residual direction and temperature errors: the LM optimizer absorbs them in Step 3.
 
-Figure below shows initial-guess and final-fit accuracy across 10000 real solar wind cases sampled from WIND/SWE 2-min 2025 (high-quality bimaxwellian fits, fit_flag = 10), with the WIND-derived $(n, T, v_R, v_T, v_N)$ used as ground truth via a GSE→RTN approximation valid at L1. Synthetic count rates are produced from the forward model using the real SWAPI 71-step science voltage sweep (from the L2 CDF), 5 sweeps per fit, realistic spin geometry (spin axis = boresight, 15 s period), and Poisson noise — matching the production processor exactly. The wrong-basin escape in Step 3 ensures the optimizer reaches the truth basin regardless of the initial transverse velocity. Generated by `docs/swapi/figure_src/plot_fit_accuracy.py`.
+### Least-squares fit
 
-![Initial-guess vs. final-optimizer accuracy for 10000 real WIND/SWE solar wind cases](figures/fit_accuracy.png)
+The state vector is
+$$\mathbf{x} = [\log n,\; \log T,\; v_R,\; v_T,\; v_N],$$
+with $\mathbf{v}_b^\text{SC} = (v_R, v_T, v_N)$ in the spacecraft RTN frame. Density and temperature are parameterized in log-space to keep them positive throughout optimization.
 
-### Step 3: Optimization
+The fit uses `scipy.optimize.least_squares` with the Levenberg–Marquardt method (settings: `method='lm'`, `xtol=1e-4`, `diff_step=1e-4`). Residuals are unweighted over all retained bins:
+$$r_i = C_i^\text{observed} - C_i,$$
+where $C_i$ is the measured count rate and $C_i^\text{observed}$ is the deadtime-corrected predicted rate (see [Deadtime correction](#deadtime-correction)).
 
-Parameters $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ (with $\mathbf{v}_b^\text{SC} = (v_R, v_T, v_N)$ in the spacecraft RTN frame) are fit by `scipy.optimize.least_squares` using the Levenberg–Marquardt algorithm (`method='lm'`, `diff_step=1e-4`, `xtol=1e-4`) with unweighted residuals over all bins:
-$$r_i = C_i^\text{model} - C_i.$$
-Density and temperature are parameterized in log-space to keep them positive throughout optimization. The optimizer's `success` flag is mapped to `bad_fit_flag`: failure sets `BAD_FIT`.
+We use unweighted residuals rather than the commonly used inverse-variance weighting. Poisson variance is proportional to count rate, so inverse-variance weighting would up-weight the low-count bins. Those bins are exactly where non-Maxwellian populations — the proton shoulder, pickup ions, and alpha particles — contribute most. These populations are also more isotropic than the proton core, and so are magnified relative to the proton core by SWAPI's sunglasses, making them a uniquely big contributor for SWAPI compared to other spacecraft instruments.
+Using unweighted residuals keeps the fit focused on the high-count bins where the proton core is located and where the count rate is so high that the Poisson variability is negligible, so inverse variance weighting is unhelpful.
 
-#### Wrong-basin detection (iterative spin-axis flip)
-
-The proton fit has two nearby basins related by a mirror across the spin axis: roughly $(v_T, v_N) \rightarrow (-v_T, -v_N)$. The symmetry is not exact, because the sunglasses (SG) passband has a slightly asymmetric elevation range ($[-10.5^\circ, +7^\circ]$). In synthetic tests, the physical solution is the global minimum, while the mirror solution is only a local minimum and usually has $\chi^2$ about $100$ to $500\times$ larger.
-
-LM is local, so the first solve can still converge to a wrong basin and stay there. After LM, the bulk velocity is reflected about the spin axis $\hat{\mathbf{s}}^\text{RTN}$ (averaged over the chunk's $R_i[1, :]$ and renormalized):
-$$\mathbf{v}_b^\text{flip} = 2\,\hat{\mathbf{s}}\,(\hat{\mathbf{s}}\cdot\mathbf{v}_b) - \mathbf{v}_b.$$
-A single forward-model evaluation at the flipped velocity is paired with a closed-form analytic density rescale
-$$\alpha = \frac{\mathbf{m}\cdot\mathbf{C}}{\mathbf{m}\cdot\mathbf{m}}, \qquad \text{MSE}_\text{flip} = \|\alpha\mathbf{m} - \mathbf{C}\|^2 / N,$$
-and an LM restart from the flipped seed runs only when $\text{MSE}_\text{flip} < 100\,\text{MSE}_\text{cur}$ (i.e. RMSE ratio $< 10$). Otherwise the current best is already deep enough in the truth basin that any flipped seed cannot reach a better minimum, and the loop terminates.
-
-If the restart improves MSE strictly, it becomes the new "current" and the procedure repeats; otherwise the loop terminates. The maximum number of iterations is capped at 6, but in practice convergence happens in 1–2 iterations — once the loop reaches the opposite mirror basin, the next flip's MSE no longer beats it.
-
-![Chi-squared landscape in the (v_T, v_N) plane showing the truth and spin-axis-mirror minima](figures/wrong_basin.png)
-
-*Generated by `docs/swapi/figure_src/plot_wrong_basin.py`. In this example, the mirror minimum has $\chi^2$ roughly $200\times$ the true minimum. The flipped seed reaches the opposite basin with one LM solve.*
-
-> **Note on `diff_step`.** The default finite-difference step in `least_squares` scales with the parameter magnitude, producing steps of $\sim 10^{-8}\ \text{km/s}$ for $v_T,\, v_N$ near zero. For cold plasma ($T \lesssim 60{,}000\ \text{K}$), the resulting count-rate perturbation falls below the GL-quadrature noise floor, making the numerical Jacobian for $v_T$ and $v_N$ pure noise and inflating the LM damping factor to $\sim 10^{13}$, which freezes all parameters. `diff_step=1e-4` is the empirical optimum over $\{10^{-5}, 10^{-4}, 10^{-3}, 10^{-2}, 10^{-1}\}$: it sits above the noise floor (giving a clean Jacobian and correct convergence) while keeping the linearization error small enough not to degrade accuracy ($10^{-2}$ degrades $v_N$ RMSE; $10^{-1}$ produces bad fits and a 5× slowdown).
-
-Inside the model, the spacecraft-frame bulk velocity is rotated into instrument coordinates:
-$$\mathbf{v}_{b,i}^\text{xyz} = R_i \, \mathbf{v}_b^\text{SC}.$$
-The azimuth and elevation angles fed to the integral are then
+For each residual evaluation, the spacecraft-frame bulk velocity is rotated into instrument coordinates per measurement,
+$$\mathbf{v}_{b,i}^\text{xyz} = R_i \, \mathbf{v}_b^\text{SC},$$
+and the azimuth and elevation angles fed to the forward-model integral are (Rankin et al. 2025)
 $$\phi_{b,i} = \operatorname{arctan2}(-v_{b,i,x},\, -v_{b,i,y}), \qquad \theta_{b,i} = \arcsin\!\left(-\frac{v_{b,i,z}}{v_b}\right).$$
-(Sign conventions and coordinate system follow the instrument paper.)
 
 #### Deadtime correction
 
 The detector deadtime is $\tau = 183.7\ \text{ns}$. Following Tsoulfanidis (1995), p. 74, the true count rate $n$ and measured rate $g$ are related by $n = g / (1 - g\tau)$. Rearranged for the forward model, the true model rate $C^\text{model}$ is mapped to the predicted observed rate before computing residuals:
 $$C^\text{observed}_i = \frac{C^\text{model}_i}{1 + \tau\, C^\text{model}_i}.$$
-This deadtime correction is often non-negligible.
-It reaches 5% at $C \approx 2.7\times 10^5 \text{Hz}$, which is not an uncommonly high coincidence rate.
-Not accounting for this would result in an overestimate of the model count rate and thus in underestimate of the density in such cases.
+This deadtime correction is often non-negligible. It reaches 5% at $C \approx 2.7\times 10^5\ \text{Hz}$, a routine value for high-flux solar wind. Skipping it would overestimate the predicted observed rate and underestimate the fitted density.
+
+#### Wrong-basin detection (iterative spin-axis flip)
+
+The fitting landscape often has a local minimum in bulk velocity related by a 180° rotation of the bulk velocity about the spin axis.
+The two minima are not degenerate, because the sunglasses (SG) passband has a slightly asymmetric elevation range ($[-10.5^\circ, +7^\circ]$) and an elevation-dependent speed response, resulting in a shifting of the bulk speed from one sweep to the next.
+The flipped solution is only a local minimum and usually has $\chi^2$ about $100$ to $500\times$ larger than the global minimum.
+
+The chunk's average spin axis $\hat{\mathbf{s}}^\text{RTN}$ is the same one defined in [Velocity direction](#velocity-direction).
+The first fit returns bulk velocity $\mathbf{v}_b^{(0)}$, density $n^{(0)}$, temperature $T^{(0)}$, and $\text{MSE}^{(0)}$.
+At iteration $k$ (up to 6 times):
+
+1. **Build a flipped seed.** Compute the 180°-rotated bulk velocity
+   $$\mathbf{v}_b^\text{flip} = 2\,\hat{\mathbf{s}}\,(\hat{\mathbf{s}}\cdot\mathbf{v}_b^{(k)}) - \mathbf{v}_b^{(k)},$$
+   and rescale the density at $(\mathbf{v}_b^\text{flip}, T^{(k)})$, giving $n^\text{flip}$ and $\text{MSE}_\text{flip}$. The rescale is needed because flipping the velocity makes $n^{(k)}$ no longer near-optimal.
+2. **Gate.** If $\text{MSE}_\text{flip} \geq 100\,\text{MSE}^{(k)}$ (RMSE ratio $\geq 10$), terminate the loop.
+3. **Restart.** Otherwise, run a full least-squares fit seeded from $(\mathbf{v}_b^\text{flip}, n^\text{flip}, T^{(k)})$. If its MSE is no worse than $\text{MSE}^{(k)}$, it becomes iteration $k+1$ and the loop continues; otherwise terminate.
+
+In practice convergence happens in 1–2 iterations: once iteration $k$ sits in the truth basin, the next flip lands back in the wrong basin and is rejected by the gate.
+
+The `bad_fit_flag` is taken from the `success` flag of whichever fit the loop ends on — the initial least-squares solve, or the most recent accepted basin-flip restart. A failed solve sets the quality flag `BAD_FIT`.
+
+![Chi-squared landscape in the (v_T, v_N) plane showing the truth and spin-axis-rotated minima](figures/wrong_basin.png)
+
+*Generated by `docs/swapi/figure_src/plot_wrong_basin.py`. In this example, the rotated minimum has $\chi^2$ roughly $200\times$ the true minimum. A single least-squares solve from the flipped seed reaches the truth basin.*
 
 #### Parameter uncertainties
 
-The optimizer returns the Jacobian $J$ of the residuals with respect to $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ at the solution.
-The parameter covariance related to the Jacobian (Vugrin et al., 2007).
-We calculate it as:
+The optimizer returns the Jacobian $J$ of the residuals with respect to $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ at the final accepted solution. The parameter covariance is computed from the Jacobian (Vugrin et al., 2007):
 $$\Sigma_x = s^2\,(J^\top J)^+, \qquad s^2 = \frac{\sum_i r_i^2}{N - p},$$
-where ${}^+$ is the Moore–Penrose pseudoinverse $N$ is the number of measurements, and $p$ is the number of parameters (five). Residuals are unweighted, so the $s^2$ scaling absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, intra-window variability) — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`. The directly fitted scalars get
+where ${}^+$ is the Moore–Penrose pseudoinverse, $N$ is the number of measurements, and $p$ is the number of parameters (five).
+The $s^2$ scaling absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, intra-window variability) — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`. The uncertainty for $n$ and $T$ is given by
 $$\sigma_n = n\,\sqrt{\Sigma_{x,00}}, \qquad \sigma_T = T\,\sqrt{\Sigma_{x,11}}.$$
+The fitted velocity $\mathbf{v}_b^\text{SC}$ (RTN) is built as a 3-tuple of correlated `uncertainties.UFloat` components carrying $\Sigma_v = \Sigma_x[2{:}5,\,2{:}5]$.
 
-The fitted velocity $\mathbf{v}_b^\text{SC}$ (RTN) is built as a 3-tuple of correlated `uncertainties.UFloat` components carrying $\Sigma_v = \Sigma_x[2{:}5,\,2{:}5]$. `derive_velocity_angles` rotates this tuple into the IMAP DPS (despun spacecraft) frame so the angles describe plasma flow relative to the spacecraft attitude:
+### Despun-frame speed and angles
+
+`derive_velocity_angles` rotates the correlated `UFloat` triple $\mathbf{v}_b^\text{SC}$ into the IMAP DPS (despun spacecraft) frame so the angles describe plasma flow relative to the spacecraft attitude rather than to RTN:
 $$\mathbf{u} = R_\text{RTN\to DPS}\,\mathbf{v}_b^\text{SC}, \qquad |\mathbf{v}| = |\mathbf{u}|, \quad \phi_c = \arctan2(u_1,\, u_0) \bmod 360°, \quad \phi_d = \arccos\!\left(-u_2/|\mathbf{u}|\right).$$
-The rotation is a linear map applied with `numpy` to the object-dtype UFloat array, so correlations propagate automatically; the DPS covariance is recovered with `uncertainties.covariance_matrix` and equals $R\,\Sigma_v\,R^\top$.
+The rotation is applied as a linear map on the correlated UFloat triple, so correlations propagate automatically and the DPS covariance equals $R\,\Sigma_v\,R^\top$. The scalar CDF variable `proton_sw_speed` is $|\mathbf{u}|$ — equal to $|\mathbf{v}_b^\text{SC}|$, since rotation preserves magnitude.
 
-**Speed σ** is propagated through `umath.sqrt(sum(x**2 for x in u_unc))` — the `uncertainties` package's automatic delta method. The linearization is essentially exact whenever $|\mathbf{u}| \gg \sigma$, which is always true for SWAPI bulk speeds vs. fitted scatter, so MC would only add sampling noise.
+#### Speed σ
 
-**Clock and deflection angle σ** are propagated by Monte Carlo. The arctan2 and arccos gradients scale as $1/u_{xy}^2$ and $1/(|\mathbf{u}|^2\,u_{xy})$ and diverge as $u_{xy} \to 0$, where $u_{xy} = \sqrt{u_0^2 + u_1^2}$. SWAPI's bulk velocity is dominated by the spin-axis component, so $u_{xy} \sim \sigma_{xy}$ and the delta method underestimates σ by tens of percent in the typical regime (see `scripts/swapi/compare_angle_propagation.py`: cold spin-aligned plasma shows +49% bias on $\sigma_{\phi_c}$ and +46% on $\sigma_{\phi_d}$, with $\sigma_{\phi_c}$ exceeding the uniform-distribution bound of $\approx 104°$). Instead, we draw `N_VELOCITY_ANGLE_MC_SAMPLES = 1000` samples
+Speed σ uses the `uncertainties` package's automatic delta method via `umath.sqrt(sum(x**2 for x in u_unc))`. The linearization is essentially exact whenever $|\mathbf{u}| \gg \sigma$, which always holds for SWAPI bulk speeds, so MC would only add sampling noise.
+
+#### Clock and deflection angle σ
+
+Clock and deflection σ are propagated by Monte Carlo. The arctan2 and arccos gradients scale as $1/u_{xy}^2$ and $1/(|\mathbf{u}|^2\,u_{xy})$, where $u_{xy} = \sqrt{u_0^2 + u_1^2}$, and diverge as $u_{xy} \to 0$. SWAPI's bulk velocity is dominated by the spin-axis component, so $u_{xy} \sim \sigma_{xy}$ and the delta-method linearization is poor in the typical regime — for cold spin-aligned plasma it underestimates the true σ by tens of percent and can return clock σ exceeding the uniform-distribution bound of $\approx 104°$.
+
+We instead draw $N = 1000$ samples
 $$\mathbf{u}_i \sim \mathcal{N}(\mathbf{u},\, \Sigma_\text{DPS}),$$
-recompute $(\phi_c^{(i)}, \phi_d^{(i)})$ per sample, and take the sample standard deviation. Clock-angle σ uses residuals wrapped to $(-180°,\, 180°]$ relative to the nominal $\phi_c$ so the $0°/360°$ branch cut doesn't inflate the spread; deflection σ is the plain sample std (with the arccos argument clipped to $[-1,\,1]$ to absorb numerical overshoots from samples just outside the unit-direction shell). The RNG is seeded per call (`np.random.default_rng(0)`) so outputs are deterministic.
+recompute $(\phi_c^{(i)}, \phi_d^{(i)})$ per sample, and take the sample standard deviation. Clock-angle σ uses residuals wrapped to $(-180°,\, 180°]$ relative to the nominal $\phi_c$ so the $0°/360°$ branch cut doesn't inflate the spread. Deflection σ is the plain sample std, with the arccos argument clipped to $[-1,\,1]$ to absorb numerical overshoots from samples just outside the unit-direction shell. The RNG is seeded per call so outputs are deterministic.
 
-When $\Sigma_\text{DPS}$ is non-finite (failed fit), all three σ are NaN.
+When $\Sigma_\text{DPS}$ is non-finite (failed fit), all three σ are reported as fill values.
 
-### Inertial bulk velocity and speed
+### Sun-frame bulk velocity and speed
 
-The optimizer returns $\mathbf{v}_b^\text{SC}$ in the spacecraft RTN frame. To recover the plasma velocity in the sun's inertial rest frame the spacecraft velocity is added back:
+To recover the plasma velocity in the Sun's inertial rest frame, the spacecraft velocity is added to the fitted spacecraft-frame bulk velocity:
 $$\mathbf{v}_b^\text{sun} = \mathbf{v}_b^\text{SC} + \mathbf{v}_\text{sc}^\text{RTN},$$
-where $\mathbf{v}_\text{sc}^\text{RTN}$ (km/s) is obtained at the chunk center epoch directly from `imap_state(et, IMAP_RTN)` — SPICE's underlying `sxform`-based 6D state transform produces the kinematic velocity in the dynamic RTN frame (i.e. it includes the rotation-rate term of the rotating frame), so no separate rotation step is applied.
+where $\mathbf{v}_\text{sc}^\text{RTN}$ (km/s) is the inertial Sun-frame spacecraft velocity at the chunk center epoch, expressed in the RTN basis: SPICE returns the 6-D state `imap_state(et, ECLIPJ2000)`, and the velocity components are rotated from ECLIPJ2000 into RTN at that instant. No rotation-rate / frame-velocity term is added — RTN is used purely as a basis for the inertial velocity, which is what the additive formula above requires.
 This 3-vector is stored as `proton_sw_bulk_velocity_rtn_sun` (shape $N \times 3$, units km/s) in the proton L3A CDF. Its covariance is stored as `proton_sw_bulk_velocity_rtn_sun_covariance`. Since $\mathbf{v}_\text{sc}^\text{RTN}$ is SPICE-derived and treated as exact, the Sun-frame vector covariance is the fitted spacecraft-frame velocity covariance:
 $$\Sigma_v^\text{sun} = \Sigma_v^\text{SC}.$$
 
-The scalar CDF variable `proton_sw_speed` remains the magnitude of the fitted spacecraft-frame velocity. The separate scalar variable `proton_sw_speed_sun` is the magnitude of the Sun-frame vector:
+The scalar CDF variable `proton_sw_speed_sun` is the magnitude of the Sun-frame vector:
 $$v_\text{sun} = \left|\mathbf{v}_b^\text{SC} + \mathbf{v}_\text{sc}^\text{RTN}\right|.$$
 Its uncertainty, `proton_sw_speed_sun_uncert`, is propagated with the `uncertainties` package from the correlated fitted velocity components in `result.bulk_velocity_rtn`, after adding the exact spacecraft-velocity offset:
 $$\sigma_{v_\text{sun}} = \mathrm{std}\!\left(\sqrt{\sum_j \left(v_{b,j}^\text{SC} + v_{\text{sc},j}^\text{RTN}\right)^2}\right).$$
-Equivalently, this is the first-order Gaussian propagation $\sqrt{\mathbf{g}_\text{sun}^\top \Sigma_v \mathbf{g}_\text{sun}}$ with $\mathbf{g}_\text{sun} = \mathbf{v}_b^\text{sun}/|\mathbf{v}_b^\text{sun}|$, but the implementation uses the correlated `UFloat` components directly rather than recomputing from `bulk_velocity_rtn_covariance()`.
+This is equivalent to the first-order Gaussian form $\sqrt{\mathbf{g}_\text{sun}^\top \Sigma_v \mathbf{g}_\text{sun}}$ with $\mathbf{g}_\text{sun} = \mathbf{v}_b^\text{sun}/|\mathbf{v}_b^\text{sun}|$.
+
+### Validation
+
+To validate that the algorithm recovers solar-wind moments under realistic conditions, we performed the following experiment:
+
+1. Sample 10,000 real solar-wind cases from WIND/SWE 2-min measurements from 2025.
+2. Build the per-fit voltage and pointing geometry: 5 sweeps over the 62 coarse ESA voltage steps (leaving out the fine sweeps, which would improve the accuracy of the fit if available).
+3. Generate per-bin RTN→SWAPI rotation matrices by spinning a realistic rotation matrix about the spin axis at a realistic 15.13 s spin period.
+4. Forward-model the count rate from the ground truth at each bin, apply the deadtime correction, and sample Poisson noise scaled by the per-bin dwell time (~0.145 s).
+5. Apply the full fitting algorithm to those synthetic rates and compare the recovered moments against the ground truth.
+
+![Initial-guess vs. final-fit accuracy for 10000 real WIND/SWE solar wind cases](figures/fit_accuracy.png)
+
+*Generated by `docs/swapi/figure_src/plot_fit_accuracy.py`.*
 
 ## Alpha Particle Moments
 
-The alpha solar wind moments fitter (`calculate_alpha_solar_wind_moments.py`) reuses the proton forward model (`model_solar_wind_ideal_coincidence_rates`) and adds a 3-DOF Levenberg–Marquardt fit over $(n_\alpha, T_\alpha, \Delta v)$ where alphas are constrained to drift along the local magnetic field:
+The alpha solar wind moments fitter (`calculate_alpha_solar_wind_moments.py`) reuses the proton forward model (`model_solar_wind_ideal_coincidence_rates`) and adds a 3-DOF least-squares fit over $(n_\alpha, T_\alpha, \Delta v)$ where alphas are constrained to drift along the local magnetic field:
 $$\mathbf{v}_\alpha = \mathbf{v}_p^* + \Delta v \, \hat{\mathbf{B}}.$$
 This encodes the observed solar-wind fact that non-field-aligned differential drift is quenched by firehose/mirror instabilities.
 
@@ -348,7 +389,7 @@ This encodes the observed solar-wind fact that non-field-aligned differential dr
 The pipeline processes 5-sweep chunks (matching the existing alpha LUT cadence). Each chunk is sliced to the **62 coarse-sweep steps** (`SWAPI_COARSE_SWEEP_BINS`) and flattened over (sweep, step) to a 310-element axis. The 9 fine-sweep steps (63–71) are dropped because they cluster near the proton peak and inform proton thermal width only — useless when protons are held fixed.
 
 - **Stage 1**: Re-run `fit_solar_wind_proton_moments` on the 310-element axis to get $(n_p^*, T_p^*, \mathbf{v}_p^{*\,\text{RTN}})$. This is independent of the per-sweep proton L3A product (which uses 71 steps) and is persisted as `reference_proton_*` fields in the alpha CDF.
-- **Stage 2**: The initial guess (`_alpha_initial_guess`) identifies the alpha peak steps via `get_alpha_peak_indices`. All per-measurement arrays are then subset to only those peak steps across all sweeps, so the Levenberg–Marquardt fit targets the alpha bump rather than the proton-dominated tails (which create an $n_\alpha{\downarrow}/T_\alpha{\uparrow}$ degeneracy). The residual axis for Stage 2 is therefore `n_sweeps × len(peak_steps)`, not the full 310. The combined observed model is
+- **Stage 2**: The initial guess (`_alpha_initial_guess`) identifies the alpha peak steps via `get_alpha_peak_indices`. All per-measurement arrays are then subset to only those peak steps across all sweeps, so the least-squares fit targets the alpha bump rather than the proton-dominated tails (which create an $n_\alpha{\downarrow}/T_\alpha{\uparrow}$ degeneracy). The residual axis for Stage 2 is therefore `n_sweeps × len(peak_steps)`, not the full 310. The combined observed model is
   $$C_\text{obs}(V) = \text{deadtime}\!\left(C_p^\text{true}(V; \theta_p^*) + C_\alpha^\text{true}(V; \theta_\alpha)\right),$$
   so deadtime acts on the sum (important in proton-peak steps where alphas are negligible but deadtime is at its largest). Stage 2 reuses the SPICE rotation matrices computed for Stage 1.
 
@@ -366,7 +407,7 @@ $$v_{th}^\alpha = \sqrt{\frac{k_B T_\alpha}{m_\alpha}}.$$
 `EfficiencyCalibrationTable` stores **absolute** detection efficiencies for each species ($\sim 0.11$ for protons, $\sim 0.15$ for alphas). The lab-calibrated `central_effective_area(V)` table is the proton ABM-derived $\mathcal{A}_0^p(V_\text{lab})$. At the integration site we apply a per-species ratio to convert this to the runtime species/time effective area:
 $$\text{proton}: \quad \texttt{central\_effective\_area\_scale} = \frac{\varepsilon_p(t)}{\varepsilon_p(t_\text{lab})}$$
 $$\text{alpha}: \quad \texttt{central\_effective\_area\_scale} = \frac{\varepsilon_\alpha(t)}{\varepsilon_p(t_\text{lab})}$$
-The proton-lab denominator is used for **both** species so the alpha scale folds the species correction $\mathcal{A}_0^\alpha/\mathcal{A}_0^p \approx \varepsilon_\alpha/\varepsilon_p$ together with alpha time drift into a single ratio. This factor is exposed as `EfficiencyCalibrationTable.eps_p_lab`; until the cal-file format adds a `lab_time` field, it falls back to the earliest entry in the LUT.
+The proton-lab denominator is used for **both** species so the alpha scale folds the species correction $\mathcal{A}_0^\alpha/\mathcal{A}_0^p \approx \varepsilon_\alpha/\varepsilon_p$ together with alpha time drift into a single ratio. This factor is exposed as `EfficiencyCalibrationTable.eps_p_lab`; until the cal-file format adds a `lab_time` field, `eps_p_lab` pins to the first LUT entry on or after 2025-11-01, falling back to the earliest entry only if none qualifies. The cutoff exists because pre-2025-11 rows in the shipping LUT are placeholder values (`0.02348` repeated); using them as the lab denominator would drive the proton-fit density ~6× too low.
 
 When the LUT contains only the lab row, `proton_eff_scale = 1.0` exactly and proton outputs are unchanged from the pre-wiring code.
 
@@ -378,7 +419,7 @@ Stage 2's initial guess (`_alpha_initial_guess`) locates the alpha bump by subtr
 2. Convert voltages to energies: $E_i = k^* |V_i|$ and form the residual $\rho_i = \max(0,\, \overline{C_i} - 2\,\overline{R_i^p})$. The factor of 2 hardens the alpha-bump finder against the deep proton thermal tail leaking into the low-energy alpha bins.
 3. Call `get_alpha_peak_indices(residual, energies, proton_peak_index)` to return the alpha peak slice. The function walks from the proton peak toward higher energies (lower indices), past the gap where $E_i < 1.5\,E_\text{proton-peak}$, until it finds a residual local minimum that bounds the alpha bump on the proton side; the high-energy side is bounded at $E_i = 4\,E_\text{proton-peak}$.
 4. Guard: require $\geq 3$ bins in the peak and at least one bin with positive residual.
-5. Temperature seed: $T_\alpha = T_p^*$ (the proton temperature). The alpha thermal width is fit by LM in Stage 2 — there is no Gaussian pre-fit on the residual.
+5. Temperature seed: $T_\alpha = T_p^*$ (the proton temperature). The alpha thermal width is fit by least squares in Stage 2 — there is no Gaussian pre-fit on the residual.
 6. Density: compute a unit-density alpha forward model at $\Delta v = 0$ (using the proton bulk velocity as the alpha velocity seed), average across sweeps, and scale to match the mean residual at the peak:
    $$n_{\alpha,0} = \max\!\left(\frac{\overline{\rho_\text{peak}}}{\overline{R_\text{peak}^{\alpha,\text{unit}}}},\; 10^{-3}\right)$$
 7. Return $(n_{\alpha,0}, T_\alpha, \Delta v = 0, \text{peak\_bin\_indices})$. The optimizer starts with $\Delta v = 0$ and the wrong-basin flip (below) handles sign ambiguity. The returned `peak_bin_indices` are used to subset the residual axis for Stage 2 (see above).
@@ -391,9 +432,9 @@ The figure below shows these steps on three real L2 spectra from `imap_swapi_l2_
 
 ### Wrong-basin detection ($\Delta v$ flip)
 
-The 1-DOF $\Delta v$ parameterization creates a basin ambiguity along $\hat{\mathbf{B}}$: flipping $\Delta v \to -\Delta v$ can yield a comparable $\chi^2$ when the alpha bump sits near the proton thermal tail. After LM converges to $(\log n_\alpha, \log T_\alpha, \Delta v)$, the fit evaluates $\chi^2$ at the flipped point $(\log n_\alpha, \log T_\alpha, -\Delta v)$. If $\chi^2_{\text{flipped}} < \chi^2_{\text{LM}}$, LM re-runs from the flipped point. This costs one extra residual evaluation typically, plus one extra LM run for the cases that need it.
+The 1-DOF $\Delta v$ parameterization creates a basin ambiguity along $\hat{\mathbf{B}}$: flipping $\Delta v \to -\Delta v$ can yield a comparable $\chi^2$ when the alpha bump sits near the proton thermal tail. After the fit converges to $(\log n_\alpha, \log T_\alpha, \Delta v)$, $\chi^2$ is evaluated at the flipped point $(\log n_\alpha, \log T_\alpha, -\Delta v)$. If $\chi^2_{\text{flipped}} < \chi^2_{\text{fit}}$, the fit restarts from the flipped point. This costs one extra residual evaluation typically, plus one extra least-squares run for the cases that need it.
 
-Unlike the proton wrong-basin check (which always re-runs LM from the flipped seed), the alpha flip uses a cheaper evaluate-then-rerun strategy because the 1-DOF flip preserves $(n_\alpha, T_\alpha)$ — unlike the proton case, where the 3-DOF velocity flip changes the $(n, T)$ landscape significantly enough that a single-point $\chi^2$ is a poor proxy.
+Like the proton wrong-basin check, this is a single forward-model evaluation at the flipped point gating a conditional fit restart. Two pieces are simpler in the alpha case: there is no analytic density rescale (the 1-DOF $\Delta v$ flip preserves $(n_\alpha, T_\alpha)$, so the converged density already applies at $-\Delta v$), and the procedure runs once rather than iterating. The gate is correspondingly stricter — the alpha fit restarts only on a strict improvement ($\chi^2_\text{flipped} < \chi^2_\text{fit}$), where the proton iter-flip uses a permissive $\text{MSE}_\text{flip} < 100\,\text{MSE}_\text{cur}$ to absorb the amplitude shift introduced by the rescale.
 
 ### Uncertainty propagation
 
@@ -421,6 +462,6 @@ This **ignores proton-parameter uncertainty's effect on Stage 2 residuals**, so 
 
 ## References
 
-- Rankin, J. S., McComas, D. J., et al. (2025). Solar Wind and Pickup Ion (SWAPI) Instrument on NASA's Interstellar Mapping and Acceleration Probe (IMAP). *Space Science Reviews*, 221(8), 108. https://doi.org/10.1007/s11214-025-01229-8 — SWAPI instrument paper; sign conventions and coordinate system (Step 3).
+- Rankin, J. S., McComas, D. J., et al. (2025). Solar Wind and Pickup Ion (SWAPI) Instrument on NASA's Interstellar Mapping and Acceleration Probe (IMAP). *Space Science Reviews*, 221(8), 108. https://doi.org/10.1007/s11214-025-01229-8 — SWAPI instrument paper; sign conventions and coordinate system used inside the forward model.
 - Tsoulfanidis, N. (1995). *Measurement and Detection of Radiation* (2nd ed.). Taylor & Francis. p. 74. — Deadtime formula: $n = g / (1 - g\tau)$.
 - Vugrin, K. W., et al. (2007). Confidence region estimation techniques for nonlinear regression in groundwater flow: Three case studies. *Water Resources Research*, 43, W03423. https://doi.org/10.1029/2005WR004804 — Parameter covariance $\Sigma_x = s^2 (J^\top J)^+$ with residual-scaled $s^2$.
