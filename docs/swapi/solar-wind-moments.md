@@ -232,85 +232,6 @@ For high-rate cases ($\geq 10^3$ Hz) where proton fit residuals are dominated by
 The worst cases at typical solar wind coincidence rate ($\geq 10^4$ Hz) are primarily due to bulk flow directions near the edge of the instrument response, which is rare by design because of the alignment of SWAPI's boresight and the spacecraft spin axis with the nominal average solar wind direction.
 
 
-## Analytic Jacobian
-
-The Levenberg–Marquardt step needs the residual Jacobian $\partial r_i/\partial p_j = \partial C_i^\text{model}/\partial p_j$ for each parameter $p_j$. Because $C = \int d^3v\,v\,f\,\mathcal{A}$ is linear in $f$ and the response $\mathcal{A}$ does not depend on the Maxwellian parameters, the parameter Jacobian of $C$ inherits the pointwise Jacobian of $f$:
-$$\frac{\partial C(V)}{\partial p_j} = \int d^3v\,v\,\frac{\partial f}{\partial p_j}(\mathbf{v})\,\mathcal{A}(\mathbf{v}, V).$$
-The same quadrature used for $C$ then delivers all five Jacobian columns in one pass at the cost of an extra integrand vector. The rest of this section derives $\partial f/\partial p$ for the optimizer's parameter vector $p = (\ln n,\, \ln T,\, v_R,\, v_T,\, v_N)$ — density and temperature in log-space, velocity in linear RTN components.
-
-Reuse the spherical-coordinate Maxwellian from [Velocity Distribution Function](#velocity-distribution-function),
-$$f(v, \theta, \phi) = \frac{n}{(2\pi)^{3/2}\,v_\text{th}^3}\,\exp\!\left(-\frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^2}\right),$$
-with $\cos\alpha(\theta, \phi) = \sin\theta_b\sin\theta + \cos\theta_b\cos\theta\cos(\phi - \phi_b)$, $v_\text{th}^2 = k_B T/m$, and $(v_b, \theta_b, \phi_b)$ the magnitude/elevation/azimuth of the instrument-frame bulk velocity $\mathbf{v}_b^\text{XYZ} = R\,\mathbf{v}_b^\text{RTN}$ where $\mathbf{v}_b^\text{RTN} = (v_R, v_T, v_N)^\top$. Taking the log,
-$$\ln f = \ln n - \tfrac{3}{2}\ln v_\text{th}^2 - \frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^2} + \text{const}.$$
-
-### Density
-
-$f$ is linear in $n$, so
-$$\frac{\partial f}{\partial n} = \frac{f}{n}.$$
-
-Converting to log-space via $\partial f/\partial \ln n = n\,\partial f/\partial n$,
-$$\frac{\partial f}{\partial \ln n} = f.$$
-
-### Temperature
-
-$T$ enters $f$ only through $v_\text{th}^2 = k_B T/m$, so it is cleaner to first differentiate wrt $v_\text{th}^2$ and then convert. Reading off $\ln f$,
-$$\frac{\partial \ln f}{\partial v_\text{th}^2} = -\frac{3}{2\,v_\text{th}^2} + \frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^4}.$$
-The first term comes from the $-\tfrac{3}{2}\ln v_\text{th}^2$ coefficient; the second from differentiating the exponent's $1/v_\text{th}^2$.
-
-The remaining steps are three applications of the same change-of-variables identity,
-$$\frac{\partial g}{\partial y} = \frac{\partial g}{\partial x}\cdot\frac{\partial x}{\partial y},$$
-walking $v_\text{th}^2 \to T$, then $\ln f \to f$, then $T \to \ln T$.
-
-First:
-$$\frac{\partial \ln f}{\partial T} 
-= 
-  \frac{\partial v_\text{th}^2}{\partial T} 
-  \cdot 
-  \frac{\partial \ln f}{\partial v_\text{th}^2}
-= \frac{v_\text{th}^2}{T}\,\frac{\partial \ln f}{\partial v_\text{th}^2} = \frac{1}{T} \cdot \left(\frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^2} - \tfrac{3}{2}\right).$$
-
-Then:
-$$
-\frac{\partial f}{\partial T}
-  = \frac{f}{T}\cdot\left(\frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^2} - \tfrac{3}{2}\right).
-$$
-
-Finally:
-$$
-  \frac{\partial f}{\partial \ln T}
-    = f\cdot\left(\frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^2} - \tfrac{3}{2}\right).
-  $$
-
-The sign reverses across $v^2 + v_b^2 - 2\,v\,v_b\cos\alpha = 3\,v_\text{th}^2$: increasing $T$ decreases $f$ for $v \approx v_b$ and increases it for $v \gg v_b$.
-
-### Bulk velocity components
-
-The squared offset in the exponent is the magnitude of a vector difference,
-$$v^2 + v_b^2 - 2\,v\,v_b\cos\alpha = |\mathbf{v} - \mathbf{v}_b^\text{XYZ}|^2,$$
-where both $\mathbf{v}$ (the integration variable) and $\mathbf{v}_b^\text{XYZ}$ (the bulk velocity in instrument coordinates) are 3-vectors in the instrument-frame XYZ. Let $R$ be the rotation matrix from RTN to instrument XYZ, so that the spacecraft-frame (RTN) bulk velocity $\mathbf{v}_b^\text{RTN} = (v_R, v_T, v_N)^\top$ maps to its instrument-frame representation as $\mathbf{v}_b^\text{XYZ} = R\,\mathbf{v}_b^\text{RTN}$. Substituting that into the squared offset and expanding using $R^\top R = I$ (so $|R\,\mathbf{v}_b^\text{RTN}|^2 = |\mathbf{v}_b^\text{RTN}|^2$):
-$$\tfrac{1}{2}|\mathbf{v} - R\,\mathbf{v}_b^\text{RTN}|^2 = \tfrac{1}{2}|\mathbf{v}|^2 \;-\; \mathbf{v}^\top R\,\mathbf{v}_b^\text{RTN} \;+\; \tfrac{1}{2}|\mathbf{v}_b^\text{RTN}|^2.$$
-
-The first term is independent of $\mathbf{v}_b^\text{RTN}$. Differentiating the other two,
-$$\nabla_{\mathbf{v}_b^\text{RTN}}\!\bigl[-\mathbf{v}^\top R\,\mathbf{v}_b^\text{RTN}\bigr] = -R^\top\mathbf{v}, \qquad \nabla_{\mathbf{v}_b^\text{RTN}}\!\bigl[\tfrac{1}{2}|\mathbf{v}_b^\text{RTN}|^2\bigr] = \mathbf{v}_b^\text{RTN}.$$
-
-Adding, and using $\mathbf{v}_b^\text{RTN} = R^\top R\,\mathbf{v}_b^\text{RTN} = R^\top\mathbf{v}_b^\text{XYZ}$ to factor out $R^\top$,
-$$\nabla_{\mathbf{v}_b^\text{RTN}}\!\left[\tfrac{1}{2}\bigl(v^2 + v_b^2 - 2\,v\,v_b\cos\alpha\bigr)\right] = -R^\top\mathbf{v} + R^\top\mathbf{v}_b^\text{XYZ} = -R^\top\bigl(\mathbf{v} - \mathbf{v}_b^\text{XYZ}\bigr).$$
-
-Now propagate this through $f$. Since $\mathbf{v}_b^\text{RTN}$ enters $f$ only via the squared offset in the exponent, $\ln f$ depends on $\mathbf{v}_b^\text{RTN}$ only through the single term $-\tfrac{1}{2}|\mathbf{v} - \mathbf{v}_b^\text{XYZ}|^2/v_\text{th}^2$. The constant $-1/v_\text{th}^2$ pulls out of the gradient,
-$$\nabla_{\mathbf{v}_b^\text{RTN}}\ln f = -\frac{1}{v_\text{th}^2}\,\nabla_{\mathbf{v}_b^\text{RTN}}\!\left[\tfrac{1}{2}|\mathbf{v} - \mathbf{v}_b^\text{XYZ}|^2\right].$$
-Substituting the gradient computed above:
-$$\nabla_{\mathbf{v}_b^\text{RTN}}\ln f = -\frac{1}{v_\text{th}^2}\cdot\bigl[-R^\top(\mathbf{v} - \mathbf{v}_b^\text{XYZ})\bigr] = \frac{1}{v_\text{th}^2}\,R^\top\!\bigl(\mathbf{v} - \mathbf{v}_b^\text{XYZ}\bigr).$$
-
-Multiplying by $f$ (since $f\,\nabla\ln f = \nabla f$) and distributing $R^\top$ across the offset (so $\mathbf{v}_b^\text{XYZ}$ never has to be materialized),
-$$\nabla_{\mathbf{v}_b^\text{RTN}} f = \frac{f}{v_\text{th}^2}\,\bigl(R^\top\mathbf{v} - \mathbf{v}_b^\text{RTN}\bigr).$$
-The three components are
-$$\frac{\partial f}{\partial v_R} = \frac{f}{v_\text{th}^2}\,\bigl(R^\top\mathbf{v} - \mathbf{v}_b^\text{RTN}\bigr)_R, \qquad \frac{\partial f}{\partial v_T} = \frac{f}{v_\text{th}^2}\,\bigl(R^\top\mathbf{v} - \mathbf{v}_b^\text{RTN}\bigr)_T, \qquad \frac{\partial f}{\partial v_N} = \frac{f}{v_\text{th}^2}\,\bigl(R^\top\mathbf{v} - \mathbf{v}_b^\text{RTN}\bigr)_N.$$
-At each integration node, $\mathbf{v}$ is built in instrument XYZ from $(v, \theta, \phi)$ via the precomputed trigonometric terms.
-
-### Boundary terms
-
-The integration limits $r_\text{min}(\theta),\,r_\text{max}(\theta),\,\theta_\text{lo},\,\theta_\text{hi}$ are themselves functions of $(v_b, v_\text{th})$ via [Angular limits](#angular-limits) and [Speed limits](#speed-limits). For an analytic Jacobian we hold the limits fixed at the current estimate and drop the Leibniz boundary terms. This is exact at the soft VDF cutoffs ($6\,v_\text{th}$ in speed, $\varepsilon = 10^{-6}$ in angle), where the dropped contribution is suppressed by the same $\sim 10^{-6}$–$10^{-8}$ factor that motivated the cutoff. It is an approximation at the passband boundary; in practice that boundary contributes little because the passband itself smoothly shapes the integrand.
-
 ## Proton Fitting Procedure
 
 This section describes the per-chunk pipeline that takes one 5-sweep window of L2 coincidence count rates and produces one row of L3A proton variables for the CDF output. The subsections below walk through each stage — fit preparation, initial-guess construction, the least-squares fit, and the postprocessing — and close with an end-to-end accuracy check on synthetic count rates derived from real WIND/SWE measurements.
@@ -395,6 +316,85 @@ A failed fit sets the quality flag `BAD_FIT`.
 ![Chi-squared landscape in the (v_T, v_N) plane showing the truth and spin-axis-rotated minima](figures/wrong_basin.png)
 
 *Generated by `docs/swapi/figure_src/plot_wrong_basin.py`. In this example, the rotated minimum has $\chi^2$ roughly $200\times$ the true minimum. A single least-squares solve from the flipped seed reaches the truth basin.*
+
+### Analytic Jacobian
+
+The Levenberg–Marquardt step needs the residual Jacobian $\partial r_i/\partial p_j = \partial C_i^\text{model}/\partial p_j$ for each parameter $p_j$. Because $C = \int d^3v\,v\,f\,\mathcal{A}$ is linear in $f$ and the response $\mathcal{A}$ does not depend on the Maxwellian parameters, the parameter Jacobian of $C$ inherits the pointwise Jacobian of $f$:
+$$\frac{\partial C(V)}{\partial p_j} = \int d^3v\,v\,\frac{\partial f}{\partial p_j}(\mathbf{v})\,\mathcal{A}(\mathbf{v}, V).$$
+The same quadrature used for $C$ then delivers all five Jacobian columns in one pass at the cost of an extra integrand vector. The rest of this section derives $\partial f/\partial p$ for the optimizer's parameter vector $p = (\ln n,\, \ln T,\, v_R,\, v_T,\, v_N)$ — density and temperature in log-space, velocity in linear RTN components.
+
+Reuse the spherical-coordinate Maxwellian from [Velocity Distribution Function](#velocity-distribution-function),
+$$f(v, \theta, \phi) = \frac{n}{(2\pi)^{3/2}\,v_\text{th}^3}\,\exp\!\left(-\frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^2}\right),$$
+with $\cos\alpha(\theta, \phi) = \sin\theta_b\sin\theta + \cos\theta_b\cos\theta\cos(\phi - \phi_b)$, $v_\text{th}^2 = k_B T/m$, and $(v_b, \theta_b, \phi_b)$ the magnitude/elevation/azimuth of the instrument-frame bulk velocity $\mathbf{v}_b^\text{XYZ} = R\,\mathbf{v}_b^\text{RTN}$ where $\mathbf{v}_b^\text{RTN} = (v_R, v_T, v_N)^\top$. Taking the log,
+$$\ln f = \ln n - \tfrac{3}{2}\ln v_\text{th}^2 - \frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^2} + \text{const}.$$
+
+#### Density
+
+$f$ is linear in $n$, so
+$$\frac{\partial f}{\partial n} = \frac{f}{n}.$$
+
+Converting to log-space via $\partial f/\partial \ln n = n\,\partial f/\partial n$,
+$$\frac{\partial f}{\partial \ln n} = f.$$
+
+#### Temperature
+
+$T$ enters $f$ only through $v_\text{th}^2 = k_B T/m$, so it is cleaner to first differentiate wrt $v_\text{th}^2$ and then convert. Reading off $\ln f$,
+$$\frac{\partial \ln f}{\partial v_\text{th}^2} = -\frac{3}{2\,v_\text{th}^2} + \frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^4}.$$
+The first term comes from the $-\tfrac{3}{2}\ln v_\text{th}^2$ coefficient; the second from differentiating the exponent's $1/v_\text{th}^2$.
+
+The remaining steps are three applications of the same change-of-variables identity,
+$$\frac{\partial g}{\partial y} = \frac{\partial g}{\partial x}\cdot\frac{\partial x}{\partial y},$$
+walking $v_\text{th}^2 \to T$, then $\ln f \to f$, then $T \to \ln T$.
+
+First:
+$$\frac{\partial \ln f}{\partial T} 
+= 
+  \frac{\partial v_\text{th}^2}{\partial T} 
+  \cdot 
+  \frac{\partial \ln f}{\partial v_\text{th}^2}
+= \frac{v_\text{th}^2}{T}\,\frac{\partial \ln f}{\partial v_\text{th}^2} = \frac{1}{T} \cdot \left(\frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^2} - \tfrac{3}{2}\right).$$
+
+Then:
+$$
+\frac{\partial f}{\partial T}
+  = \frac{f}{T}\cdot\left(\frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^2} - \tfrac{3}{2}\right).
+$$
+
+Finally:
+$$
+  \frac{\partial f}{\partial \ln T}
+    = f\cdot\left(\frac{v^2 + v_b^2 - 2\,v\,v_b\cos\alpha}{2\,v_\text{th}^2} - \tfrac{3}{2}\right).
+  $$
+
+The sign reverses across $v^2 + v_b^2 - 2\,v\,v_b\cos\alpha = 3\,v_\text{th}^2$: increasing $T$ decreases $f$ for $v \approx v_b$ and increases it for $v \gg v_b$.
+
+#### Bulk velocity components
+
+The squared offset in the exponent is the magnitude of a vector difference,
+$$v^2 + v_b^2 - 2\,v\,v_b\cos\alpha = |\mathbf{v} - \mathbf{v}_b^\text{XYZ}|^2,$$
+where both $\mathbf{v}$ (the integration variable) and $\mathbf{v}_b^\text{XYZ}$ (the bulk velocity in instrument coordinates) are 3-vectors in the instrument-frame XYZ. Let $R$ be the rotation matrix from RTN to instrument XYZ, so that the spacecraft-frame (RTN) bulk velocity $\mathbf{v}_b^\text{RTN} = (v_R, v_T, v_N)^\top$ maps to its instrument-frame representation as $\mathbf{v}_b^\text{XYZ} = R\,\mathbf{v}_b^\text{RTN}$. Substituting that into the squared offset and expanding using $R^\top R = I$ (so $|R\,\mathbf{v}_b^\text{RTN}|^2 = |\mathbf{v}_b^\text{RTN}|^2$):
+$$\tfrac{1}{2}|\mathbf{v} - R\,\mathbf{v}_b^\text{RTN}|^2 = \tfrac{1}{2}|\mathbf{v}|^2 \;-\; \mathbf{v}^\top R\,\mathbf{v}_b^\text{RTN} \;+\; \tfrac{1}{2}|\mathbf{v}_b^\text{RTN}|^2.$$
+
+The first term is independent of $\mathbf{v}_b^\text{RTN}$. Differentiating the other two,
+$$\nabla_{\mathbf{v}_b^\text{RTN}}\!\bigl[-\mathbf{v}^\top R\,\mathbf{v}_b^\text{RTN}\bigr] = -R^\top\mathbf{v}, \qquad \nabla_{\mathbf{v}_b^\text{RTN}}\!\bigl[\tfrac{1}{2}|\mathbf{v}_b^\text{RTN}|^2\bigr] = \mathbf{v}_b^\text{RTN}.$$
+
+Adding, and using $\mathbf{v}_b^\text{RTN} = R^\top R\,\mathbf{v}_b^\text{RTN} = R^\top\mathbf{v}_b^\text{XYZ}$ to factor out $R^\top$,
+$$\nabla_{\mathbf{v}_b^\text{RTN}}\!\left[\tfrac{1}{2}\bigl(v^2 + v_b^2 - 2\,v\,v_b\cos\alpha\bigr)\right] = -R^\top\mathbf{v} + R^\top\mathbf{v}_b^\text{XYZ} = -R^\top\bigl(\mathbf{v} - \mathbf{v}_b^\text{XYZ}\bigr).$$
+
+Now propagate this through $f$. Since $\mathbf{v}_b^\text{RTN}$ enters $f$ only via the squared offset in the exponent, $\ln f$ depends on $\mathbf{v}_b^\text{RTN}$ only through the single term $-\tfrac{1}{2}|\mathbf{v} - \mathbf{v}_b^\text{XYZ}|^2/v_\text{th}^2$. The constant $-1/v_\text{th}^2$ pulls out of the gradient,
+$$\nabla_{\mathbf{v}_b^\text{RTN}}\ln f = -\frac{1}{v_\text{th}^2}\,\nabla_{\mathbf{v}_b^\text{RTN}}\!\left[\tfrac{1}{2}|\mathbf{v} - \mathbf{v}_b^\text{XYZ}|^2\right].$$
+Substituting the gradient computed above:
+$$\nabla_{\mathbf{v}_b^\text{RTN}}\ln f = -\frac{1}{v_\text{th}^2}\cdot\bigl[-R^\top(\mathbf{v} - \mathbf{v}_b^\text{XYZ})\bigr] = \frac{1}{v_\text{th}^2}\,R^\top\!\bigl(\mathbf{v} - \mathbf{v}_b^\text{XYZ}\bigr).$$
+
+Multiplying by $f$ (since $f\,\nabla\ln f = \nabla f$) and distributing $R^\top$ across the offset (so $\mathbf{v}_b^\text{XYZ}$ never has to be materialized),
+$$\nabla_{\mathbf{v}_b^\text{RTN}} f = \frac{f}{v_\text{th}^2}\,\bigl(R^\top\mathbf{v} - \mathbf{v}_b^\text{RTN}\bigr).$$
+The three components are
+$$\frac{\partial f}{\partial v_R} = \frac{f}{v_\text{th}^2}\,\bigl(R^\top\mathbf{v} - \mathbf{v}_b^\text{RTN}\bigr)_R, \qquad \frac{\partial f}{\partial v_T} = \frac{f}{v_\text{th}^2}\,\bigl(R^\top\mathbf{v} - \mathbf{v}_b^\text{RTN}\bigr)_T, \qquad \frac{\partial f}{\partial v_N} = \frac{f}{v_\text{th}^2}\,\bigl(R^\top\mathbf{v} - \mathbf{v}_b^\text{RTN}\bigr)_N.$$
+At each integration node, $\mathbf{v}$ is built in instrument XYZ from $(v, \theta, \phi)$ via the precomputed trigonometric terms.
+
+#### Boundary terms
+
+The integration limits $r_\text{min}(\theta),\,r_\text{max}(\theta),\,\theta_\text{lo},\,\theta_\text{hi}$ are themselves functions of $(v_b, v_\text{th})$ via [Angular limits](#angular-limits) and [Speed limits](#speed-limits). For an analytic Jacobian we hold the limits fixed at the current estimate and drop the Leibniz boundary terms. This is exact at the soft VDF cutoffs ($6\,v_\text{th}$ in speed, $\varepsilon = 10^{-6}$ in angle), where the dropped contribution is suppressed by the same $\sim 10^{-6}$–$10^{-8}$ factor that motivated the cutoff. It is an approximation at the passband boundary; in practice that boundary contributes little because the passband itself smoothly shapes the integrand.
 
 ### Fitting Algorithm Validation
 
