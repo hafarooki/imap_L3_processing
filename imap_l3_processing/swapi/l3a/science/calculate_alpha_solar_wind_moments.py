@@ -76,7 +76,7 @@ def _alpha_residuals_njit(
     T_a = np.exp(x[1])
     dv = x[2]
     v_a_rtn = proton_bulk + dv * magnetic_field_direction
-    alpha_true = model_solar_wind_ideal_coincidence_rates(
+    alpha_true, _ = model_solar_wind_ideal_coincidence_rates(
         SolarWindParams(n_a, v_a_rtn, T_a, alpha_ctx.mass_kg), alpha_ctx,
     )
     combined_obs = apply_deadtime_correction_array(proton_true_rate + alpha_true)
@@ -134,7 +134,7 @@ def fit_solar_wind_alpha_moments(
     )
 
     # Frozen pre-deadtime proton model rate. Deadtime acts on (proton + alpha) below.
-    proton_true_rate = model_solar_wind_ideal_coincidence_rates(
+    proton_true_rate, _ = model_solar_wind_ideal_coincidence_rates(
         SolarWindParams(
             density=proton_moments.density.nominal_value,
             bulk_velocity_rtn=proton_bulk_rtn,
@@ -268,7 +268,7 @@ def _alpha_initial_guess(
 
     T_alpha = proton_temperature
 
-    unit_alpha = model_solar_wind_ideal_coincidence_rates(
+    unit_alpha, _ = model_solar_wind_ideal_coincidence_rates(
         SolarWindParams(1.0, proton_bulk_velocity_rtn, T_alpha, alpha_ctx.mass_kg),
         alpha_ctx,
     )

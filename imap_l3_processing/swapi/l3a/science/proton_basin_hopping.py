@@ -59,12 +59,11 @@ def _flipped_seed(
 ) -> tuple[ndarray, float, float]:
     sw = lm_result.sw_params
     flipped_velocity = _flip_vector_about_axis(sw.bulk_velocity_rtn, spin_axis_rtn)
-    predicted_obs_rate = apply_deadtime_correction_array(
-        model_solar_wind_ideal_coincidence_rates(
-            SolarWindParams(sw.density, flipped_velocity, sw.temperature, sw.mass_kg),
-            ctx,
-        )
+    rates, _ = model_solar_wind_ideal_coincidence_rates(
+        SolarWindParams(sw.density, flipped_velocity, sw.temperature, sw.mass_kg),
+        ctx,
     )
+    predicted_obs_rate = apply_deadtime_correction_array(rates)
     density_scale = optimal_density_scale(predicted_obs_rate, ctx.count_rate)
     flipped_mse = float(
         np.mean((density_scale * predicted_obs_rate - ctx.count_rate) ** 2)

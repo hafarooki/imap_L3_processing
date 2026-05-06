@@ -45,7 +45,7 @@ def calculate_initial_guess(ctx: SolarWindFitContext) -> SolarWindParams:
     spin_axis_rtn = spin_axis_rtn / np.linalg.norm(spin_axis_rtn)
     bulk_velocity_rtn = -bulk_speed_init * spin_axis_rtn
 
-    unit_density_rate = model_solar_wind_ideal_coincidence_rates(
+    unit_density_rate, _ = model_solar_wind_ideal_coincidence_rates(
         SolarWindParams(1.0, bulk_velocity_rtn, temperature, ctx.mass_kg), ctx,
     )
     density = optimal_density_scale(unit_density_rate, ctx.count_rate)

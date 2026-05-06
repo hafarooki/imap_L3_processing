@@ -156,9 +156,8 @@ class TestColdSlowDenseWrongBasin(unittest.TestCase):
             mass_kg=PROTON_MASS_KG,
             mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
         )
-        rates = apply_deadtime_correction_array(
-            model_solar_wind_ideal_coincidence_rates(truth_params, base_ctx)
-        )
+        ideal_rates, _ = model_solar_wind_ideal_coincidence_rates(truth_params, base_ctx)
+        rates = apply_deadtime_correction_array(ideal_rates)
         rng = np.random.default_rng(cls.POISSON_SEED)
         count_rate = (
             rng.poisson(np.maximum(rates * 0.145, 0.0)).astype(float) / 0.145
@@ -230,9 +229,8 @@ def _setup_synthetic_fit(
         mass_kg=PROTON_MASS_KG,
         mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
-    rates = apply_deadtime_correction_array(
-        model_solar_wind_ideal_coincidence_rates(truth_params, base_ctx)
-    )
+    ideal_rates, _ = model_solar_wind_ideal_coincidence_rates(truth_params, base_ctx)
+    rates = apply_deadtime_correction_array(ideal_rates)
     rng = np.random.default_rng(seed)
     count_rate = rng.poisson(np.maximum(rates * 0.145, 0.0)).astype(float) / 0.145
 

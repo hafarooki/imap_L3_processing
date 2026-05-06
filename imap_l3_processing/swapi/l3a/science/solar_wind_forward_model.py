@@ -64,6 +64,10 @@ class _LocalSWParams(NamedTuple):
     bulk_elevation: float
     temperature: float  # K
     mass_kg: float
+    bulk_velocity_xyz: ndarray   # shape (3,), instrument frame
+    bulk_velocity_rtn: ndarray   # shape (3,), RTN frame
+    rotation_matrix: ndarray     # shape (3, 3), RTN -> instrument XYZ
+    inv_2_sigma_sq: float        # 1 / (2 * speed_std**2)
 
 
 @numba.njit(nogil=True, inline="always")
@@ -112,14 +116,28 @@ _REGION_VV_POS = +2
 def model_solar_wind_ideal_coincidence_rates(
     sw_params: SolarWindParams,
     ctx: SolarWindFitContext,
-) -> ndarray:
+):
+    """Forward model: returns (rates, jac_partial) where jac_partial has shape
+    (N, 4) with columns ordered [d/d ln T, d/d v_R, d/d v_T, d/d v_N]. The
+    d/d ln n column is omitted because it equals the rate vector itself
+    (linearity of the forward model in n) — assemble it at the call site."""
     bulk_speed = float(np.linalg.norm(sw_params.bulk_velocity_rtn))
+    speed_std = (
+        math.sqrt(BOLTZMANN_CONSTANT_JOULES_PER_KELVIN * sw_params.temperature
+                  / sw_params.mass_kg)
+        / METERS_PER_KILOMETER
+    )
+    inv_2_sigma_sq = 1.0 / (2.0 * speed_std * speed_std)
+    inv_sigma_sq = 2.0 * inv_2_sigma_sq
+
     n = len(ctx.response_grids)
-    result = np.empty(n)
+    rates = np.empty(n)
+    jac_partial = np.empty((n, 4))
     for i in range(n):
-        phi, theta = _compute_angles(
-            sw_params.bulk_velocity_rtn, ctx.rotation_matrices[i]
-        )
+        rotation_matrix = ctx.rotation_matrices[i]
+        bulk_velocity_xyz = rotation_matrix @ sw_params.bulk_velocity_rtn
+        phi = np.degrees(np.arctan2(-bulk_velocity_xyz[0], -bulk_velocity_xyz[1]))
+        theta = np.degrees(np.arcsin(-bulk_velocity_xyz[2] / bulk_speed))
         local_params = _LocalSWParams(
             density=sw_params.density,
             bulk_speed=bulk_speed,
@@ -127,18 +145,20 @@ def model_solar_wind_ideal_coincidence_rates(
             bulk_elevation=theta,
             temperature=sw_params.temperature,
             mass_kg=sw_params.mass_kg,
+            bulk_velocity_xyz=bulk_velocity_xyz,
+            bulk_velocity_rtn=sw_params.bulk_velocity_rtn,
+            rotation_matrix=rotation_matrix,
+            inv_2_sigma_sq=inv_2_sigma_sq,
         )
-        result[i] = calculate_integral(ctx.response_grids[i], local_params)
-    return result
-
-
-@numba.njit(nogil=True)
-def _compute_angles(bulk_velocity_rtn: ndarray, rotation_matrix: ndarray):
-    bulk_velocity_xyz = rotation_matrix @ bulk_velocity_rtn
-    bulk_speed = np.linalg.norm(bulk_velocity_rtn)
-    phi = np.degrees(np.arctan2(-bulk_velocity_xyz[0], -bulk_velocity_xyz[1]))
-    theta = np.degrees(np.arcsin(-bulk_velocity_xyz[2] / bulk_speed))
-    return phi, theta
+        rate, dlnT_raw, m2_R, m2_T, m2_N = calculate_integral(
+            ctx.response_grids[i], local_params
+        )
+        rates[i] = rate
+        jac_partial[i, 0] = dlnT_raw - 1.5 * rate    # d/d ln T (per docs/swapi/solar-wind-moments.md)
+        jac_partial[i, 1] = m2_R * inv_sigma_sq      # d/d v_R
+        jac_partial[i, 2] = m2_T * inv_sigma_sq      # d/d v_T
+        jac_partial[i, 3] = m2_N * inv_sigma_sq      # d/d v_N
+    return rates, jac_partial
 
 
 @numba.njit(nogil=True, inline="always")
@@ -165,23 +185,29 @@ def calculate_integral(
     sw_params: _LocalSWParams,
 ):
     if _cone_outside_passband(response_grid, sw_params):
-        return 0.0
-    sg_rate = _integrate_sunglasses_region(response_grid, sw_params)
-    vv_rate = _integrate_vanes_vignetting_regions(response_grid, sw_params)
-    oa_rate = _integrate_open_aperture_regions(response_grid, sw_params, sg_rate)
-    return sg_rate + vv_rate + oa_rate
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+    sg = _integrate_sunglasses_region(response_grid, sw_params)
+    vv = _integrate_vanes_vignetting_regions(response_grid, sw_params)
+    oa = _integrate_open_aperture_regions(response_grid, sw_params, sg[0])
+    return (
+        sg[0] + vv[0] + oa[0],
+        sg[1] + vv[1] + oa[1],
+        sg[2] + vv[2] + oa[2],
+        sg[3] + vv[3] + oa[3],
+        sg[4] + vv[4] + oa[4],
+    )
 
 
 @numba.njit(fastmath=True, nogil=True)
 def _integrate_sunglasses_region(
     response_grid: ResponseGrid,
     sw_params: _LocalSWParams,
-) -> float:
+):
     min_el, max_el, min_az, max_az = _integration_window(
         sw_params, _REGION_SUNGLASSES, response_grid
     )
     if max_el <= min_el or max_az <= min_az:
-        return 0.0
+        return 0.0, 0.0, 0.0, 0.0, 0.0
     return _integrate_region(
         response_grid, sw_params, True, min_el, max_el, min_az, max_az
     )
@@ -191,18 +217,23 @@ def _integrate_sunglasses_region(
 def _integrate_vanes_vignetting_regions(
     response_grid: ResponseGrid,
     sw_params: _LocalSWParams,
-) -> float:
-    total = 0.0
+):
+    rate = 0.0
+    dlnT_raw = 0.0
+    m2_R = 0.0
+    m2_T = 0.0
+    m2_N = 0.0
     for region in (_REGION_VV_NEG, _REGION_VV_POS):
         min_el, max_el, min_az, max_az = _integration_window(
             sw_params, region, response_grid
         )
         if max_el <= min_el or max_az <= min_az:
             continue
-        total += _integrate_region(
+        r, d, mR, mT, mN = _integrate_region(
             response_grid, sw_params, False, min_el, max_el, min_az, max_az
         )
-    return total
+        rate += r; dlnT_raw += d; m2_R += mR; m2_T += mT; m2_N += mN
+    return rate, dlnT_raw, m2_R, m2_T, m2_N
 
 
 @numba.njit(fastmath=True, nogil=True)
@@ -210,8 +241,12 @@ def _integrate_open_aperture_regions(
     response_grid: ResponseGrid,
     sw_params: _LocalSWParams,
     sg_rate: float,
-) -> float:
-    total = 0.0
+):
+    rate = 0.0
+    dlnT_raw = 0.0
+    m2_R = 0.0
+    m2_T = 0.0
+    m2_N = 0.0
     for region in (_REGION_OA_NEG, _REGION_OA_POS):
         min_el, max_el, min_az, max_az = _integration_window(
             sw_params, region, response_grid
@@ -236,10 +271,11 @@ def _integrate_open_aperture_regions(
         if oa_upper_bound < max(0.1, OA_SKIP_FRACTION * sg_rate):
             continue
 
-        total += _integrate_region(
+        r, d, mR, mT, mN = _integrate_region(
             response_grid, sw_params, False, min_el, max_el, min_az, max_az
         )
-    return total
+        rate += r; dlnT_raw += d; m2_R += mR; m2_T += mT; m2_N += mN
+    return rate, dlnT_raw, m2_R, m2_T, m2_N
 
 
 @numba.njit(nogil=True)
@@ -316,8 +352,12 @@ def _integrate_region(
     azimuthal_transmission = response_grid.azimuthal_transmission
     azimuthal_transmission_spacing = response_grid.azimuthal_transmission_spacing
 
-    sin_bulk_elevation = math.sin((math.pi / 180) * sw_params.bulk_elevation)
-    cos_bulk_elevation = math.cos((math.pi / 180) * sw_params.bulk_elevation)
+    R = sw_params.rotation_matrix
+    v_b_rtn = sw_params.bulk_velocity_rtn
+    inv_2_sigma_sq = sw_params.inv_2_sigma_sq
+    bulk_speed_sq = sw_params.bulk_speed * sw_params.bulk_speed
+
+    deg2rad = math.pi / 180.0
 
     passband_norm = interpolate_passband(
         grid, is_sunglasses, elevation=0, speed_ratio=1.0
@@ -333,6 +373,11 @@ def _integrate_region(
     azimuth_points = mid_az + half_az * _GL_NODES_AZIMUTH
     azimuth_weights = half_az * _GL_WEIGHTS_AZIMUTH
 
+    sin_phi = np.sin(deg2rad * azimuth_points)
+    cos_phi = np.cos(deg2rad * azimuth_points)
+    sin_theta_arr = np.sin(deg2rad * elevation_points)
+    cos_theta_arr = np.cos(deg2rad * elevation_points)
+
     interpolated_transmission = np.array(
         [
             _interpolate_transmission(
@@ -342,9 +387,15 @@ def _integrate_region(
         ]
     )
 
-    elevation_integral = 0.0
-    for i_elevation, elevation in enumerate(elevation_points):
-        cos_elevation = math.cos((math.pi / 180) * elevation)
+    elevation_rate = 0.0
+    elevation_dlnT_raw = 0.0
+    elevation_m2_R = 0.0
+    elevation_m2_T = 0.0
+    elevation_m2_N = 0.0
+    for i_el in range(elevation_points.shape[0]):
+        elevation = elevation_points[i_el]
+        sin_el = sin_theta_arr[i_el]
+        cos_el = cos_theta_arr[i_el]
 
         passband_lower_speed = central_speed * _min_passband_speed_ratio_at_elevation(
             grid, is_sunglasses, elevation
@@ -381,38 +432,64 @@ def _integrate_region(
             / passband_norm
         )
 
-        sin_elevation = math.sin((math.pi / 180) * elevation)
-        azimuth_integral = 0.0
-        for i_azimuth, azimuth in enumerate(azimuth_points):
-            cos_view_angle_to_bulk = (
-                sin_bulk_elevation * sin_elevation
-                + cos_bulk_elevation
-                * cos_elevation
-                * math.cos((math.pi / 180) * (azimuth - sw_params.bulk_azimuth))
+        azimuth_rate = 0.0
+        azimuth_dlnT_raw = 0.0
+        azimuth_m2_R = 0.0
+        azimuth_m2_T = 0.0
+        azimuth_m2_N = 0.0
+        for i_az in range(azimuth_points.shape[0]):
+            v_hat_x = -cos_el * sin_phi[i_az]
+            v_hat_y = -cos_el * cos_phi[i_az]
+            v_hat_z = -sin_el
+
+            u_dir_R = R[0, 0] * v_hat_x + R[1, 0] * v_hat_y + R[2, 0] * v_hat_z
+            u_dir_T = R[0, 1] * v_hat_x + R[1, 1] * v_hat_y + R[2, 1] * v_hat_z
+            u_dir_N = R[0, 2] * v_hat_x + R[1, 2] * v_hat_y + R[2, 2] * v_hat_z
+            two_d = 2.0 * (
+                u_dir_R * v_b_rtn[0]
+                + u_dir_T * v_b_rtn[1]
+                + u_dir_N * v_b_rtn[2]
             )
 
-            speed_integral = 0.0
-            for i_speed, speed in enumerate(speed_points):
-                speed_integral += (
-                    speed_weights[i_speed]
-                    * passband_times_speed3_row[i_speed]
-                    * _maxwellian_exponential(sw_params, cos_view_angle_to_bulk, speed)
+            speed_rate = 0.0
+            speed_dlnT_raw = 0.0
+            speed_m2 = 0.0
+            for i_sp in range(speed_points.shape[0]):
+                speed = speed_points[i_sp]
+                u_sq = speed * speed + bulk_speed_sq - speed * two_d
+                exponent = u_sq * inv_2_sigma_sq
+                contribution = (
+                    speed_weights[i_sp]
+                    * passband_times_speed3_row[i_sp]
+                    * math.exp(-exponent)
                 )
+                speed_rate += contribution
+                speed_dlnT_raw += contribution * exponent
+                speed_m2 += contribution * speed
 
-            azimuth_integral += (
-                azimuth_weights[i_azimuth]
-                * interpolated_transmission[i_azimuth]
-                * speed_integral
-            )
+            w_az = azimuth_weights[i_az] * interpolated_transmission[i_az]
+            azimuth_rate += w_az * speed_rate
+            azimuth_dlnT_raw += w_az * speed_dlnT_raw
+            azimuth_m2_R += w_az * (u_dir_R * speed_m2 - v_b_rtn[0] * speed_rate)
+            azimuth_m2_T += w_az * (u_dir_T * speed_m2 - v_b_rtn[1] * speed_rate)
+            azimuth_m2_N += w_az * (u_dir_N * speed_m2 - v_b_rtn[2] * speed_rate)
 
-        elevation_integral += (
-            elevation_weights[i_elevation] * cos_elevation * azimuth_integral
-        )
+        w_el = elevation_weights[i_el] * cos_el
+        elevation_rate += w_el * azimuth_rate
+        elevation_dlnT_raw += w_el * azimuth_dlnT_raw
+        elevation_m2_R += w_el * azimuth_m2_R
+        elevation_m2_T += w_el * azimuth_m2_T
+        elevation_m2_N += w_el * azimuth_m2_N
 
+    factor = (math.pi / 180) ** 2 * _phase_space_integral_to_count_rate_factor(
+        sw_params, central_effective_area
+    )
     return (
-        elevation_integral
-        * (math.pi / 180) ** 2  # deg^2 -> rad^2
-        * _phase_space_integral_to_count_rate_factor(sw_params, central_effective_area)
+        elevation_rate * factor,
+        elevation_dlnT_raw * factor,
+        elevation_m2_R * factor,
+        elevation_m2_T * factor,
+        elevation_m2_N * factor,
     )
 
 
@@ -507,21 +584,6 @@ def _bracketing_boundary_values(boundary, elevation: float):
             break
     idx_next = idx + 1 if idx + 1 < n else n - 1
     return vals[idx], vals[idx_next]
-
-
-@numba.njit(nogil=True)
-def _maxwellian_exponential(
-    sw_params: _LocalSWParams, cos_view_angle_to_bulk: float, speed: float
-) -> float:
-    speed_std = _speed_std(sw_params)
-    return math.exp(
-        -(
-            speed**2
-            + sw_params.bulk_speed**2
-            - 2 * speed * sw_params.bulk_speed * cos_view_angle_to_bulk
-        )
-        / (2 * speed_std**2)
-    )
 
 
 @numba.njit(nogil=True, inline="always")
