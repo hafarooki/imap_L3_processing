@@ -297,23 +297,21 @@ This deadtime correction is often non-negligible. It reaches 5% at $C \approx 2.
 
 #### Wrong-basin detection (iterative spin-axis flip)
 
-The fitting landscape often has a local minimum in bulk velocity related by a 180° rotation of the bulk velocity about the spin axis.
+The fitting landscape often has a local minimum in bulk velocity related by a 180° rotation of the bulk velocity about the spin axis $\hat{\mathbf{s}}^\text{RTN}$.
 The two minima are not degenerate, because the sunglasses (SG) passband has a slightly asymmetric elevation range ($[-10.5^\circ, +7^\circ]$) and an elevation-dependent speed response, resulting in a shifting of the bulk speed from one sweep to the next.
 The flipped solution is only a local minimum and usually has $\chi^2$ about $100$ to $500\times$ larger than the global minimum.
 
-The chunk's average spin axis $\hat{\mathbf{s}}^\text{RTN}$ is the same one defined in [Velocity direction](#velocity-direction).
 The first fit returns bulk velocity $\mathbf{v}_b^{(0)}$, density $n^{(0)}$, temperature $T^{(0)}$, and $\text{MSE}^{(0)}$.
 At iteration $k$ (up to 6 times):
 
 1. **Build a flipped seed.** Compute the 180°-rotated bulk velocity
    $$\mathbf{v}_b^\text{flip} = 2\,\hat{\mathbf{s}}\,(\hat{\mathbf{s}}\cdot\mathbf{v}_b^{(k)}) - \mathbf{v}_b^{(k)},$$
    and rescale the density at $(\mathbf{v}_b^\text{flip}, T^{(k)})$, giving $n^\text{flip}$ and $\text{MSE}_\text{flip}$. The rescale is needed because flipping the velocity makes $n^{(k)}$ no longer near-optimal.
-2. **Gate.** If $\text{MSE}_\text{flip} \geq 100\,\text{MSE}^{(k)}$ (RMSE ratio $\geq 10$), terminate the loop.
-3. **Restart.** Otherwise, run a full least-squares fit seeded from $(\mathbf{v}_b^\text{flip}, n^\text{flip}, T^{(k)})$. If its MSE is no worse than $\text{MSE}^{(k)}$, it becomes iteration $k+1$ and the loop continues; otherwise terminate.
+2. **Check threshold.** If $\text{MSE}_\text{flip} \geq 100\,\text{MSE}^{(k)}$ (RMSE ratio $\geq 10$), terminate the loop.
+3. **Repeat.** Otherwise, run a full least-squares fit seeded from $(\mathbf{v}_b^\text{flip}, n^\text{flip}, T^{(k)})$. If its MSE is no worse than $\text{MSE}^{(k)}$, it becomes iteration $k+1$ and the loop continues; otherwise terminate.
 
-In practice convergence happens in 1–2 iterations: once iteration $k$ sits in the truth basin, the next flip lands back in the wrong basin and is rejected by the gate.
-
-The `bad_fit_flag` is taken from the `success` flag of whichever fit the loop ends on — the initial least-squares solve, or the most recent accepted basin-flip restart. A failed solve sets the quality flag `BAD_FIT`.
+The `bad_fit_flag` is taken from the `success` flag of the final accepted fit.
+A failed fit sets the quality flag `BAD_FIT`.
 
 ![Chi-squared landscape in the (v_T, v_N) plane showing the truth and spin-axis-rotated minima](figures/wrong_basin.png)
 
@@ -341,51 +339,48 @@ To validate that the algorithm recovers solar-wind moments under realistic condi
 The optimizer returns the Jacobian $J$ of the residuals with respect to $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ at the final accepted solution. The parameter covariance is computed from the Jacobian (Vugrin et al., 2007):
 $$\Sigma_x = s^2\,(J^\top J)^+, \qquad s^2 = \frac{\sum_i r_i^2}{N - p},$$
 where ${}^+$ is the Moore–Penrose pseudoinverse, $N$ is the number of measurements, and $p$ is the number of parameters (five).
-The $s^2$ scaling absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, intra-window variability) — equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`.
+The $s^2$ scaling absorbs both measurement noise and model imperfection (non-Maxwellian features, alpha contamination, intra-window variability), equivalent to `scipy.optimize.curve_fit` with `absolute_sigma=False`.
 
-#### Direct Fit Outputs
+> **Important**: These uncertainties represent statistical error and do not take systematic error into account.
+> For example, the solar wind proton distribution may have high temperature anisotropy, which the model would miss.
+> Moreover, the density relies on the central effective area calibration, which has an uncertainty of up to 20%.
+> This introduces systematic error that applies equally to all density measurements, unlike statistical error.
 
-The CDF variables `proton_sw_density` ($n$), `proton_sw_temperature` ($T$), and the three components of `proton_sw_bulk_velocity_rtn_sc` ($v_R, v_T, v_N$) are taken directly from the five fitted parameters $[\log n,\, \log T,\, v_R,\, v_T,\, v_N]$.
+#### CDF Outputs
 
-The standard error for $n$ (`proton_sw_density`) and $T$ (`proton_sw_temperature`) is given by
-$$\sigma_n = n\,\sqrt{\Sigma_{x,00}}, \qquad \sigma_T = T\,\sqrt{\Sigma_{x,11}}.$$
+Let $\mathbf{x} = [\log n,\, \log T,\, v_R,\, v_T,\, v_N]$ be the fitted parameter vector with covariance $\Sigma_x$, $\mathbf{v}_b^\text{SC} = (x_2, x_3, x_4)$ the bulk velocity in the SC frame (RTN basis), $\mathbf{u} = R_{\text{RTN}\to\text{DPS}}\,\mathbf{v}_b^\text{SC}$ its rotation into the IMAP DPS (despun spacecraft) frame, and $\mathbf{v}_\text{sc}^\text{sun}$ the IMAP inertial velocity at the chunk-center epoch in the RTN basis<sup>[1](#fn-vsc)</sup>. All proton-sw L3A CDF variables follow:
 
-The bulk velocity in RTN coordinates (`proton_sw_bulk_velocity_rtn_sc`) is represented internally as a 3-tuple of correlated `uncertainties.UFloat` components carrying covariance matrix $\Sigma_v = \Sigma_x[2{:}5,\,2{:}5]$.
-The square root of the diagonal yields the standard error of its components.
+| CDF variable                                  | Symbol                  | Definition                                                                                            |
+|-----------------------------------------------|-------------------------|-------------------------------------------------------------------------------------------------------|
+| `epoch`                                       | $t_\text{center}$       | center time of the 5-sweep chunk (TT2000 ns)                                                          |
+| `epoch_delta`                                 |                         | $30\,\text{s}$ (half-width of the 5-sweep chunk, in ns)                                               |
+| `proton_sw_density`                           | $n$                     | $\exp(x_0)$                                                                                           |
+| `proton_sw_density_uncert`                    | $\sigma_n$              | $n\,\sqrt{\Sigma_{x,00}}$                                                                             |
+| `proton_sw_temperature`                       | $T$                     | $\exp(x_1)$                                                                                           |
+| `proton_sw_temperature_uncert`                | $\sigma_T$              | $T\,\sqrt{\Sigma_{x,11}}$                                                                             |
+| `proton_sw_bulk_velocity_rtn_sc`              | $\mathbf{v}_b^\text{SC}$ | $(x_2,\, x_3,\, x_4)$                                                                                |
+| `proton_sw_bulk_velocity_rtn_sc_covariance`   | $\Sigma_\mathbf{v}$              | $\Sigma_x[2{:}5,\,2{:}5]$ <sup>[2](#fn-velcov)</sup>                                                  |
+| `proton_sw_speed`                             | $\lvert\mathbf{u}\rvert$ | $\lvert\mathbf{v}_b^\text{SC}\rvert$                                                                  |
+| `proton_sw_speed_uncert`                      | $\sigma_{\lvert\mathbf{u}\rvert}$ | propagated through `uncertainties` from $\mathbf{v}_b^\text{SC}$                            |
+| `proton_sw_clock_angle`                       | $\phi_c$                | $\operatorname{arctan2}(-u_1,\, -u_0) \bmod 360°$                                                     |
+| `proton_sw_clock_angle_uncert`                | $\sigma_{\phi_c}$       | Monte Carlo<sup>[3](#fn-mc)</sup>                                                                     |
+| `proton_sw_deflection_angle`                  | $\phi_d$                | $\arccos(-u_2/\lvert\mathbf{u}\rvert)$                                                                |
+| `proton_sw_deflection_angle_uncert`           | $\sigma_{\phi_d}$       | Monte Carlo<sup>[3](#fn-mc)</sup>                                                                     |
+| `proton_sw_bulk_velocity_rtn_sun`             | $\mathbf{v}_b^\text{sun}$ | $\mathbf{v}_b^\text{SC} + \mathbf{v}_\text{sc}^\text{sun}$                                          |
+| `proton_sw_bulk_velocity_rtn_sun_covariance`  | $\Sigma_\mathbf{v}^\text{sun}$   | $\Sigma_\mathbf{v}$ <sup>[4](#fn-sunframe)</sup>                                                               |
+| `proton_sw_speed_sun`                         | $v_\text{sun}$          | $\lvert\mathbf{v}_b^\text{sun}\rvert$                                                                 |
+| `proton_sw_speed_sun_uncert`                  | $\sigma_{v_\text{sun}}$ | propagated through `uncertainties` from $\mathbf{v}_b^\text{SC}$ + exact offset<sup>[4](#fn-sunframe)</sup> |
+| `swp_flags`                                   |                         | per-chunk quality bitmask (`SwapiL3Flags`)                                                            |
 
-#### Despun-frame speed and angles
+When the fit fails (non-finite $\Sigma_x$), every `_uncert` and `_covariance` variable is reported as fill, and the despun-frame angles `proton_sw_clock_angle` and `proton_sw_deflection_angle` (and their `_uncert` counterparts) are also fill.
 
-`derive_velocity_angles` rotates the correlated `UFloat` triple $\mathbf{v}_b^\text{SC}$ into the IMAP DPS (despun spacecraft) frame via $\mathbf{u} = R_{\text{RTN}\to\text{DPS}}\,\mathbf{v}_b^\text{SC}$.
+<a id="fn-vsc"></a>[1]: $\mathbf{v}_\text{sc}^\text{sun}$ is the inertial (Sun-frame) IMAP velocity from SPICE's `imap_state(et, ECLIPJ2000)`, with its components rotated into the RTN axes at the chunk-center epoch.
 
-The scalar CDF variable `proton_sw_speed` is $|\mathbf{u}|$ — equal to $|\mathbf{v}_b^\text{SC}|$, since rotation preserves magnitude.
-The speed is calculated with `umath.sqrt(sum(x**2 for x in u_unc))` so that error propagation is handled automatically.
+<a id="fn-velcov"></a>[2]: The bulk velocity is represented internally as a 3-tuple of correlated `uncertainties.UFloat` components carrying $\Sigma_\mathbf{v}$. The square root of the diagonal of $\Sigma_\mathbf{v}$  yields the standard error of the $v_R, v_T, v_N$ components.
 
-The CDF variable `proton_sw_clock_angle` is the in-plane azimuth in the DPS frame,
-$$\phi_c = \operatorname{arctan2}(-u_1, -u_0) \bmod 360°,$$
-and `proton_sw_deflection_angle` is the polar angle from the anti-spin-axis direction,
-$$\phi_d = \arccos(-u_2/|\mathbf{u}|).$$
+<a id="fn-mc"></a>[3]: Linearized error propagation (the $\sigma_y \approx \lvert\nabla y\rvert\,\sigma_x$ used by the `uncertainties` package) breaks down because the arctan2/arccos gradients diverge as $\mathbf{u}$ approaches the spin axis, which is exactly the regime SWAPI operates in. Instead we draw $N = 1000$ samples $\mathbf{u}_i \sim \mathcal{N}(\mathbf{u},\, \Sigma_\text{DPS})$ (RNG seeded for determinism) and recompute $(\phi_c, \phi_d)$ per sample. For $\phi_d$ we take the plain sample std; for $\phi_c$ we use the circular std (`scipy.stats.circstd`), since clock lives on a circle where $1°$ and $359°$ would otherwise look $358°$ apart.
 
-The associated uncertainties `proton_sw_clock_angle_uncert` and `proton_sw_deflection_angle_uncert` are propagated by Monte Carlo rather than the delta method. The arctan2 and arccos gradients scale as $1/u_{xy}^2$ and $1/(|\mathbf{u}|^2\,u_{xy})$, where $u_{xy} = \sqrt{u_0^2 + u_1^2}$, and diverge as $u_{xy} \to 0$. SWAPI's bulk velocity is dominated by the spin-axis component, so $u_{xy} \sim \sigma_{xy}$ and the delta-method linearization is poor in the typical regime — for cold spin-aligned plasma it underestimates the true σ by tens of percent and can return clock σ exceeding the uniform-distribution bound of $\approx 104°$.
-
-We instead draw $N = 1000$ samples
-$$\mathbf{u}_i \sim \mathcal{N}(\mathbf{u},\, \Sigma_\text{DPS}),$$
-recompute $(\phi_c^{(i)}, \phi_d^{(i)})$ per sample, and take the sample standard deviation. `proton_sw_clock_angle_uncert` uses residuals wrapped to $(-180°,\, 180°]$ relative to the nominal $\phi_c$ so the $0°/360°$ branch cut doesn't inflate the spread. `proton_sw_deflection_angle_uncert` is the plain sample std, with the arccos argument clipped to $[-1,\,1]$ to absorb numerical overshoots from samples just outside the unit-direction shell. The RNG is seeded per call so outputs are deterministic.
-
-When $\Sigma_\text{DPS}$ is non-finite (failed fit), `proton_sw_speed`, `proton_sw_clock_angle`, and `proton_sw_deflection_angle` (and their `_uncert` counterparts) are reported as fill values.
-
-#### Sun-frame bulk velocity and speed
-
-To recover the plasma velocity in the Sun's inertial rest frame, the spacecraft velocity is added to the fitted spacecraft-frame bulk velocity:
-$$\mathbf{v}_b^\text{sun} = \mathbf{v}_b^\text{SC} + \mathbf{v}_\text{sc}^\text{RTN},$$
-where $\mathbf{v}_\text{sc}^\text{RTN}$ (km/s) is the inertial Sun-frame spacecraft velocity at the chunk center epoch, expressed in the RTN basis: SPICE returns the 6-D state `imap_state(et, ECLIPJ2000)`, and the velocity components are rotated from ECLIPJ2000 into RTN at that instant. No rotation-rate / frame-velocity term is added — RTN is used purely as a basis for the inertial velocity, which is what the additive formula above requires.
-This 3-vector is stored as `proton_sw_bulk_velocity_rtn_sun` (shape $N \times 3$, units km/s) in the proton L3A CDF. Its covariance is stored as `proton_sw_bulk_velocity_rtn_sun_covariance`. Since $\mathbf{v}_\text{sc}^\text{RTN}$ is SPICE-derived and treated as exact, the Sun-frame vector covariance is the fitted spacecraft-frame velocity covariance:
-$$\Sigma_v^\text{sun} = \Sigma_v^\text{SC}.$$
-
-The scalar CDF variable `proton_sw_speed_sun` is the magnitude of the Sun-frame vector:
-$$v_\text{sun} = \left|\mathbf{v}_b^\text{SC} + \mathbf{v}_\text{sc}^\text{RTN}\right|.$$
-Its uncertainty, `proton_sw_speed_sun_uncert`, is propagated with the `uncertainties` package from the correlated fitted velocity components in `result.bulk_velocity_rtn`, after adding the exact spacecraft-velocity offset:
-$$\sigma_{v_\text{sun}} = \mathrm{std}\!\left(\sqrt{\sum_j \left(v_{b,j}^\text{SC} + v_{\text{sc},j}^\text{RTN}\right)^2}\right).$$
-This is equivalent to the first-order Gaussian form $\sqrt{\mathbf{g}_\text{sun}^\top \Sigma_v \mathbf{g}_\text{sun}}$ with $\mathbf{g}_\text{sun} = \mathbf{v}_b^\text{sun}/|\mathbf{v}_b^\text{sun}|$.
+<a id="fn-sunframe"></a>[4]: Since $\mathbf{v}_\text{sc}^\text{sun}$ is SPICE-derived and treated as exact, the Sun-frame vector covariance equals the SC-frame velocity covariance. The Sun-frame speed uncertainty $\sigma_{v_\text{sun}} = \mathrm{std}\!\left(\sqrt{\sum_j (v_{b,j}^\text{SC} + v_{\text{sc},j}^\text{sun})^2}\right)$ is computed by the `uncertainties` package from the correlated fitted components plus the exact spacecraft-velocity offset — equivalent to the first-order Gaussian form $\sqrt{\mathbf{g}_\text{sun}^\top \Sigma_\mathbf{v} \mathbf{g}_\text{sun}}$ with $\mathbf{g}_\text{sun} = \mathbf{v}_b^\text{sun}/\lvert\mathbf{v}_b^\text{sun}\rvert$.
 
 ## Alpha Particle Moments
 
