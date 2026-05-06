@@ -15,12 +15,14 @@ from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
     SolarWindFitContext,
+    average_spin_axis_rtn,
 )
 from imap_l3_processing.swapi.l3a.science.speed_calculation import (
     esa_voltage_to_proton_speed,
 )
 
 
+# 1 eV
 INITIAL_TEMPERATURE_FLOOR_K = (
     PROTON_CHARGE_COULOMBS / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN
 )
@@ -38,15 +40,19 @@ def calculate_initial_guess(ctx: SolarWindFitContext) -> SolarWindParams:
     )
 
     bulk_speed_init, temperature = _gaussian_refine_bulk_speed_and_temperature(
-        speed, ctx.count_rate, bulk_speed_seed, temperature_seed, ctx.mass_kg,
+        speed,
+        ctx.count_rate,
+        bulk_speed_seed,
+        temperature_seed,
+        ctx.mass_kg,
     )
 
-    spin_axis_rtn = ctx.rotation_matrices[:, 1, :].mean(axis=0)
-    spin_axis_rtn = spin_axis_rtn / np.linalg.norm(spin_axis_rtn)
+    spin_axis_rtn = average_spin_axis_rtn(ctx.rotation_matrices)
     bulk_velocity_rtn = -bulk_speed_init * spin_axis_rtn
 
     unit_density_rate = model_solar_wind_ideal_coincidence_rates(
-        SolarWindParams(1.0, bulk_velocity_rtn, temperature, ctx.mass_kg), ctx,
+        SolarWindParams(1.0, bulk_velocity_rtn, temperature, ctx.mass_kg),
+        ctx,
     )
     density = optimal_density_scale(unit_density_rate, ctx.count_rate)
 
@@ -91,7 +97,9 @@ def _gaussian_refine_bulk_speed_and_temperature(
 
     try:
         params, _ = scipy.optimize.curve_fit(
-            gaussian, speed[valid], count_rate[valid],
+            gaussian,
+            speed[valid],
+            count_rate[valid],
             p0=[amplitude_seed, bulk_speed_seed, sigma_v_seed],
             maxfev=200,
         )
@@ -103,7 +111,8 @@ def _gaussian_refine_bulk_speed_and_temperature(
     if not (np.isfinite(mean_fit) and sigma_fit > 0.0):
         return bulk_speed_seed, temperature_seed
     temperature_fit = max(
-        mass_kg * (sigma_fit * METERS_PER_KILOMETER) ** 2
+        mass_kg
+        * (sigma_fit * METERS_PER_KILOMETER) ** 2
         / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN,
         INITIAL_TEMPERATURE_FLOOR_K,
     )

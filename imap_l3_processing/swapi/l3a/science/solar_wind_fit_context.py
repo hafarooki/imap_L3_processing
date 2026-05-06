@@ -18,9 +18,7 @@ class SolarWindFitContext(NamedTuple):
         return self._replace(
             count_rate=self.count_rate[indices],
             esa_voltage=self.esa_voltage[indices],
-            response_grids=numba.typed.List(
-                [self.response_grids[i] for i in indices]
-            ),
+            response_grids=numba.typed.List([self.response_grids[i] for i in indices]),
             rotation_matrices=self.rotation_matrices[indices],
         )
 
@@ -56,3 +54,13 @@ def build_solar_wind_fit_context(
         rotation_matrices=rotation_matrices,
         mass_kg=float(mass_kg),
     )
+
+
+def average_spin_axis_rtn(rotation_matrices: ndarray) -> ndarray:
+    """Unit-normalized mean of the per-sweep body +Y axes in RTN.
+
+    The second row of each RTN→SWAPI rotation matrix is SWAPI's boresight
+    in RTN, which is parallel to the spacecraft spin axis.
+    """
+    axis = rotation_matrices[:, 1, :].mean(axis=0)
+    return axis / np.linalg.norm(axis)

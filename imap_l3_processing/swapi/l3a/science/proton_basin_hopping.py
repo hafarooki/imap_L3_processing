@@ -1,7 +1,10 @@
 import numpy as np
 from numpy import ndarray
 
-from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import SolarWindFitContext
+from imap_l3_processing.swapi.l3a.science.solar_wind_fit_context import (
+    SolarWindFitContext,
+    average_spin_axis_rtn,
+)
 from imap_l3_processing.swapi.l3a.science.solar_wind_forward_model import (
     apply_deadtime_correction_array,
     model_solar_wind_ideal_coincidence_rates,
@@ -24,19 +27,24 @@ def escape_local_minimum(
     first_result: OptimizeSolarWindParamsResult,
     ctx: SolarWindFitContext,
 ) -> OptimizeSolarWindParamsResult:
-    spin_axis_rtn = _average_spin_axis_in_rtn(ctx.rotation_matrices)
+    spin_axis_rtn = average_spin_axis_rtn(ctx.rotation_matrices)
 
     current_result = first_result
     for _ in range(_MAX_BASIN_REFINE_ITERS):
         flipped_velocity, flipped_density, flipped_mse = _flipped_seed(
-            current_result, ctx, spin_axis_rtn,
+            current_result,
+            ctx,
+            spin_axis_rtn,
         )
 
-        if flipped_mse >= current_result.mse * _ROTATED_RMSE_RATIO_THRESHOLD ** 2:
+        if flipped_mse >= current_result.mse * _ROTATED_RMSE_RATIO_THRESHOLD**2:
             break
 
         restart_result = _restart_from_rotated_seed(
-            current_result, flipped_velocity, flipped_density, ctx,
+            current_result,
+            flipped_velocity,
+            flipped_density,
+            ctx,
         )
 
         if restart_result.mse > current_result.mse:
@@ -45,11 +53,6 @@ def escape_local_minimum(
         current_result = restart_result
 
     return current_result
-
-
-def _average_spin_axis_in_rtn(rotation_matrices: ndarray) -> ndarray:
-    axis = rotation_matrices[:, 1, :].mean(axis=0)
-    return axis / np.linalg.norm(axis)
 
 
 def _flipped_seed(
