@@ -2,7 +2,9 @@
 
 ## Introduction
 
-After [fitting the proton distribution](./proton-sw.md) to the ten five-sweep chunks in a ten-minute chunk, the pickup ion (PUI) parameters are evaluated from the 50 sweeps by fitting a forward model. Since the count rates are quite low, Poisson maximum likelihood estimation is used to avoid a biased fit.
+After [fitting the proton distribution](./proton-sw.md) to the ten five-sweep chunks in a ten-minute chunk, the pickup ion (PUI) parameters are evaluated from the 50 sweeps by fitting a forward model.
+The mean square difference between the model and observed rates, after averaging both over the 50 sweeps, is minimized.
+Because statistics from individual sweeps are poor but the effects of the spacecraft spin do not cancel out on average, the model is evaluated based on the actual measurement times, then averaged over sweeps.
 See the below figure for an example of the data used for the fit together with the fitted PUI forward model.
 
 ![real example](figures/pui_flight_xarray_comparison.svg)
@@ -190,42 +192,44 @@ Below, the optimized 1D integral is validated by comparing it to a reference 3D 
 
 ## Optimization Strategy
 
-The PUI parameters to be determined are $\mathbf{x} = (\alpha_\text{PUI}, \beta_E, v_b, C_\text{bg})$.
-To enable the application of physical constraints on the parameters, the constrained optimization problem in $\mathbf{x}$ is posed as an unconstrained problem in $\tilde{x}$, given by
-```math
-\tilde{\mathbf{x}} = \arcsin\!\left( \dfrac{2 (\mathbf{x} - \mathbf{x}_\text{min})}{\mathbf{x}_\text{max} - \mathbf{x}_\text{min}} - 1 \right),
-```
-with bounds defined in the table below.
-| Parameter | $`x_\text{min}`$ | $`x_\text{max}`$ | Initial |
-|---|---|---|---|
-| $\alpha_\text{PUI}$ | 1.0 | 5.0 | 1.5 |
-| $\beta_E$ | $0.6 \times 10^{-9}$ s⁻¹ | $8 \times 10^{-7}$ s⁻¹ | $10^{-7}$ s⁻¹ |
-| $v_b$ | $0.8 \, v_\text{sw}$ | $1.2 \, v_\text{sw}$ | $v_\text{sw}$ |
-| $C_\text{bg}$ | 0 | 10 Hz | 0.1 Hz |
+The PUI parameters to be determined are $\mathbf{x} = (\alpha_\text{PUI}, \beta_E, v_b, C_\text{bg})$, with initial values given by the table below.
 
-The Nelder-Mead method is used for optimization, with a heuristic five-vertex simplex specified explicitly  .
+| Parameter | Initial |
+|---|---|
+| $\alpha_\text{PUI}$ | 1.5 |
+| $\beta_E$ | $10^{-7}$ s⁻¹ |
+| $v_b$ | $v_\text{sw}$ |
+| $C_\text{bg}$ | 0.1 Hz |
 
-The optimal parameters are estimated by maximizing the Poisson likelihood—yielding optimal parameters $`\hat{\mathbf{x}}`$—through minimization of
-```math
-\hat{\mathbf{x}} = \arg\min_{\mathbf{x}} \sum_{i,j} C^\text{(model)}_{ij}(\mathbf{x}) - C_{ij} \ln{C^\text{(model)}_{ij}(\mathbf{x})}.
-```
-
-The covariance matrix of $`\hat{\tilde{\mathbf{x}}}`$ is estimated using the inverse of the Hessian of the negative log likelihood function,
-```math
-\Sigma_{\tilde{\mathbf{x}}} = \bigl[ \nabla^2 \mathcal{L}(\hat{\tilde{\mathbf{x}}}) \bigr]^{-1},
-```
-and then the covariance matrix for the PUI parameters $`\mathbf{x}`$ is given by
+The model $C^\text{(model)}_{ij}(\mathbf{x})$ is evaluated for each measurement time (sweep $i$, step $j$) within the ten-minute chunk.
+The optimal parameters are found by minimizing:
 
 ```math
-\Sigma_{\mathbf{x}} = \text{J} \, \Sigma_{\tilde{\mathbf{x}}} \, \text{J}^\top,
+\hat{\mathbf{x}} = \arg\min_{\mathbf{x}}
+\left(
+  \sum_i C^\text{(model)}_{ij}(\mathbf{x}) - \sum_i C^\text{(observed)}_{ij}(\mathbf{x})
+\right)^2,
 ```
-where $J = \partial \mathbf{x}/\partial \tilde{\mathbf{x}}$.
+
+> **Note**: Inverse variance weighting is intentionally unused to avoid giving extra weight to other populations beyond the cutoff.
+> The drawback of this approach is that it does not account for Poisson noise.
+> To mitigate this problem, minimization takes place after averaging across sweeps to minmize the influence of Poisson noise on the fit
+.
+
+**TODO** update from here
+
+To estimate the uncertainty, the [HC3 method is used](./proton-sw.md#erroruncertainty-quantification) with an automatic finite-difference approximation to the Jacobian.
+
+> **TODO** extract a common documentation file for the HC3 method
 
 ## Failure Cases
 
 When $C_\text{bg}$ is higher than 1 Hz, a fill value is reported for $C_\text{bg}$ because of the probable influence of suprathermal populations, but the other parameters are kept.
 
-If the uncertainty estimation fails (suggesting that the solution is not a minimum), or the coefficient of determination $R^2$ is less than 0.9 for the sweep-averaged coincidence rates in the fitting window, then the `BAD_FIT` flag is set and fill values are reported. 
+> **TODO** info on new `BAD_FIT` flag
+
+> Old: If the covariance matrix cannot be evaluated or is not finite (suggesting that the solution is not a minimum), or the coefficient of determination $R^2$ is less than 0.9, then the `BAD_FIT` flag is set and fill values are reported.
+$R^2$ is computed from the same sweep-averaged residuals in the fitting window that the fit minimizes.
 
 ## Numerical Test
 
