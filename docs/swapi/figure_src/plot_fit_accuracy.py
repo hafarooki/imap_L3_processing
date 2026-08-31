@@ -198,7 +198,7 @@ def _process_one(i):
             density=nan_uf,
             temperature=nan_uf,
             velocity_rtn=(nan_uf, nan_uf, nan_uf),
-            bad_fit_flag=1,
+            quality_flag=1,
         )
 
     return {
@@ -222,7 +222,7 @@ def _process_one(i):
         "fit_radial_speed_sigma": _sigma(result.velocity_rtn[0]),
         "fit_tangential_speed_sigma": _sigma(result.velocity_rtn[1]),
         "fit_normal_speed_sigma": _sigma(result.velocity_rtn[2]),
-        "bad_flag": bool(result.bad_fit_flag),
+        "bad_flag": bool(result.quality_flag),
     }
 
 

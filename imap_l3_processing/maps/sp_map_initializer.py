@@ -37,8 +37,7 @@ class SPMapInitializer(MapInitializer):
         glows_file_by_repointing = self._collect_glows_psets_by_repoint(l3_descriptor_parts)
 
         if len(glows_file_by_repointing) == 0:
-            logger.info(f"No GLOWS data available for descriptor {descriptor}. "
-                        f"Processing will use default survival probability of 1.0.")
+            logger.info(f"No GLOWS data available for descriptor {descriptor}, no maps will be produced!")
 
         l2_descriptors = self._get_l2_dependencies(l3_descriptor_parts)
         l2_descriptor_strs = [map_descriptor_parts_to_string(parts) for parts in l2_descriptors]
@@ -79,6 +78,10 @@ class SPMapInitializer(MapInitializer):
 
             glows_files = [glows_file_by_repointing[repoint] for repoint in l1c_repointings if
                            repoint in glows_file_by_repointing]
+
+            if len(glows_files) == 0:
+                logger.info(f"No GLOWS data available for l3 map: {descriptor} with start date: {str_start_date}. Skipping")
+                continue
 
             input_metadata = InputMetadata(instrument=self.instrument, data_level='l3', start_date=start_date,
                                            end_date=start_date + map_duration, version=VersionMap({}, Version(None, 1)),

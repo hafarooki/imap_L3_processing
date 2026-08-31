@@ -29,11 +29,28 @@ def calculate_spectral_index_for_multiple_ranges(intensity_data: IntensityMapDat
         obs_date=np.concat([m.obs_date for m in spectral_maps], axis=1),
         obs_date_range=np.concat([m.obs_date_range for m in spectral_maps], axis=1),
         solid_angle=intensity_data.solid_angle,
-        ena_spectral_index=np.concat([m.ena_spectral_index for m in spectral_maps], axis=1),
-        ena_spectral_index_stat_uncert=np.concat([m.ena_spectral_index_stat_uncert for m in spectral_maps], axis=1),
-        ena_spectral_index_scalar_coefficient=np.concat([m.ena_spectral_index_scalar_coefficient for m in spectral_maps], axis=1),
-        ena_spectral_index_scalar_coefficient_stat_uncert=np.concat([m.ena_spectral_index_scalar_coefficient_stat_uncert for m in spectral_maps], axis=1),
-        ena_spectral_index_chisq=np.concat([m.ena_spectral_index_chisq for m in spectral_maps], axis=1),
+        ena_spectral_index=np.concat(
+            [m.ena_spectral_index for m in spectral_maps], axis=1
+        ),
+        ena_spectral_index_stat_uncert=np.concat(
+            [m.ena_spectral_index_stat_uncert for m in spectral_maps], axis=1
+        ),
+        ena_spectral_index_scalar_coefficient=np.concat(
+            [m.ena_spectral_index_scalar_coefficient for m in spectral_maps], axis=1
+        ),
+        ena_spectral_index_scalar_coefficient_stat_uncert=np.concat(
+            [
+                m.ena_spectral_index_scalar_coefficient_stat_uncert
+                for m in spectral_maps
+            ],
+            axis=1,
+        ),
+        ena_spectral_index_chisq=np.concat(
+            [m.ena_spectral_index_chisq for m in spectral_maps], axis=1
+        ),
+        quality_flags=np.concat(
+            [m.quality_flags for m in spectral_maps], axis=1
+        ),
     )
 
 
@@ -49,7 +66,8 @@ def slice_energy_range(data: IntensityMapData, start: float, end: float) -> Inte
                                obs_date_range=data.obs_date_range[:, energy_mask],
                                ena_intensity=data.ena_intensity[:, energy_mask],
                                ena_intensity_sys_err=data.ena_intensity_sys_err[:, energy_mask],
-                               ena_intensity_stat_uncert=data.ena_intensity_stat_uncert[:, energy_mask]
+                               ena_intensity_stat_uncert=data.ena_intensity_stat_uncert[:, energy_mask],
+                               quality_flags=data.quality_flags[:, energy_mask],
                                )
 
 def slice_energy_range_by_bin(data: IntensityMapData, start_bin_id: int, end_bin_id: int) -> IntensityMapData:
@@ -59,19 +77,21 @@ def slice_energy_range_by_bin(data: IntensityMapData, start_bin_id: int, end_bin
     if not bin_ids_valid:
         raise ValueError(f"Error slicing energy bins {start_bin_id},{end_bin_id}")
 
-    energy_slice = slice(start_bin_id-1,end_bin_id)
-    return dataclasses.replace(data,
-                               energy=data.energy[energy_slice],
-                               energy_delta_plus=data.energy_delta_plus[energy_slice],
-                               energy_delta_minus=data.energy_delta_minus[energy_slice],
-                               energy_label=data.energy_label[energy_slice],
-                               exposure_factor=data.exposure_factor[:, energy_slice],
-                               obs_date=data.obs_date[:, energy_slice],
-                               obs_date_range=data.obs_date_range[:, energy_slice],
-                               ena_intensity=data.ena_intensity[:, energy_slice],
-                               ena_intensity_sys_err=data.ena_intensity_sys_err[:, energy_slice],
-                               ena_intensity_stat_uncert=data.ena_intensity_stat_uncert[:, energy_slice]
-                               )
+    energy_slice = slice(start_bin_id - 1, end_bin_id)
+    return dataclasses.replace(
+        data,
+        energy=data.energy[energy_slice],
+        energy_delta_plus=data.energy_delta_plus[energy_slice],
+        energy_delta_minus=data.energy_delta_minus[energy_slice],
+        energy_label=data.energy_label[energy_slice],
+        exposure_factor=data.exposure_factor[:, energy_slice],
+        obs_date=data.obs_date[:, energy_slice],
+        obs_date_range=data.obs_date_range[:, energy_slice],
+        ena_intensity=data.ena_intensity[:, energy_slice],
+        ena_intensity_sys_err=data.ena_intensity_sys_err[:, energy_slice],
+        ena_intensity_stat_uncert=data.ena_intensity_stat_uncert[:, energy_slice],
+        quality_flags=data.quality_flags[:, energy_slice],
+    )
 
 def fit_spectral_index_map(intensity_data: IntensityMapData) -> SpectralIndexMapData:
     fluxes = intensity_data.ena_intensity
@@ -96,6 +116,7 @@ def fit_spectral_index_map(intensity_data: IntensityMapData) -> SpectralIndexMap
     output_scalar_coefficients[positive_gammas] = np.nan
     output_gamma_errors[positive_gammas] = np.nan
     chisq[positive_gammas] = np.nan
+    quality_flags = np.bitwise_or.reduce(intensity_data.quality_flags, axis=1, keepdims=True)
 
     return SpectralIndexMapData(
         epoch=intensity_data.epoch,
@@ -115,6 +136,7 @@ def fit_spectral_index_map(intensity_data: IntensityMapData) -> SpectralIndexMap
         ena_spectral_index_scalar_coefficient=output_scalar_coefficients,
         ena_spectral_index_scalar_coefficient_stat_uncert=output_scalar_errors,
         ena_spectral_index_chisq=chisq,
+        quality_flags=quality_flags
     )
 
 

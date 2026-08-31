@@ -2,7 +2,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 
 import numpy as np
 import spiceypy
@@ -11,6 +11,7 @@ from imap_l3_processing.constants import ELECTRON_MASS_KG, \
     BOLTZMANN_CONSTANT_JOULES_PER_KELVIN, METERS_PER_KILOMETER, \
     CENTIMETERS_PER_METER, PROTON_CHARGE_COULOMBS, GRAMS_PER_KILOGRAM
 from imap_l3_processing.pitch_angles import calculate_unit_vector
+from imap_l3_processing.predicted_ephemeris_tracker import PredictedEphemerisTracker
 
 ELECTRON_MASS_OVER_BOLTZMANN_IN_CGS_UNITS = ELECTRON_MASS_KG / BOLTZMANN_CONSTANT_JOULES_PER_KELVIN * 1e-4
 NUMBER_OF_DETECTORS = 7
@@ -374,36 +375,38 @@ def filter_and_flatten_regress_parameters(corrected_energy_bins: np.ndarray,
     return velocity_vectors[valid_mask], weights[valid_mask], yreg
 
 
-def rotate_dps_vector_to_rtn(epoch: datetime, vector: np.ndarray) -> np.ndarray:
-    et_time = spiceypy.datetime2et(epoch)
-    try:
-        rotation_matrix = spiceypy.pxform("IMAP_DPS", "IMAP_RTN", et_time)
-        return rotation_matrix @ vector
-    except spiceypy.SpiceyError as e:
-        logger.info(f"Failed to rotate the vector using the rotation matrix from pxform. Error:\n{e}")
-        return np.full(3, np.nan)
+def get_dps_to_rtn_rotation_matrix(epoch: datetime) -> np.ndarray:
+    return spiceypy.pxform("IMAP_DPS", "IMAP_RTN", spiceypy.datetime2et(epoch))
 
 
-def rotate_rtn_vectors_to_dps(epochs: np.ndarray, vectors_rtn: np.ndarray) -> np.ndarray:
+def apply_rotation_matrix(rotation_matrix: np.ndarray, vector: np.ndarray) -> np.ndarray:
+    return rotation_matrix @ vector
+
+
+def rotate_rtn_vectors_to_dps(epochs: np.ndarray, vectors_rtn: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     result = np.full_like(vectors_rtn, np.nan, dtype=float)
+    predicted_ephemeris_flags = np.zeros_like(epochs, dtype=bool)
     for i, epoch in enumerate(epochs):
+        tracker = PredictedEphemerisTracker()
         try:
             et_time = spiceypy.datetime2et(epoch)
-            rotation_matrix = spiceypy.pxform("IMAP_RTN", "IMAP_DPS", et_time)
+            rotation_matrix = tracker.run(spiceypy.pxform,"IMAP_RTN", "IMAP_DPS", et_time)
         except spiceypy.SpiceyError as e:
             logger.info(f"Failed to rotate RTN→DPS at epoch {epoch}: {e}")
             continue
         result[i] = rotation_matrix @ vectors_rtn[i]
-    return result
+
+        predicted_ephemeris_flags[i] = tracker.used_predict
+    return result, predicted_ephemeris_flags
 
 
-def rotate_temperature(epoch: datetime, alpha: float, beta: float) -> tuple[float, float]:
+def rotate_temperature(rotation_matrix: np.ndarray, alpha: float, beta: float) -> tuple[float, float]:
     sin_dec = np.sin(beta)
     x = sin_dec * np.cos(alpha)
     y = sin_dec * np.sin(alpha)
     z = np.cos(beta)
 
-    rtn_temperature = rotate_dps_vector_to_rtn(epoch, np.array([x, y, z]))
+    rtn_temperature = apply_rotation_matrix(rotation_matrix, np.array([x, y, z]))
 
     theta = np.asin(rtn_temperature[2])
     phi = np.atan2(rtn_temperature[1], rtn_temperature[0])
@@ -411,8 +414,9 @@ def rotate_temperature(epoch: datetime, alpha: float, beta: float) -> tuple[floa
     return theta, phi
 
 
-def rotate_vector_to_rtn_spherical_coordinates(epoch: datetime, heat_flux: np.ndarray) -> tuple[float, float, float]:
-    r, t, n = rotate_dps_vector_to_rtn(epoch, heat_flux)
+def rotate_vector_to_rtn_spherical_coordinates(rotation_matrix: np.ndarray, heat_flux: np.ndarray) -> tuple[
+    float, float, float]:
+    r, t, n = apply_rotation_matrix(rotation_matrix, heat_flux)
     magnitude = np.linalg.norm(heat_flux, axis=-1)
     rt = np.sqrt(r * r + t * t)
     theta = np.arctan2(n, rt)

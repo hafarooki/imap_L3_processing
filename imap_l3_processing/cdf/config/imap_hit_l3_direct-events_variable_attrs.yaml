@@ -423,3 +423,22 @@ detector_id:
   VALIDMIN: 0
   VALIDMAX: 64
   FILLVAL: 255
+hit_flags:
+  NAME: hit_flags
+  DATA_TYPE: CDF_UINT2
+  CATDESC: "Quality flags for HIT L3 direct events (caution required if nonzero)"
+  DEPEND_0: epoch
+  VAR_TYPE: data
+  DISPLAY_TYPE: time_series
+  SCALETYP: linear
+  RECORD_VARYING: RV
+  FIELDNAM: Quality Flags for HIT L3 direct events
+  FORMAT: I5
+  UNITS: '0: okay; nonzero: caution'
+  VALIDMIN: 0
+  VALIDMAX: 65534
+  FILLVAL: 65535
+  LABLAXIS: Quality flags for HIT L3 direct events
+  VAR_NOTES: >-
+    Each bit corresponds to a specific potential concern. See release notes for details.
+    Other bits are reserved.

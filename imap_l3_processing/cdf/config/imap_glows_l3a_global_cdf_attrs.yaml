@@ -2,3 +2,6 @@ imap_glows_l3a_hist:
   Data_level: "3a"
   Data_type: L3A_hist>Level-3A histogram
   Logical_source_description: IMAP Mission GLOWS Instrument Light Curve
+  MODS:
+    - >-
+      Major version 2: Pad `spin_angle` dimension to 90.

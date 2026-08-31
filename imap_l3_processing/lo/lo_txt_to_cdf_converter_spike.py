@@ -13,6 +13,7 @@ import numpy as np
 import pandas
 import xarray as xr
 from imap_data_access import ProcessingInputCollection, ScienceFilePath
+from imap_data_access.file_validation import Version
 from imap_data_access.processing_input import ScienceInput
 from imap_processing.cdf.utils import write_cdf as write_l2_cdf
 from imap_processing.ena_maps.ena_maps import RectangularSkyMap
@@ -23,7 +24,7 @@ from spacepy.pycdf import CDF
 from imap_l3_processing.constants import TT2000_EPOCH
 from imap_l3_processing.lo.l3.lo_sp_initializer import LO_SP_MAP_KERNELS
 from imap_l3_processing.lo.lo_processor import LoProcessor
-from imap_l3_processing.models import InputMetadata
+from imap_l3_processing.models import InputMetadata, VersionMap
 from imap_l3_processing.utils import furnished_metakernel
 from tests.test_helpers import get_run_local_data_path
 
@@ -263,7 +264,7 @@ class LoProcessingInput:
             data_level="l3",
             start_date=self.start_date,
             end_date=self.end_date,
-            version="v001",
+            version=VersionMap({}, Version(None, 2)),
             descriptor=l3_descriptor,
         )
 
@@ -482,7 +483,7 @@ if __name__ == "__main__":
                 data_level="l3",
                 start_date=combined_start_date,
                 end_date=combined_end_date,
-                version="v001",
+                version=VersionMap({}, Version(None, 2)),
                 descriptor=combined_descriptor
             )
         ).process()
@@ -502,7 +503,7 @@ if __name__ == "__main__":
                 data_level="l3",
                 start_date=combined_start_date,
                 end_date=combined_end_date,
-                version="v001",
+                version=VersionMap({}, Version(None, 2)),
                 descriptor=combined_spx_descriptor,
             ),
         ).process()

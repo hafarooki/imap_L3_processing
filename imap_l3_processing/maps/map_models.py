@@ -15,6 +15,7 @@ from spacepy.pycdf import CDF
 
 from imap_l3_processing.cdf.cdf_utils import read_variable_and_mask_fill_values, read_numeric_variable
 from imap_l3_processing.constants import TT2000_EPOCH
+from imap_l3_processing.maps.quality_flags import MapL3Flags
 from imap_l3_processing.models import DataProduct, DataProductVariable, D
 
 EPOCH_VAR_NAME = "epoch"
@@ -66,6 +67,8 @@ ISN_BG_RATE_SUBTRACTED_VAR_SYS_ERR_NAME = "isn_rate_bg_subtracted_sys_err"
 ENA_INTENSITY_SYS_ERR_MINUS_VAR_NAME = "ena_intensity_sys_err_minus"
 ENA_INTENSITY_SYS_ERR_PLUS_VAR_NAME = "ena_intensity_sys_err_plus"
 
+QUALITY_FLAGS_VAR_NAME = "quality_flags"
+
 
 @dataclass
 class MapData:
@@ -106,6 +109,7 @@ class IntensityMapData(MapData):
     ena_intensity: np.ndarray
     ena_intensity_stat_uncert: np.ndarray
     ena_intensity_sys_err: np.ndarray
+    quality_flags: np.ndarray
     ena_intensity_sys_err_minus: Optional[np.ndarray] = None
     ena_intensity_sys_err_plus: Optional[np.ndarray] = None
     bg_intensity: Optional[np.ndarray] = None
@@ -135,6 +139,7 @@ class SpectralIndexMapData(MapData):
     ena_spectral_index_scalar_coefficient: np.ndarray
     ena_spectral_index_scalar_coefficient_stat_uncert: np.ndarray
     ena_spectral_index_chisq: np.ndarray
+    quality_flags: np.ndarray
 
 
 @dataclass
@@ -251,24 +256,60 @@ class HealPixIntensityMapData:
     def to_healpix_skymap(self) -> HealpixSkyMap:
         healpix_map = HealpixSkyMap(self.coords.nside, SpiceFrame.ECLIPJ2000)
 
-        full_shape = [CoordNames.TIME.value, CoordNames.ENERGY_L2.value, CoordNames.HEALPIX_INDEX.value]
+        full_shape = [
+            CoordNames.TIME.value,
+            CoordNames.ENERGY_L2.value,
+            CoordNames.HEALPIX_INDEX.value,
+        ]
         healpix_map.data_1d = xarray.Dataset(
             data_vars={
-                "latitude": ([CoordNames.HEALPIX_INDEX.value], self.intensity_map_data.latitude),
-                "longitude": ([CoordNames.HEALPIX_INDEX.value], self.intensity_map_data.longitude),
-                "solid_angle": ([CoordNames.HEALPIX_INDEX.value], self.intensity_map_data.solid_angle),
+                "latitude": (
+                    [CoordNames.HEALPIX_INDEX.value],
+                    self.intensity_map_data.latitude,
+                ),
+                "longitude": (
+                    [CoordNames.HEALPIX_INDEX.value],
+                    self.intensity_map_data.longitude,
+                ),
+                "solid_angle": (
+                    [CoordNames.HEALPIX_INDEX.value],
+                    self.intensity_map_data.solid_angle,
+                ),
                 "obs_date_range": (full_shape, self.intensity_map_data.obs_date_range),
                 "obs_date": (full_shape, self.intensity_map_data.obs_date),
-                "exposure_factor": (full_shape, self.intensity_map_data.exposure_factor),
+                "exposure_factor": (
+                    full_shape,
+                    self.intensity_map_data.exposure_factor,
+                ),
                 "ena_intensity": (full_shape, self.intensity_map_data.ena_intensity),
-                "ena_intensity_stat_uncert": (full_shape, self.intensity_map_data.ena_intensity_stat_uncert),
-                "ena_intensity_sys_err": (full_shape, self.intensity_map_data.ena_intensity_sys_err),
+                "ena_intensity_stat_uncert": (
+                    full_shape,
+                    self.intensity_map_data.ena_intensity_stat_uncert,
+                ),
+                "ena_intensity_sys_err": (
+                    full_shape,
+                    self.intensity_map_data.ena_intensity_sys_err,
+                ),
+                "predicted_ephemeris_flag": (
+                    full_shape,
+                    self.intensity_map_data.quality_flags & MapL3Flags.PREDICTIVE_EPHEMERIS,
+                ),
+                "nominal_alpha_proton_ratio_flag": (
+                    full_shape,
+                    self.intensity_map_data.quality_flags & MapL3Flags.NOMINAL_ALPHA_PROTON_RATIO,
+                ),
+                "persisted_last_point_flag": (
+                    full_shape,
+                    self.intensity_map_data.quality_flags & MapL3Flags.PERSISTED_LAST_POINT,
+                )
+
             },
             coords={
                 CoordNames.TIME.value: self.intensity_map_data.epoch,
                 CoordNames.ENERGY_L2.value: self.intensity_map_data.energy,
                 CoordNames.HEALPIX_INDEX.value: self.coords.pixel_index,
-            })
+            },
+        )
 
         if self.intensity_map_data.survival_probability is not None:
             data_1d_with_sp = healpix_map.data_1d.assign(
@@ -320,7 +361,9 @@ def _read_intensity_map_data_from_open_cdf(cdf: CDF) -> IntensityMapData:
         obs_date_range = np.ma.masked_array(
             np.full(obs_date_shape, 0), mask=all_mask_array, dtype=np.int64
         )
-
+    quality_flag_data = np.full(cdf["ena_intensity"].shape, MapL3Flags.NONE)
+    if QUALITY_FLAGS_VAR_NAME in cdf:
+        quality_flag_data = cdf[QUALITY_FLAGS_VAR_NAME][...]
     map_intensity_data = IntensityMapData(
         epoch=cdf["epoch"][...],
         epoch_delta=read_variable_and_mask_fill_values(cdf["epoch_delta"]),
@@ -339,6 +382,7 @@ def _read_intensity_map_data_from_open_cdf(cdf: CDF) -> IntensityMapData:
             cdf["ena_intensity_stat_uncert"]
         ),
         ena_intensity_sys_err=read_numeric_variable(cdf["ena_intensity_sys_err"]),
+        quality_flags=quality_flag_data,
     )
 
     if "survival_probability" in cdf:
@@ -364,6 +408,7 @@ def _read_healpix_coords_from_open_cdf(cdf: CDF) -> HealPixCoords:
 
 
 def _read_intensity_map_data_from_xarray(dataset: xarray.Dataset) -> IntensityMapData:
+    intensity = _replace_fill_values_in_xarray(dataset, "ena_intensity")
     return IntensityMapData(
         epoch=dataset[CoordNames.TIME.value].values,
         epoch_delta=_replace_fill_values_in_xarray(dataset, "epoch_delta"),
@@ -377,9 +422,10 @@ def _read_intensity_map_data_from_xarray(dataset: xarray.Dataset) -> IntensityMa
         obs_date=_replace_fill_values_in_xarray(dataset, "obs_date"),
         obs_date_range=_replace_fill_values_in_xarray(dataset, "obs_date_range"),
         solid_angle=np.squeeze(_replace_fill_values_in_xarray(dataset, "solid_angle")),
-        ena_intensity=_replace_fill_values_in_xarray(dataset, "ena_intensity"),
+        ena_intensity=intensity,
         ena_intensity_stat_uncert=_replace_fill_values_in_xarray(dataset, "ena_intensity_stat_uncert"),
-        ena_intensity_sys_err=_replace_fill_values_in_xarray(dataset, "ena_intensity_sys_err")
+        ena_intensity_sys_err=_replace_fill_values_in_xarray(dataset, "ena_intensity_sys_err"),
+        quality_flags=np.full(intensity.shape, MapL3Flags.NONE),
     )
 
 
@@ -407,48 +453,6 @@ def _read_rectangular_coords_from_open_cdf(cdf: CDF) -> RectangularCoords:
 
 
 @dataclass
-class HealPixSpectralIndexMapData:
-    spectral_index_map_data: SpectralIndexMapData
-    coords: HealPixCoords
-
-    def to_healpix_skymap(self) -> HealpixSkyMap:
-        healpix_map = HealpixSkyMap(self.coords.nside, SpiceFrame.ECLIPJ2000)
-
-        full_shape = [CoordNames.TIME.value, CoordNames.ENERGY_L2.value, CoordNames.HEALPIX_INDEX.value]
-        healpix_map.data_1d = xarray.Dataset(
-            data_vars={
-                "latitude": ([CoordNames.HEALPIX_INDEX.value], self.spectral_index_map_data.latitude),
-                "longitude": ([CoordNames.HEALPIX_INDEX.value], self.spectral_index_map_data.longitude),
-                "solid_angle": ([CoordNames.HEALPIX_INDEX.value], self.spectral_index_map_data.solid_angle),
-                "obs_date_range": (full_shape, self.spectral_index_map_data.obs_date_range),
-                "obs_date": (full_shape, self.spectral_index_map_data.obs_date),
-                "exposure_factor": (full_shape, self.spectral_index_map_data.exposure_factor),
-
-                "ena_spectral_index": (full_shape, self.spectral_index_map_data.ena_spectral_index),
-                "ena_spectral_index_stat_uncert": (
-                    full_shape, self.spectral_index_map_data.ena_spectral_index_stat_uncert),
-                "ena_spectral_index_scalar_coefficient": (full_shape,
-                                                          self.spectral_index_map_data.ena_spectral_index_scalar_coefficient),
-                "ena_spectral_index_scalar_coefficient_stat_uncert": (full_shape,
-                                                                      self.spectral_index_map_data.ena_spectral_index_scalar_coefficient_stat_uncert),
-                "ena_spectral_index_chisq": (
-                    full_shape,
-                    self.spectral_index_map_data.ena_spectral_index_chisq),
-            },
-            coords={
-                CoordNames.TIME.value: self.spectral_index_map_data.epoch,
-                CoordNames.ENERGY_L2.value: self.spectral_index_map_data.energy,
-                CoordNames.HEALPIX_INDEX.value: self.coords.pixel_index,
-            })
-
-        healpix_map.data_1d = healpix_map.data_1d \
-            .assign({"obs_date": (full_shape, healpix_map.data_1d["obs_date"].values.astype(np.float64))}) \
-            .rename({CoordNames.HEALPIX_INDEX.value: CoordNames.GENERIC_PIXEL.value})
-
-        return healpix_map
-
-
-@dataclass
 class MapDataProduct(DataProduct[D], Generic[D]):
     data: D
     spice_frame_name: SpiceFrame
@@ -456,22 +460,6 @@ class MapDataProduct(DataProduct[D], Generic[D]):
     @abc.abstractmethod
     def to_data_product_variables(self) -> list[DataProductVariable]:
         raise NotImplementedError
-
-
-class HealPixSpectralIndexDataProduct(MapDataProduct[HealPixSpectralIndexMapData]):
-    data: HealPixSpectralIndexMapData
-
-    def to_data_product_variables(self) -> list[DataProductVariable]:
-        return _spectral_index_data_variables(self.data.spectral_index_map_data) \
-            + _healpix_coords_to_variables(self.data.coords)
-
-
-class HealPixIntensityDataProduct(MapDataProduct[HealPixIntensityMapData]):
-    data: HealPixIntensityMapData
-
-    def to_data_product_variables(self) -> list[DataProductVariable]:
-        return _intensity_data_variables(self.data.intensity_map_data) \
-            + _healpix_coords_to_variables(self.data.coords)
 
 
 class RectangularSpectralIndexDataProduct(MapDataProduct[RectangularSpectralIndexMapData]):
@@ -539,14 +527,25 @@ def _map_data_to_variables(data: MapData) -> list[DataProductVariable]:
 
 
 def _spectral_index_data_variables(data: SpectralIndexMapData) -> list[DataProductVariable]:
-    return _map_data_to_variables(data) + [
+    variables = _map_data_to_variables(data) + [
         DataProductVariable(ENA_SPECTRAL_INDEX_VAR_NAME, data.ena_spectral_index),
-        DataProductVariable(ENA_SPECTRAL_INDEX_STAT_UNC_VAR_NAME, data.ena_spectral_index_stat_uncert),
-        DataProductVariable(ENA_SPECTRAL_INDEX_SCALAR_COEFFICIENT_VAR_NAME, data.ena_spectral_index_scalar_coefficient),
-        DataProductVariable(ENA_SPECTRAL_INDEX_SCALAR_COEFFICIENT_STAT_UNCERT_VAR_NAME,
-                            data.ena_spectral_index_scalar_coefficient_stat_uncert),
-        DataProductVariable(ENA_SPECTRAL_INDEX_CHISQ_VAR_NAME, data.ena_spectral_index_chisq),
+        DataProductVariable(
+            ENA_SPECTRAL_INDEX_STAT_UNC_VAR_NAME, data.ena_spectral_index_stat_uncert
+        ),
+        DataProductVariable(
+            ENA_SPECTRAL_INDEX_SCALAR_COEFFICIENT_VAR_NAME,
+            data.ena_spectral_index_scalar_coefficient,
+        ),
+        DataProductVariable(
+            ENA_SPECTRAL_INDEX_SCALAR_COEFFICIENT_STAT_UNCERT_VAR_NAME,
+            data.ena_spectral_index_scalar_coefficient_stat_uncert,
+        ),
+        DataProductVariable(
+            ENA_SPECTRAL_INDEX_CHISQ_VAR_NAME, data.ena_spectral_index_chisq
+        ),
+        DataProductVariable(QUALITY_FLAGS_VAR_NAME, data.quality_flags),
     ]
+    return variables
 
 
 def _intensity_data_variables(data: IntensityMapData) -> list[DataProductVariable]:
@@ -554,13 +553,20 @@ def _intensity_data_variables(data: IntensityMapData) -> list[DataProductVariabl
         DataProductVariable(ENA_INTENSITY_VAR_NAME, data.ena_intensity),
         DataProductVariable(ENA_INTENSITY_STAT_UNCERT_VAR_NAME, data.ena_intensity_stat_uncert),
         DataProductVariable(ENA_INTENSITY_SYS_ERR_VAR_NAME, data.ena_intensity_sys_err),
+        DataProductVariable(QUALITY_FLAGS_VAR_NAME, data.quality_flags),
     ]
     if data.bg_intensity is not None:
-        intensity_variables.extend([
-            DataProductVariable(BG_INTENSITY_VAR_NAME, data.bg_intensity),
-            DataProductVariable(BG_INTENSITY_STAT_UNC_VAR_NAME, data.bg_intensity_stat_uncert),
-            DataProductVariable(BG_INTENSITY_SYS_ERR_VAR_NAME, data.bg_intensity_sys_err),
-        ])
+        intensity_variables.extend(
+            [
+                DataProductVariable(BG_INTENSITY_VAR_NAME, data.bg_intensity),
+                DataProductVariable(
+                    BG_INTENSITY_STAT_UNC_VAR_NAME, data.bg_intensity_stat_uncert
+                ),
+                DataProductVariable(
+                    BG_INTENSITY_SYS_ERR_VAR_NAME, data.bg_intensity_sys_err
+                ),
+            ]
+        )
     if data.survival_probability is not None:
         intensity_variables.extend([
             DataProductVariable(SURVIVAL_PROBABILITY_VAR_NAME, data.survival_probability),
@@ -569,7 +575,6 @@ def _intensity_data_variables(data: IntensityMapData) -> list[DataProductVariabl
         intensity_variables.extend(
             [DataProductVariable(ENA_INTENSITY_SYS_ERR_MINUS_VAR_NAME, data.ena_intensity_sys_err_minus),
              DataProductVariable(ENA_INTENSITY_SYS_ERR_PLUS_VAR_NAME, data.ena_intensity_sys_err_plus)])
-
     return _map_data_to_variables(data) + intensity_variables
 
 
@@ -578,28 +583,24 @@ def _rectangular_coords_to_variables(coords: RectangularCoords) -> list[DataProd
         DataProductVariable(LATITUDE_DELTA_VAR_NAME, coords.latitude_delta),
         DataProductVariable(LATITUDE_LABEL_VAR_NAME, coords.latitude_label),
         DataProductVariable(LONGITUDE_DELTA_VAR_NAME, coords.longitude_delta),
-        DataProductVariable(LONGITUDE_LABEL_VAR_NAME, coords.longitude_label)
+        DataProductVariable(LONGITUDE_LABEL_VAR_NAME, coords.longitude_label),
     ]
 
-
-def _healpix_coords_to_variables(coords: HealPixCoords) -> list[DataProductVariable]:
-    return [
-        DataProductVariable(PIXEL_INDEX_VAR_NAME, coords.pixel_index),
-        DataProductVariable(PIXEL_INDEX_LABEL_VAR_NAME, coords.pixel_index_label),
-    ]
 
 
 def calculate_datetime_weighted_average(data: np.ndarray, weights: np.ndarray, axis: int,
                                         **kwargs) -> np.ma.masked_array:
     if isinstance(np.ravel(np.ma.getdata(data))[0], datetime):
         masked_indices = np.ma.getmask(data)
-        weights[masked_indices] = 0
+        masked_weights = weights.copy()
+        masked_weights[masked_indices] = 0
 
         epoch_based_dates = np.array((np.ma.getdata(data) - TT2000_EPOCH) / timedelta(seconds=1),
                                      dtype=float)
 
-        averaged_dates_as_seconds = np.ma.average(epoch_based_dates, weights=weights,
-                                                  axis=axis, **kwargs)
+        averaged_dates_as_seconds = np.ma.average(
+            epoch_based_dates, weights=masked_weights, axis=axis, **kwargs
+        )
 
         return np.ma.array(
             averaged_dates_as_seconds.data * timedelta(seconds=1) + TT2000_EPOCH,
@@ -617,6 +618,7 @@ class GlowsL3eRectangularMapInputData:
     energy: np.ndarray
     spin_angle: np.ndarray
     probability_of_survival: np.ndarray
+    flags: np.ndarray
 
 
 @dataclass

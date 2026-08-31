@@ -6,7 +6,7 @@ from spacepy import pycdf
 from spacepy.pycdf import CDF
 
 from imap_l3_processing.cdf.imap_attribute_manager import ImapAttributeManager
-from imap_l3_processing.swapi.l3a.models import DataProduct
+from imap_l3_processing.models import DataProduct
 
 _CDF_FLOAT_NUMPY_DTYPE = {
     pycdf.const.CDF_REAL4.value: np.float32,

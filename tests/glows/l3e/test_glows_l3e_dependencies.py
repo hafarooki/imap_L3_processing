@@ -141,8 +141,8 @@ class TestGlowsL3EDependencies(TestCase):
         )
 
     @patch("imap_l3_processing.glows.l3e.glows_l3e_dependencies.furnish_spice_metakernel")
-    def test_furnish_spice_dependencies(self, mock_furnish_spice_metakernel):
-        expected_kernel_types = [
+    def test_collect_spice_dependencies(self, mock_furnish_spice_metakernel):
+        expected_kernel_types_with_predicted = [
             SpiceKernelTypes.ScienceFrames,
             SpiceKernelTypes.EphemerisPredicted,
             SpiceKernelTypes.EphemerisReconstructed,
@@ -152,33 +152,44 @@ class TestGlowsL3EDependencies(TestCase):
             SpiceKernelTypes.Leapseconds,
             SpiceKernelTypes.SpacecraftClock
         ]
+        expected_kernel_types_without_predicted = [
+            x for x in expected_kernel_types_with_predicted if x != SpiceKernelTypes.EphemerisPredicted
+        ]
 
-        dependencies = self._create_l3e_dependencies()
+        metakernel_with_predict_path = Path("metakernel_with_predict_ephem.txt")
+        kernels_with_predict = [Path("some_kernel_with_imap_data"), Path("predicted_ephem"), Path("some_kernel_with_planet_data")]
+        metakernel_without_predict_path = Path("metakernel_without_predict_ephem.txt")
+        kernels_without_predict = [Path("some_kernel_with_imap_data"), Path("some_kernel_with_planet_data")]
+        metakernel_output_with_predict = FurnishMetakernelOutput(metakernel_path=metakernel_with_predict_path,
+                                         spice_kernel_paths=kernels_with_predict, )
+        metakernel_output_without_predict = FurnishMetakernelOutput(metakernel_path=metakernel_without_predict_path,
+                                         spice_kernel_paths=kernels_without_predict)
+        mock_furnish_spice_metakernel.side_effect = [
+            metakernel_output_with_predict,
+            metakernel_output_without_predict
+        ]
 
-        mock_furnish_spice_metakernel.return_value = FurnishMetakernelOutput(
-            metakernel_path=Path("irrelevant.txt"),
-            spice_kernel_paths=[Path("some_kernel_with_imap_data"), Path("some_kernel_with_planet_data")]
-        )
+        actual_metakernel_with_predict, actual_metakernel_without_predict = GlowsL3EDependencies.collect_spice_dependencies(sentinel.start_date, sentinel.end_date)
 
-        dependencies.furnish_spice_dependencies(sentinel.start_date, sentinel.end_date)
+        mock_furnish_spice_metakernel.assert_has_calls([
+            call(
+                start_date=sentinel.start_date,
+                end_date=sentinel.end_date,
+                kernel_types=expected_kernel_types_with_predicted,
+                metakernel_file_name="metakernel_with_predict_ephem.txt",
+            ),
+            call(
+                start_date=sentinel.start_date,
+                end_date=sentinel.end_date,
+                kernel_types=expected_kernel_types_without_predicted,
+                metakernel_file_name="metakernel_without_predict_ephem.txt",
 
-        mock_furnish_spice_metakernel.assert_called_once_with(
-            start_date=sentinel.start_date,
-            end_date=sentinel.end_date,
-            kernel_types=expected_kernel_types
-        )
+            ),
+        ])
 
-        hi_parents = dependencies.get_hi_parents()
-        self.assertIn("some_kernel_with_imap_data", hi_parents)
-        self.assertIn("some_kernel_with_planet_data", hi_parents)
+        self.assertEqual(metakernel_output_with_predict, actual_metakernel_with_predict)
+        self.assertEqual(metakernel_output_without_predict, actual_metakernel_without_predict)
 
-        lo_parents = dependencies.get_lo_parents()
-        self.assertIn("some_kernel_with_imap_data", lo_parents)
-        self.assertIn("some_kernel_with_planet_data", lo_parents)
-
-        ul_parents = dependencies.get_ul_parents()
-        self.assertIn("some_kernel_with_imap_data", ul_parents)
-        self.assertIn("some_kernel_with_planet_data", ul_parents)
 
 
     def test_get_hi_parents(self):

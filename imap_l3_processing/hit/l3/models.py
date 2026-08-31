@@ -6,6 +6,7 @@ from typing import Union
 import numpy as np
 from spacepy.pycdf import CDF
 
+from imap_l3_processing.hit.l3.sectored_products.models import HIT_FLAGS_CDF_VAR_NAME
 from imap_l3_processing.models import DataProduct, DataProductVariable
 
 EPOCH_VAR_NAME = "epoch"
@@ -105,6 +106,7 @@ class HitDirectEventDataProduct(DataProduct):
     a_l_stim: np.ndarray[bool]
     stim_step: np.ndarray[int]
     dac_value: np.ndarray[int]
+    hit_flags: np.ndarray[int]
 
     def to_data_product_variables(self) -> list[DataProductVariable]:
         return [
@@ -134,6 +136,7 @@ class HitDirectEventDataProduct(DataProduct):
             DataProductVariable(A_L_STIM_VAR_NAME, self.a_l_stim),
             DataProductVariable(STIM_STEP_VAR_NAME, self.stim_step),
             DataProductVariable(DAC_VALUE_VAR_NAME, self.dac_value),
+            DataProductVariable(HIT_FLAGS_CDF_VAR_NAME, self.hit_flags),
             DataProductVariable(DETECTOR_ID_VAR_NAME, np.arange(0, 64))
         ]
 

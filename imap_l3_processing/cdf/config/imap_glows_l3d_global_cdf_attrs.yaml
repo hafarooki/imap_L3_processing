@@ -2,3 +2,7 @@ imap_glows_l3d_solar-hist:
   Data_level: "3d"
   Data_type: L3D_solar-hist>Level-3D Solar History
   Logical_source_description: IMAP Mission GLOWS Carrington period-averaged solar history
+  MODS:
+    - >-
+      Major version 2: Add quality flag to indicate CRs beyond the last L3b CR,
+      which are filled with copies of the last valid data.

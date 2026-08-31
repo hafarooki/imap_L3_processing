@@ -13,10 +13,28 @@ epoch:
   FILLVAL: 9999-12-31T23:59:59.999999999
   TIME_BASE: J2000
   TIME_SCALE: TT
+  DELTA_PLUS_VAR: epoch_delta
+  DELTA_MINUS_VAR: epoch_delta
   MONOTON: INCREASE
   REFERENCE_POSITION: Rotating Earth Geoid
   SCALETYP: linear
   SI_CONVERSION: 1e-9>seconds
+epoch_delta:
+  NAME: epoch_delta
+  CATDESC: Epoch delta
+  FIELDNAM: Epoch Delta
+  DATA_TYPE: CDF_INT8
+  FORMAT: I15
+  UNITS: ns
+  VALIDMIN: 0
+  VALIDMAX: 999999999999999
+  FILLVAL: -9223372036854775808
+  SCALETYP: linear
+  LABLAXIS: Epoch delta
+  DEPEND_0: epoch
+  RECORD_VARYING: RV
+  VAR_TYPE: support_data
+  VAR_NOTES: Time duration of the IMAP spacecraft pointing for which this grid is valid.
 energy_grid:
   NAME: energy_grid
   DATA_TYPE: CDF_FLOAT
@@ -24,6 +42,37 @@ energy_grid:
   VAR_TYPE: support_data
   RECORD_VARYING: NRV
   FIELDNAM: Energy
+  FORMAT: g9.3
+  LABLAXIS: energy
+  UNITS: keV
+  VALIDMIN: 0
+  VALIDMAX: 10000000000
+  FILLVAL: -1.0000E+31
+  SCALETYP: log
+  DELTA_PLUS_VAR: energy_delta_plus
+  DELTA_MINUS_VAR: energy_delta_minus
+  VAR_NOTES: Calculated by interpolation to this specific point energy. Bin width is for ease of plotting and does not represent a range of measurement energies.
+energy_delta_plus:
+  NAME: energy_delta_plus
+  DATA_TYPE: CDF_FLOAT
+  CATDESC: Energies delta plus associated with the survival probabilities for IMAP-Hi
+  VAR_TYPE: support_data
+  RECORD_VARYING: NRV
+  FIELDNAM: Energy delta plus
+  FORMAT: g9.3
+  LABLAXIS: energy
+  UNITS: keV
+  VALIDMIN: 0
+  VALIDMAX: 10000000000
+  FILLVAL: -1.0000E+31
+  SCALETYP: log
+energy_delta_minus:
+  NAME: energy_delta_minus
+  DATA_TYPE: CDF_FLOAT
+  CATDESC: Energies delta minus associated with the survival probabilities for IMAP-Hi
+  VAR_TYPE: support_data
+  RECORD_VARYING: NRV
+  FIELDNAM: Energy delta minus
   FORMAT: g9.3
   LABLAXIS: energy
   UNITS: keV
@@ -66,6 +115,7 @@ surv_prob:
   LABL_PTR_1: energy_label
   LABL_PTR_2: spin_angle_label
   SCALETYP: linear
+  VAR_NOTES: Calculated from model at given point in time, space, and energy.
 spin_axis_latitude:
   NAME: spin_axis_latitude
   DATA_TYPE: CDF_FLOAT
@@ -246,6 +296,7 @@ glows_flags:
   DISPLAY_TYPE: time_series
   SCALETYP: linear
   FIELDNAM: Quality Flags for GLOWS L3e Hi-45
+  FORMAT: I5
   UNITS: '0: okay; nonzero: caution'
   VALIDMIN: 0
   VALIDMAX: 65534
@@ -254,4 +305,6 @@ glows_flags:
   VAR_NOTES: >-
     Each bit corresponds to a specific potential concern. See release notes for details.
     Bit 2: Solar wind alpha/proton density ratio not available in OMNI data; input GLOWS L3c file used nominal value of 0.04.
+    Bit 3: Indicates that the last calculated CR in L3d was repeated to later CRs that could not be computed 
+    Bit 15: Indicates predictive ephemeris was used instead of reconstructed ephemeris.
     Other bits are reserved.

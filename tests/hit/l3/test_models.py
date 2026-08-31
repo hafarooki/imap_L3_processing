@@ -55,6 +55,7 @@ class TestModels(CdfModelTestCase):
         a_l_stim = np.array([None, True])
         stim_step = np.array([None, 1])
         dac_value = np.array([None, 123])
+        hit_flag_values = np.array([0,0])
 
         direct_event = HitDirectEventDataProduct(input_metadata=input_metadata,
                                                  epoch=epoch,
@@ -81,7 +82,9 @@ class TestModels(CdfModelTestCase):
                                                  stim_gain=stim_gain,
                                                  a_l_stim=a_l_stim,
                                                  stim_step=stim_step,
-                                                 dac_value=dac_value, )
+                                                 dac_value=dac_value,
+                                                 hit_flags=hit_flag_values,
+        )
 
         expected_variables = [
             DataProductVariable(models.EPOCH_VAR_NAME, epoch),
@@ -110,6 +113,7 @@ class TestModels(CdfModelTestCase):
             DataProductVariable(models.A_L_STIM_VAR_NAME, a_l_stim),
             DataProductVariable(models.STIM_STEP_VAR_NAME, stim_step),
             DataProductVariable(models.DAC_VALUE_VAR_NAME, dac_value),
+            DataProductVariable(models.HIT_FLAGS_CDF_VAR_NAME, hit_flag_values),
             DataProductVariable(models.DETECTOR_ID_VAR_NAME, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
                                                               17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
                                                               31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
@@ -119,7 +123,7 @@ class TestModels(CdfModelTestCase):
 
         actual_variables = direct_event.to_data_product_variables()
 
-        self.assertEqual(27, len(actual_variables))
+        self.assertEqual(28, len(actual_variables))
         for expected_variable, actual_variable in zip(expected_variables, actual_variables):
             self.assert_variable_attributes(actual_variable, expected_variable.value, expected_variable.name,
                                             expected_variable.cdf_data_type, expected_variable.record_varying)

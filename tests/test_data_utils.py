@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
-from imap_l3_processing.data_utils import rebin, find_closest_neighbor
+from imap_l3_processing.data_utils import rebin, NearestInterpolator
 
 
 class TestDataUtils(unittest.TestCase):
@@ -131,47 +131,46 @@ class TestDataUtils(unittest.TestCase):
         ]
         np.testing.assert_array_equal(actual_average, expected_average)
 
-    def test_find_closest_neighbor(self):
+    def test_nearest_interpolator_interpolate(self):
         test_cases = [
             ("matching cadence", [datetime(2020, 4, 4),
                                   datetime(2020, 4, 5),
                                   datetime(2020, 4, 6),
                                   datetime(2020, 4, 7)],
-             [[0, 0, 1], [0, 2, 0], [0, 0, 3], [4, 0, 0]], [0, 1, 2, 3]),
+             [[0, 0, 1], [0, 2, 0], [0, 0, 3], [4, 0, 0]], [False, True, False, False]),
             ("to slower cadence", [datetime(2020, 4, 4),
                                    datetime(2020, 4, 6),
                                    datetime(2020, 4, 8)],
-             [[0, 0, 1], [0, 0, 3], [4, 0, 0]], [0, 2, 3]),
+             [[0, 0, 1], [0, 0, 3], [4, 0, 0]], [False, False, False]),
             ("to faster cadence", [datetime(2020, 4, 4, hour=8),
                                    datetime(2020, 4, 5),
                                    datetime(2020, 4, 5, hour=16)],
-             [[0, 0, 1], [0, 2, 0], [0, 0, 3]], [0, 1, 2]),
+             [[0, 0, 1], [0, 2, 0], [0, 0, 3]], [False, True, False]),
             ("outside range", [datetime(2020, 4, 2, hour=23),
                                datetime(2020, 4, 5),
                                datetime(2020, 4, 8, hour=1)],
-             [[np.nan, np.nan, np.nan], [0, 2, 0], [np.nan, np.nan, np.nan]], [0, 1, 3]),
+             [[np.nan, np.nan, np.nan], [0, 2, 0], [np.nan, np.nan, np.nan]], [False, True, False]),
 
             ("ties round down", [datetime(2020, 4, 4, hour=12),
                                  datetime(2020, 4, 5, hour=12)],
-             [[0, 0, 1], [0, 2, 0], ], [0, 1]),
+             [[0, 0, 1], [0, 2, 0], ], [False, True]),
         ]
 
-        for case, to_dates, expected_values, expected_indices in test_cases:
+        for case, to_dates, expected_values, expected_quality_flags in test_cases:
             with self.subTest(case):
                 to_data_epoch = np.array(to_dates)
                 from_data = np.array([[0, 0, 1], [0, 2, 0], [0, 0, 3], [4, 0, 0]])
+                quality_flags = np.array([False, True, False, False])
                 from_date_epoch = np.array([datetime(2020, 4, 4),
                                             datetime(2020, 4, 5),
                                             datetime(2020, 4, 6),
                                             datetime(2020, 4, 7)
                                             ])
 
-                actual_neighbor_values, actual_indices = find_closest_neighbor(from_date_epoch, from_data,
-                                                                               to_data_epoch,
-                                                               timedelta(days=1))
+                interpolator = NearestInterpolator(from_date_epoch, from_data, to_data_epoch, timedelta(days=1))
 
-                np.testing.assert_array_equal(actual_neighbor_values, expected_values)
-                np.testing.assert_array_equal(actual_indices, expected_indices)
+                np.testing.assert_array_equal(interpolator.interpolate_data(), expected_values)
+                np.testing.assert_array_equal(interpolator.interpolate_flags(quality_flags), expected_quality_flags)
 
     def test_find_closest_neighbor_handles_large_dataset(self):
         to_epoch = np.array(
@@ -189,19 +188,16 @@ class TestDataUtils(unittest.TestCase):
         from_epoch = np.array([datetime(2020, 4, 4) + timedelta(seconds=0.5) * i for i in range(86400 * 2)])
 
         t0 = time.perf_counter()
-        actual_neighbor_values, _ = find_closest_neighbor(from_epoch, from_data,
-                                                       to_epoch.astype(np.datetime64),
-                                                       timedelta(days=1))
+        actual_neighbor_values = NearestInterpolator(from_epoch, from_data, to_epoch.astype(np.datetime64), timedelta(days=1)).interpolate_data()
         t1 = time.perf_counter()
         self.assertEqual((1440, 24, 30, 3), actual_neighbor_values.shape)
         self.assertLess(t1 - t0, 10)
 
-    def test_find_closest_neighbor_handles_nan_values(self):
+    def test_nearest_interpolator_handles_nan(self):
         to_epoch = np.array([datetime(2020, 4, 4, minute=1)])
         from_epoch = np.array([datetime(2020, 4, 4, minute=1), datetime(2020, 4, 4, minute=2)])
 
         from_data = np.array([np.nan, 2])
 
-        actual_neighbor_values, _ = find_closest_neighbor(from_epoch, from_data, to_epoch, timedelta(minutes=1))
-
-        self.assertEqual(actual_neighbor_values, [2])
+        interpolator = NearestInterpolator(from_epoch, from_data, to_epoch, timedelta(minutes=1))
+        self.assertEqual(interpolator.interpolate_data(), [2])

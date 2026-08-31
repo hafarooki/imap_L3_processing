@@ -2,3 +2,9 @@ imap_glows_l3c_sw-profile:
   Data_level: "3c"
   Data_type: L3C_sw-profile>Level-3C Solar Wind Profile
   Logical_source_description: IMAP Mission GLOWS Carrington period-averaged solar wind plasma speed and proton density profiles
+  MODS:
+    - >-
+      Major version 2: Use CR midpoint as `epoch` and a single `epoch_delta` variable instead of
+      `epoch_delta_minus`/`epoch_delta_plus`.
+      Add new `mean_time` variable.
+      Remove `lat_grid_delta` to support plotting.

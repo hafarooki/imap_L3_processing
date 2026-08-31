@@ -5,11 +5,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 from pathlib import Path
-from typing import Optional, Union, TypeVar
+from tempfile import TemporaryDirectory
+from typing import Optional, Union
 from urllib.parse import urlparse
+from spiceypy import spiceypy
 
 import imap_data_access
-import numpy as np
 import requests
 import spiceypy
 from imap_data_access import ScienceFilePath, download
@@ -22,17 +23,33 @@ import imap_l3_processing
 from imap_l3_processing.cdf.cdf_utils import write_cdf, read_numeric_variable
 from imap_l3_processing.cdf.imap_attribute_manager import ImapAttributeManager
 from imap_l3_processing.constants import TT2000_EPOCH
-from imap_l3_processing.maps.map_models import GlowsL3eRectangularMapInputData, InputRectangularPointingSet, \
-    RectangularSpectralIndexMapData, RectangularIntensityMapData, \
-    HealPixIntensityMapData, HealPixSpectralIndexMapData, RectangularSpectralIndexDataProduct, \
-    RectangularIntensityDataProduct, HealPixSpectralIndexDataProduct, HealPixIntensityDataProduct, MapDataProduct, \
-    ISNBackgroundSubtractedDataProduct, ISNBackgroundSubtractedMapData
+from imap_l3_processing.maps.map_models import (
+    RectangularSpectralIndexMapData,
+    RectangularIntensityMapData,
+    HealPixIntensityMapData,
+    RectangularSpectralIndexDataProduct,
+    RectangularIntensityDataProduct,
+    MapDataProduct,
+    ISNBackgroundSubtractedDataProduct,
+    ISNBackgroundSubtractedMapData,
+)
 from imap_l3_processing.models import DataProduct, MagData, InputMetadata
-from imap_l3_processing.ultra.models import UltraL1CPSet, UltraGlowsL3eData
 from imap_l3_processing.version import VERSION
 
 logger = logging.getLogger(__name__)
+_cache_directory: TemporaryDirectory|None = None
 
+def get_temp_cache_dir() -> Path:
+    global _cache_directory
+    if _cache_directory is None:
+        _cache_directory = TemporaryDirectory(ignore_cleanup_errors=True)
+    return Path(_cache_directory.name)
+
+def clear_temp_cache():
+    global _cache_directory
+    if _cache_directory is not None:
+        _cache_directory.cleanup()
+    _cache_directory = None
 
 class SpiceKernelTypes(enum.Enum):
     Leapseconds = "leapseconds"
@@ -86,10 +103,14 @@ def save_data(data: DataProduct, delete_if_present: bool = False, folder_path: P
 
     map_instruments = ["hi", "lo", "ultra"]
     if data.input_metadata.instrument in map_instruments:
-
-        if isinstance(data, (RectangularSpectralIndexDataProduct, RectangularIntensityDataProduct,
-                             HealPixSpectralIndexDataProduct, HealPixIntensityDataProduct,
-                             ISNBackgroundSubtractedDataProduct)):
+        if isinstance(
+            data,
+            (
+                RectangularSpectralIndexDataProduct,
+                RectangularIntensityDataProduct,
+                ISNBackgroundSubtractedDataProduct,
+            ),
+        ):
             attrs = generate_map_global_metadata(data)
             for key, value in attrs.items():
                 attribute_manager.add_global_attribute(key, value)
@@ -119,7 +140,6 @@ def generate_map_global_metadata(data_product: MapDataProduct) -> dict:
     match data_product.data:
         case (
         RectangularSpectralIndexMapData(spectral_index_map_data=map_data) |
-        HealPixSpectralIndexMapData(spectral_index_map_data=map_data) |
         RectangularIntensityMapData(intensity_map_data=map_data) |
         HealPixIntensityMapData(intensity_map_data=map_data) |
         ISNBackgroundSubtractedMapData(isn_rate_map_data=map_data)
@@ -215,22 +235,6 @@ def select_mag_path(
             return download(match.construct_path()), level
     return None, None
 
-
-L1CPointingSet = TypeVar("L1CPointingSet", bound=Union[InputRectangularPointingSet, UltraL1CPSet])
-GlowsL3eData = TypeVar("GlowsL3eData", bound=Union[GlowsL3eRectangularMapInputData, UltraGlowsL3eData])
-
-
-def combine_glows_l3e_with_l1c_pointing(glows_l3e_data: list[GlowsL3eData], l1c_data: list[L1CPointingSet]) -> list[
-    tuple[L1CPointingSet, Optional[GlowsL3eData]]]:
-    l1c_by_repoint = {l1c.repointing: l1c for l1c in l1c_data}
-    glows_by_repoint = {l3e.repointing: l3e for l3e in glows_l3e_data}
-
-    return [(l1c_by_repoint[repoint], glows_by_repoint.get(repoint, None))
-            for repoint in l1c_by_repoint.keys()]
-
-def filter_bad_days(input_psets: list[L1CPointingSet]) -> list[L1CPointingSet]:
-    return [pset for pset in input_psets if not np.all(pset.exposure_times == 0.0)]
-
 def get_dependency_paths_by_descriptor(deps: ProcessingInputCollection, descriptors: list[str]) -> dict[
     str, list[Path]]:
     descriptor_to_paths = {key: [] for key in descriptors}
@@ -283,8 +287,8 @@ def get_spice_kernels_file_names(start_date: datetime, end_date: datetime, kerne
     return kernels
 
 
-def furnish_spice_metakernel(start_date: datetime, end_date: datetime, kernel_types: list[SpiceKernelTypes]):
-    metakernel_path = imap_data_access.config.get("DATA_DIR") / "metakernel" / "metakernel.txt"
+def furnish_spice_metakernel(start_date: datetime, end_date: datetime, kernel_types: list[SpiceKernelTypes], metakernel_file_name: str="metakernel.txt") -> FurnishMetakernelOutput:
+    metakernel_path = imap_data_access.config.get("DATA_DIR") / "metakernel" / metakernel_file_name
     kernel_path = imap_data_access.config.get("DATA_DIR") / "imap" / "spice"
 
     parameters: dict = {
@@ -328,6 +332,11 @@ def read_cdf_parents(server_file_name: str) -> set[str]:
 
 def get_version_from_query_result(science_file_query_result):
     if "major_version" in science_file_query_result:
-        return Version(science_file_query_result["major_version"], science_file_query_result["minor_version"])
+        return Version(
+            science_file_query_result["major_version"],
+            science_file_query_result["minor_version"],
+        )
     else:
         return Version.from_version(science_file_query_result["version"])
+
+

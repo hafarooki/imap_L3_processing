@@ -197,6 +197,7 @@ class SweL3MomentData:
     core_temperature_tensor_integrated: np.ndarray
     halo_temperature_tensor_integrated: np.ndarray
     total_temperature_tensor_integrated: np.ndarray
+    quality_flags: np.ndarray
 
 
 @dataclass

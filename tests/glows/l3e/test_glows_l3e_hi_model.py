@@ -1,10 +1,10 @@
 import unittest
-from datetime import datetime
-from unittest.mock import sentinel, Mock, MagicMock
+from datetime import datetime, timedelta
+from unittest.mock import sentinel, Mock, MagicMock, patch
 
 import numpy as np
 
-from imap_l3_processing.glows.l3e.glows_l3e_call_arguments import GlowsL3eCallArguments
+from imap_l3_processing.glows.l3e.glows_l3e_call_arguments import GlowsL3eCallArguments, GlowsL3eSpacecraftInfo
 from imap_l3_processing.glows.l3e.glows_l3e_hi_model import GlowsL3EHiData
 from imap_l3_processing.models import DataProductVariable
 from tests.test_helpers import get_test_instrument_team_data_path
@@ -33,7 +33,10 @@ class TestL3eHiModel(unittest.TestCase):
                 l3e_hi: GlowsL3EHiData = GlowsL3EHiData(
                     Mock(),
                     sentinel.epoch,
+                    sentinel.epoch_delta,
                     energy_array,
+                    sentinel.energy_delta_plus,
+                    sentinel.energy_delta_minus,
                     spin_angle_array,
                     sentinel.probability_of_survival,
                     sentinel.spin_axis_latitude,
@@ -51,10 +54,12 @@ class TestL3eHiModel(unittest.TestCase):
 
                 data_products = l3e_hi.to_data_product_variables()
 
-
                 expected_data_products = [
                     DataProductVariable("epoch", sentinel.epoch),
+                    DataProductVariable("epoch_delta", sentinel.epoch_delta),
                     DataProductVariable("energy_grid", energy_array),
+                    DataProductVariable("energy_delta_plus", sentinel.energy_delta_plus),
+                    DataProductVariable("energy_delta_minus", sentinel.energy_delta_minus),
                     DataProductVariable("spin_angle", spin_angle_array),
                     DataProductVariable("surv_prob", sentinel.probability_of_survival),
                     DataProductVariable("energy_label", expected_energy_labels),
@@ -74,13 +79,19 @@ class TestL3eHiModel(unittest.TestCase):
 
                 self.assertEqual(expected_data_products, data_products)
 
-    def test_convert_dat_to_glows_l3e_hi_product(self):
+    @patch('imap_l3_processing.glows.l3e.glows_l3e_hi_model.calculate_energy_deltas')
+    def test_convert_dat_to_glows_l3e_hi_product(self, mock_calculate_energy_deltas):
         hi_file_path = get_test_instrument_team_data_path("glows/probSur.Imap.Hi_2009.000_90.00.txt")
         expected_epoch = datetime(year=2009, month=8, day=16)
+        epoch_delta = timedelta(hours=8)
+        expected_epoch_delta_in_nanoseconds = 8*3600*1e9
         expected_energy = [0.3749896542976582, 0.4881381387720609, 0.6354277772546533, 0.8271602401781013,
                            1.076745599456691, 1.401640250140305, 1.824567838312671, 2.375108588863466,
                            3.091768193234094, 4.024670958420553, 5.239065580337116, 6.819888740878518,
                            8.877705713882047, 11.55644347537280, 15.04345718406192, 19.58263409767632]
+
+        mock_calculate_energy_deltas.return_value = (sentinel.expected_energy_delta_plus, sentinel.expected_energy_delta_minus)
+
         expected_spin_angle = np.array(
             [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
                                25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
@@ -184,16 +195,19 @@ class TestL3eHiModel(unittest.TestCase):
         spin_axis_lon = 90.0
 
         args = MagicMock(spec=GlowsL3eCallArguments)
-        args.spin_axis_latitude = spin_axis_lat
-        args.spin_axis_longitude = spin_axis_lon
+        
+        spacecraft_info = MagicMock(spec=GlowsL3eSpacecraftInfo)
+        spacecraft_info.spin_axis_latitude = spin_axis_lat
+        spacecraft_info.spin_axis_longitude = spin_axis_lon
+        spacecraft_info.spacecraft_radius = .5
+        spacecraft_info.spacecraft_longitude = 85.4
+        spacecraft_info.spacecraft_latitude = 45.1
 
-        args.spacecraft_radius = .5
-        args.spacecraft_longitude = 85.4
-        args.spacecraft_latitude = 45.1
+        spacecraft_info.spacecraft_velocity_x = 2.1
+        spacecraft_info.spacecraft_velocity_y = 2.2
+        spacecraft_info.spacecraft_velocity_z = 2.3
 
-        args.spacecraft_velocity_x = 2.1
-        args.spacecraft_velocity_y = 2.2
-        args.spacecraft_velocity_z = 2.3
+        args.spacecraft_info = spacecraft_info
 
         args.elongation = 135.0
 
@@ -201,9 +215,11 @@ class TestL3eHiModel(unittest.TestCase):
 
         l3e_hi_product: GlowsL3EHiData = GlowsL3EHiData.convert_dat_to_glows_l3e_hi_product(mock_metadata, hi_file_path,
                                                                                             expected_epoch,
+                                                                                            epoch_delta,
                                                                                             args)
 
         np.testing.assert_equal(np.array([expected_epoch]), l3e_hi_product.epoch, strict=True)
+        np.testing.assert_equal(np.array([expected_epoch_delta_in_nanoseconds]), l3e_hi_product.epoch_delta, strict=True)
         np.testing.assert_equal(l3e_hi_product.energy, expected_energy, strict=True)
         np.testing.assert_equal(l3e_hi_product.spin_angle, expected_spin_angle, strict=True)
         np.testing.assert_equal(l3e_hi_product.probability_of_survival.shape, expected_survival_probability_shape,
@@ -224,3 +240,7 @@ class TestL3eHiModel(unittest.TestCase):
         np.testing.assert_equal(np.array([2.3]), l3e_hi_product.spacecraft_velocity_z, strict=True)
 
         np.testing.assert_equal([135.0], l3e_hi_product.elongation)
+        np.testing.assert_equal(sentinel.expected_energy_delta_plus, l3e_hi_product.energy_delta_plus)
+        np.testing.assert_equal(sentinel.expected_energy_delta_minus, l3e_hi_product.energy_delta_minus)
+
+        mock_calculate_energy_deltas.assert_called_once_with(l3e_hi_product.energy)

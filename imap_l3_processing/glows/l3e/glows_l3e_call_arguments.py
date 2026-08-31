@@ -1,26 +1,19 @@
 from dataclasses import dataclass
 
-import numpy as np
-
 
 @dataclass
-class GlowsL3eCallArguments:
-    formatted_date: str
-    decimal_date: str
-    spacecraft_radius: np.float32
-    spacecraft_longitude: np.float32
-    spacecraft_latitude: np.float32
-    spacecraft_velocity_x: np.float32
-    spacecraft_velocity_y: np.float32
-    spacecraft_velocity_z: np.float32
-    spin_axis_longitude: np.float32
-    spin_axis_latitude: np.float32
-    elongation: float
+class GlowsL3eSpacecraftInfo:
+    spacecraft_radius: float
+    spacecraft_longitude: float
+    spacecraft_latitude: float
+    spacecraft_velocity_x: float
+    spacecraft_velocity_y: float
+    spacecraft_velocity_z: float
+    spin_axis_longitude: float
+    spin_axis_latitude: float
 
     def to_argument_list(self):
         return [
-            self.formatted_date,
-            self.decimal_date,
             str(self.spacecraft_radius),
             f"{self.spacecraft_longitude:.4f}",
             f"{self.spacecraft_latitude:.4f}",
@@ -29,5 +22,19 @@ class GlowsL3eCallArguments:
             f"{self.spacecraft_velocity_z}",
             f"{self.spin_axis_longitude:.4f}",
             f"{self.spin_axis_latitude:.4f}",
+        ]
+
+@dataclass
+class GlowsL3eCallArguments:
+    formatted_date: str
+    decimal_date: str
+    spacecraft_info: GlowsL3eSpacecraftInfo
+    elongation: float
+
+    def to_argument_list(self):
+        return [
+            self.formatted_date,
+            self.decimal_date,
+            *self.spacecraft_info.to_argument_list(),
             f"{self.elongation:.3f}"
         ]

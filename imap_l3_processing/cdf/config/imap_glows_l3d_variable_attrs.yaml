@@ -128,7 +128,7 @@ phion:
   RECORD_VARYING: RV
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
   FIELDNAM: Photoionization Rate
-  FORMAT: E6.1E2
+  FORMAT: E7.1E2
   LABLAXIS: Photoionization rate
   DISPLAY_TYPE: time_series
   UNITS: '#/s'
@@ -267,4 +267,5 @@ glows_flags:
   VAR_NOTES: >-
     Each bit corresponds to a specific potential concern. See release notes for details.
     Bit 2: Solar wind alpha/proton density ratio not available in OMNI data; input GLOWS L3c file used nominal value of 0.04.
+    Bit 3: Indicates that the last calculated CR in L3d was repeated to later CRs that could not be computed 
     Other bits are reserved.

@@ -129,7 +129,7 @@ class TestLoSPInitializer(unittest.TestCase):
         )
 
         self.assertIn(expected_possible_map_to_produce, actual_maps_to_produce)
-        self.assertEqual(3, len(actual_maps_to_produce))
+        self.assertEqual(2, len(actual_maps_to_produce))
 
     @patch('imap_l3_processing.lo.l3.lo_sp_initializer.furnish_spice_metakernel')
     def test_furnish_spice_dependencies(self, mock_furnish_metakernel):

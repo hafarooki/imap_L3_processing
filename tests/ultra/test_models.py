@@ -5,8 +5,14 @@ import numpy as np
 from imap_processing.ena_maps.utils.coordinates import CoordNames
 from spacepy.pycdf import CDF
 
-from imap_l3_processing.glows.l3e.glows_l3e_ultra_model import ENERGY_VAR_NAME, PROBABILITY_OF_SURVIVAL_VAR_NAME, \
-    HEALPIX_INDEX_VAR_NAME, EPOCH_CDF_VAR_NAME
+from imap_l3_processing.glows.l3e.glows_l3e_ultra_model import (
+    ENERGY_VAR_NAME,
+    PROBABILITY_OF_SURVIVAL_VAR_NAME,
+    HEALPIX_INDEX_VAR_NAME,
+    EPOCH_CDF_VAR_NAME,
+    GLOWS_FLAGS_VAR_NAME,
+)
+from imap_l3_processing.glows.quality_flags import GlowsL3Flags
 from imap_l3_processing.ultra.models import UltraGlowsL3eData, UltraL1CPSet
 from tests.spice_test_case import SpiceTestCase
 from tests.test_helpers import (
@@ -28,6 +34,7 @@ class TestModels(SpiceTestCase):
         expected_energy = np.arange(16)
         expected_healpix_index = np.arange(3072)
         expected_probability_of_survival = rng.random((1, 16, 3072))
+        expected_flags = np.array([GlowsL3Flags.PREDICTIVE_EPHEMERIS], dtype=np.uint16)
 
         with CDF(str(path_to_cdf), masterpath='') as cdf:
             cdf[EPOCH_CDF_VAR_NAME] = [expected_epoch]
@@ -42,6 +49,8 @@ class TestModels(SpiceTestCase):
             cdf[PROBABILITY_OF_SURVIVAL_VAR_NAME] = expected_probability_of_survival
             cdf[PROBABILITY_OF_SURVIVAL_VAR_NAME].attrs["FILLVAL"] = -1e31
 
+            cdf[GLOWS_FLAGS_VAR_NAME] = expected_flags
+
 
         actual = UltraGlowsL3eData.read_from_path(path_to_cdf)
 
@@ -52,6 +61,7 @@ class TestModels(SpiceTestCase):
         np.testing.assert_array_equal(
             expected_probability_of_survival, actual.survival_probability
         )
+        np.testing.assert_array_equal(expected_flags, actual.flags)
 
     def test_ultra_l1c_read_from_file_and_can_convert_to_xarray(self):
         expected_epoch = datetime(2026, 5, 18, 10, 3, 11, 602839)

@@ -10,6 +10,29 @@ from imap_l3_processing.glows.l3a.models import GlowsL2Data, GlowsL2LightCurve, 
     GlowsL2Header
 from imap_l3_processing.models import InputMetadata, Instrument
 
+MAX_SPIN_ANGLE_BINS = 90
+
+
+def _pad_lightcurve(values) -> np.ndarray:
+    """Pad a lightcurve variable to the fixed L3a spin-angle dimension."""
+    values = np.asarray(values)
+    if len(values) > MAX_SPIN_ANGLE_BINS:
+        raise ValueError(
+                f"GLOWS L3a lightcurve bins ({len(values)}) exceed "
+                f"the allowed maximum ({MAX_SPIN_ANGLE_BINS})."
+        )
+
+    if np.issubdtype(values.dtype, np.integer):
+        padded_values = np.ma.masked_all(MAX_SPIN_ANGLE_BINS, dtype=values.dtype)
+        padded_values[:len(values)] = values
+        return padded_values.reshape(1, -1)
+
+    return np.pad(
+        values,
+        (0, MAX_SPIN_ANGLE_BINS - len(values)),
+        constant_values=np.nan,
+    ).reshape(1, -1)
+
 
 def read_l2_glows_data(cdf: CDF) -> GlowsL2Data:
     assert 1 == cdf['photon_flux'].shape[0], "Level 2 file should have only one histogram"
@@ -52,7 +75,7 @@ def read_l2_glows_data(cdf: CDF) -> GlowsL2Data:
                        start_time=cdf['start_time'][0],
                        end_time=cdf['end_time'][0],
                        daily_lightcurve=light_curve,
-                       number_of_bins=cdf['number_of_bins'][...],
+                       number_of_bins=cdf['number_of_bins'][0],
                        spin_axis_orientation_average=spin_axis_average,
                        spin_axis_orientation_std_dev=spin_axis_std_dev,
                        filter_temperature_average=cdf['filter_temperature_average'][0],
@@ -97,16 +120,16 @@ def create_glows_l3a_from_dictionary(data: dict, input_metadata: InputMetadata) 
         epoch_delta=np.array([total_time.total_seconds() / 2 * 1e9]),
         start_time=data["start_time"],
         end_time=data["end_time"],
-        photon_flux=np.array(data["daily_lightcurve"]["photon_flux"]).reshape(1, -1),
-        photon_flux_uncertainty=np.array(data["daily_lightcurve"]["flux_uncertainties"]).reshape(1, -1),
-        raw_histogram=np.array(data["daily_lightcurve"]["raw_histogram"]).reshape(1, -1),
-        exposure_times=np.array(data["daily_lightcurve"]["exposure_times"]).reshape(1, -1),
-        spin_angle=np.array(data["daily_lightcurve"]["spin_angle"]).reshape(1, -1),
-        spin_angle_delta=np.array(data["daily_lightcurve"]["spin_angle_delta"]).reshape(1, -1),
-        latitude=np.array(data["daily_lightcurve"]["ecliptic_lat"]).reshape(1, -1),
-        longitude=np.array(data["daily_lightcurve"]["ecliptic_lon"]).reshape(1, -1),
-        extra_heliospheric_background=np.array(data["daily_lightcurve"]["extra_heliospheric_bckgrd"]).reshape(1, -1),
-        time_dependent_background=np.array(data["daily_lightcurve"]["time_dependent_bckgrd"]).reshape(1, -1),
+        photon_flux=_pad_lightcurve(data["daily_lightcurve"]["photon_flux"]),
+        photon_flux_uncertainty=_pad_lightcurve(data["daily_lightcurve"]["flux_uncertainties"]),
+        raw_histogram=_pad_lightcurve(data["daily_lightcurve"]["raw_histogram"]),
+        exposure_times=_pad_lightcurve(data["daily_lightcurve"]["exposure_times"]),
+        spin_angle=_pad_lightcurve(data["daily_lightcurve"]["spin_angle"]),
+        spin_angle_delta=_pad_lightcurve(data["daily_lightcurve"]["spin_angle_delta"]),
+        latitude=_pad_lightcurve(data["daily_lightcurve"]["ecliptic_lat"]),
+        longitude=_pad_lightcurve(data["daily_lightcurve"]["ecliptic_lon"]),
+        extra_heliospheric_background=_pad_lightcurve(data["daily_lightcurve"]["extra_heliospheric_bckgrd"]),
+        time_dependent_background=_pad_lightcurve(data["daily_lightcurve"]["time_dependent_bckgrd"]),
         filter_temperature_average=np.array([data["filter_temperature_average"]]),
         filter_temperature_std_dev=np.array([data["filter_temperature_std_dev"]]),
         hv_voltage_average=np.array([data["hv_voltage_average"]]),
@@ -134,21 +157,22 @@ def create_glows_l3a_dictionary_from_cdf(cdf_file_path: Path) -> dict:
     time_delta = timedelta(seconds=cdf['epoch_delta'][0] / 1e9)
     start_time = cdf['epoch'][0] - time_delta
     end_time = cdf['epoch'][0] + time_delta
+    valid_bin_count = cdf['number_of_bins'][0]
     return {
         'filename': f'{os.path.basename(cdf_file_path)}',
         'start_time': start_time.strftime("%Y-%m-%d %H:%M:%S"),
         'end_time': end_time.strftime("%Y-%m-%d %H:%M:%S"),
         'daily_lightcurve': {
-            'ecliptic_lat': cdf['ecliptic_lat'][0],
-            'ecliptic_lon': cdf['ecliptic_lon'][0],
-            'exposure_times': cdf['exposure_times'][0],
-            'photon_flux': cdf['photon_flux'][0],
-            'flux_uncertainties': cdf['photon_flux_uncertainty'][0],
-            'extra_heliospheric_bckgrd': cdf['extra_heliospheric_bckgrd'][0],
-            'time_dependent_bckgrd': cdf['time_dependent_bckgrd'][0],
-            'spin_angle': cdf['spin_angle'][0],
-            'raw_histogram': cdf['raw_histogram'][0],
-            'number_of_bins': cdf['number_of_bins'][...]
+            'ecliptic_lat': cdf['ecliptic_lat'][0][:valid_bin_count],
+            'ecliptic_lon': cdf['ecliptic_lon'][0][:valid_bin_count],
+            'exposure_times': cdf['exposure_times'][0][:valid_bin_count],
+            'photon_flux': cdf['photon_flux'][0][:valid_bin_count],
+            'flux_uncertainties': cdf['photon_flux_uncertainty'][0][:valid_bin_count],
+            'extra_heliospheric_bckgrd': cdf['extra_heliospheric_bckgrd'][0][:valid_bin_count],
+            'time_dependent_bckgrd': cdf['time_dependent_bckgrd'][0][:valid_bin_count],
+            'spin_angle': cdf['spin_angle'][0][:valid_bin_count],
+            'raw_histogram': cdf['raw_histogram'][0][:valid_bin_count],
+            'number_of_bins': valid_bin_count
         },
         'filter_temperature_average': cdf['filter_temperature_average'][0],
         'filter_temperature_std_dev': cdf['filter_temperature_std_dev'][0],

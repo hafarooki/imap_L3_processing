@@ -1,4 +1,5 @@
 import dataclasses
+import copy
 from datetime import datetime
 from unittest.mock import patch, sentinel, call, MagicMock
 
@@ -10,8 +11,10 @@ from imap_processing.ena_maps.utils.coordinates import CoordNames
 from imap_processing.spice import geometry
 from imap_processing.spice.geometry import SpiceFrame
 
+from imap_l3_processing.glows.quality_flags import GlowsL3Flags
 from imap_l3_processing.maps.map_descriptors import SpinPhase
 from imap_l3_processing.maps.map_models import GlowsL3eRectangularMapInputData, InputRectangularPointingSet
+from imap_l3_processing.maps.quality_flags import MapL3Flags
 from imap_l3_processing.maps.rectangular_survival_probability import Sensor, \
     RectangularSurvivalProbabilitySkyMap, RectangularSurvivalProbabilityPointingSet, \
     interpolate_angular_data_to_nearest_neighbor
@@ -51,7 +54,11 @@ class TestRectangularSurvivalProbability(SpiceTestCase):
             energy=np.geomspace(1, 10000, self.num_energies + 1),
             spin_angle=np.arange(0, 360, 1) + 0.5,
             probability_of_survival=np.arange((self.num_energies + 1) * 360).reshape(
-                (1, self.num_energies + 1, 360)) + 5.4)
+                (1, self.num_energies + 1, 360)
+            )
+            + 5.4,
+            flags=np.array([0], dtype=np.uint16),
+        )
 
         l1c_spin_angles = np.linspace(0, 360, 3600, endpoint=False) + 0.05
         self.ram_mask = (l1c_spin_angles < 90) | (l1c_spin_angles > 270)
@@ -365,15 +372,6 @@ class TestRectangularSurvivalProbability(SpiceTestCase):
                     expected_mask
                 )
 
-    def test_uses_default_survival_probability_of_one_when_glows_is_none(self):
-        pointing_set = RectangularSurvivalProbabilityPointingSet(
-            self.l1c_hi_dataset, Sensor.Hi90, SpinPhase.RamOnly,
-            glows_dataset=None, energies=self.hi_energies)
-
-        sp_times_exposure = pointing_set.data["survival_probability_times_exposure"].values
-        expected = np.ones((1, self.num_energies, 3600)) * self.l1c_hi_dataset.exposure_times
-        np.testing.assert_array_equal(sp_times_exposure, expected)
-
     def test_exposure_weighted_survivals_are_repeated_to_match_l1c_shape(self):
         pointing_set = RectangularSurvivalProbabilityPointingSet(self.l1c_hi_dataset, Sensor.Hi90, SpinPhase.RamOnly,
                                                                  self.glows_data,
@@ -436,7 +434,9 @@ class TestRectangularSurvivalProbability(SpiceTestCase):
                 self.glows_data.energy = np.array([1.25, 1.85, 3])
 
                 energy_sc = np.array([[np.full((3600,), 1250), np.full((3600,), 1850)]])
-                exposure_times = np.array([[np.full((3600,), 10), np.full((3600,), 100)]])
+                exposure_times = np.array(
+                    [[np.full((3600,), 10), np.full((3600,), 100)]]
+                )
                 l1c_dataset = create_l1c_pset(exposures=exposure_times)
 
                 corrected_hae_lon = np.ones((1, 2, 3600))
@@ -446,51 +446,124 @@ class TestRectangularSurvivalProbability(SpiceTestCase):
                     {
                         "hae_latitude": xr.DataArray(
                             corrected_hae_lat,
-                            dims=[CoordNames.TIME.value, CoordNames.ENERGY_L2.value, CoordNames.AZIMUTH_L2.value],
+                            dims=[
+                                CoordNames.TIME.value,
+                                CoordNames.ENERGY_L2.value,
+                                CoordNames.AZIMUTH_L2.value,
+                            ],
                         ),
                         "hae_longitude": xr.DataArray(
                             corrected_hae_lon,
-                            dims=[CoordNames.TIME.value, CoordNames.ENERGY_L2.value, CoordNames.AZIMUTH_L2.value]
+                            dims=[
+                                CoordNames.TIME.value,
+                                CoordNames.ENERGY_L2.value,
+                                CoordNames.AZIMUTH_L2.value,
+                            ],
                         ),
                         "energy_sc": xr.DataArray(
                             energy_sc,
-                            dims=[CoordNames.TIME.value, CoordNames.ENERGY_L2.value, CoordNames.AZIMUTH_L2.value],
-                        )
+                            dims=[
+                                CoordNames.TIME.value,
+                                CoordNames.ENERGY_L2.value,
+                                CoordNames.AZIMUTH_L2.value,
+                            ],
+                        ),
                     },
                     coords={
                         CoordNames.ENERGY_L2.value: np.array([1, 2]),
                         CoordNames.TIME.value: np.array([0]),
                         CoordNames.AZIMUTH_L2.value: np.full((3600,), 1),
-                    }
+                    },
                 )
 
                 first_energy_corresponding_glows_data = np.linspace(0, 1, 3600)
                 second_energy_corresponding_glows_data = np.linspace(0, 1, 3600) + 100.2
                 extra_glows_data = np.linspace(0, 1, 3600) + 200.2
 
-                mock_interpolate.return_value = np.array([first_energy_corresponding_glows_data,
-                                                          second_energy_corresponding_glows_data,
-                                                          extra_glows_data])
+                mock_interpolate.return_value = np.array(
+                    [
+                        first_energy_corresponding_glows_data,
+                        second_energy_corresponding_glows_data,
+                        extra_glows_data,
+                    ]
+                )
 
-                pointing_set = RectangularSurvivalProbabilityPointingSet(l1c_dataset, sensor, SpinPhase.RamOnly,
-                                                                         self.glows_data, hf_energies,
-                                                                         cg_corrected=True)
+                pointing_set = RectangularSurvivalProbabilityPointingSet(
+                    l1c_dataset,
+                    sensor,
+                    SpinPhase.RamOnly,
+                    self.glows_data,
+                    hf_energies,
+                    cg_corrected=True,
+                )
 
                 pset_spin_angles = np.linspace(0, 360, 3600, endpoint=False) + 0.05
                 pset_azimuths = np.mod(pset_spin_angles, 360)
 
                 self.assertEqual(1, mock_interpolate.call_count)
                 mock_interpolate_call_args = mock_interpolate.call_args_list[0].args
-                np.testing.assert_array_equal(pset_azimuths, mock_interpolate_call_args[0])
-                np.testing.assert_array_equal(self.glows_data.spin_angle, mock_interpolate_call_args[1])
-                np.testing.assert_array_equal(self.glows_data.probability_of_survival[0],
-                                              mock_interpolate_call_args[2])
+                np.testing.assert_array_equal(
+                    pset_azimuths, mock_interpolate_call_args[0]
+                )
+                np.testing.assert_array_equal(
+                    self.glows_data.spin_angle, mock_interpolate_call_args[1]
+                )
+                np.testing.assert_array_equal(
+                    self.glows_data.probability_of_survival[0],
+                    mock_interpolate_call_args[2],
+                )
 
                 corresponding_glows_data = np.array(
                     [first_energy_corresponding_glows_data, second_energy_corresponding_glows_data])[np.newaxis, ...]
 
-                np.testing.assert_array_almost_equal(pointing_set.data["survival_probability_times_exposure"].values,
-                                                     corresponding_glows_data * exposure_times)
+                np.testing.assert_array_almost_equal(
+                    pointing_set.data["survival_probability_times_exposure"].values,
+                    corresponding_glows_data * exposure_times,
+                )
+
+    def test_survival_probability_pointing_set_propagates_flags(
+        self,
+    ):
+        cases = [
+            (GlowsL3Flags.NONE, 0.0, 0.0, 0.0),
+            (GlowsL3Flags.NOMINAL_ALPHA_PROTON_RATIO, 0.0, 1.0, 0.0),
+            (GlowsL3Flags.PREDICTIVE_EPHEMERIS, 1.0, 0.0, 0.0),
+            (GlowsL3Flags.PERSISTED_LAST_POINT, 0.0, 0.0, 1.0),
+            (GlowsL3Flags.NOMINAL_ALPHA_PROTON_RATIO | GlowsL3Flags.PREDICTIVE_EPHEMERIS, 1.0, 1.0, 0.0),
+            (GlowsL3Flags.PERSISTED_LAST_POINT | GlowsL3Flags.PREDICTIVE_EPHEMERIS, 1.0, 0.0, 1.0),
+            (GlowsL3Flags.NOMINAL_ALPHA_PROTON_RATIO | GlowsL3Flags.PERSISTED_LAST_POINT, 0.0, 1.0, 1.0),
+            (GlowsL3Flags.NOMINAL_ALPHA_PROTON_RATIO | GlowsL3Flags.PERSISTED_LAST_POINT | GlowsL3Flags.PREDICTIVE_EPHEMERIS, 1.0, 1.0, 1.0),
+        ]
+        for flag_value, expected_pred_ephem_value, expected_nominal_alpha_proton_value, expected_persisted_last_point_value in cases:
+            with self.subTest(flag_value):
+                exposure_array = np.full(self.l1c_hi_dataset.exposure_times.shape, 1.0)
+                exposure_array[:, :, 1000] = 0.0
+                self.glows_data.flags[0] = flag_value
+                self.l1c_hi_dataset.exposure_times = exposure_array
+                pointing_set = RectangularSurvivalProbabilityPointingSet(
+                    self.l1c_hi_dataset, Sensor.Hi90, SpinPhase.RamOnly,
+                    glows_dataset=self.glows_data, energies=self.hi_energies)
+        
+                actual_pred_ephem = pointing_set.data["predicted_ephemeris_flag"].values
+                expected_pred_ephem = np.full((1, self.num_energies, 3600), expected_pred_ephem_value)
+                expected_pred_ephem[:, :, 1000] = 0
+                np.testing.assert_array_equal(actual_pred_ephem, expected_pred_ephem, strict=True)
+                self.assertEqual(pointing_set.data["predicted_ephemeris_flag"].dims,
+                                 pointing_set.data["survival_probability_times_exposure"].dims)
+
+                actual_nominal_alpha_proton = pointing_set.data["nominal_alpha_proton_ratio_flag"].values
+                expected_nominal_alpha_proton = np.full((1, self.num_energies, 3600), expected_nominal_alpha_proton_value)
+                expected_nominal_alpha_proton[:, :, 1000] = 0
+                np.testing.assert_array_equal(actual_nominal_alpha_proton, expected_nominal_alpha_proton, strict=True)
+                self.assertEqual(pointing_set.data["nominal_alpha_proton_ratio_flag"].dims,
+                                 pointing_set.data["survival_probability_times_exposure"].dims)
+
+                actual_persisted_last_point = pointing_set.data["persisted_last_point_flag"].values
+                expected_persisted_last_point = np.full((1, self.num_energies, 3600), expected_persisted_last_point_value)
+                expected_persisted_last_point[:, :, 1000] = 0
+                np.testing.assert_array_equal(actual_persisted_last_point, expected_persisted_last_point, strict=True)
+                self.assertEqual(pointing_set.data["persisted_last_point_flag"].dims,
+                                 pointing_set.data["survival_probability_times_exposure"].dims)
 
     def test_interpolate_angular_data_to_nearest_neighbor(self):
         input_cases = [
@@ -538,11 +611,11 @@ class TestRectangularSurvivalProbability(SpiceTestCase):
 
         mock_skymap_constructor.assert_called_with(sentinel.spacing_deg, sentinel.spice_frame)
 
+        expected_values_to_project = ["survival_probability_times_exposure", "exposure", "predicted_ephemeris_flag",
+                 "nominal_alpha_proton_ratio_flag", "persisted_last_point_flag"]
         mock_project_pset.assert_has_calls([
-            call(pset_1, ["survival_probability_times_exposure", "exposure"],
-                 pset_valid_mask=pset_1.data['directional_mask']),
-            call(pset_2, ["survival_probability_times_exposure", "exposure"],
-                 pset_valid_mask=pset_2.data['directional_mask']),
+            call(pset_1, expected_values_to_project, pset_valid_mask=pset_1.data['directional_mask']),
+            call(pset_2, expected_values_to_project, pset_valid_mask=pset_2.data['directional_mask']),
         ])
 
     def test_survival_probability_sky_map_returns_exposure_weighted_survival_probabilities(self):
@@ -592,3 +665,81 @@ class TestRectangularSurvivalProbability(SpiceTestCase):
         np.testing.assert_array_almost_equal(survival_prob_in_skygrid_shape,
                                              survival_probability_dataset[
                                                  "exposure_weighted_survival_probabilities"].values)
+
+    def test_survival_probability_sky_map_returns_flags(self):
+        self.l1c_hi_dataset.hae_longitude = np.concat([
+            np.full((1, 1800), 30.05),
+            np.full((1, 1800), 210.05)
+        ], axis=1)
+
+        self.l1c_hi_dataset.hae_latitude = np.concat([
+            np.linspace(90, -90, 1800, endpoint=False) - 0.05,
+            np.linspace(-90, 90, 1800, endpoint=False) + 0.05,
+        ]).reshape(1, -1)
+        self.ram_mask = np.concat((np.full(1800, True), np.full(1800, False)))
+
+        cases = {
+            (
+                GlowsL3Flags.NONE,
+                GlowsL3Flags.NONE,
+                MapL3Flags.NONE
+            ),
+            (
+                GlowsL3Flags.PREDICTIVE_EPHEMERIS,
+                GlowsL3Flags.NONE,
+                MapL3Flags.PREDICTIVE_EPHEMERIS
+            ),
+            (
+                GlowsL3Flags.PREDICTIVE_EPHEMERIS,
+                GlowsL3Flags.PREDICTIVE_EPHEMERIS,
+                MapL3Flags.PREDICTIVE_EPHEMERIS
+            ),
+            (
+                GlowsL3Flags.NOMINAL_ALPHA_PROTON_RATIO,
+                GlowsL3Flags.NONE,
+                GlowsL3Flags.NOMINAL_ALPHA_PROTON_RATIO
+            ),
+            (
+                GlowsL3Flags.NOMINAL_ALPHA_PROTON_RATIO | GlowsL3Flags.PREDICTIVE_EPHEMERIS,
+                GlowsL3Flags.NONE,
+                MapL3Flags.NOMINAL_ALPHA_PROTON_RATIO | MapL3Flags.PREDICTIVE_EPHEMERIS
+            ),
+            (
+                GlowsL3Flags.NOMINAL_ALPHA_PROTON_RATIO,
+                GlowsL3Flags.PREDICTIVE_EPHEMERIS,
+                MapL3Flags.NOMINAL_ALPHA_PROTON_RATIO | MapL3Flags.PREDICTIVE_EPHEMERIS
+            ),
+            (
+                GlowsL3Flags.PREDICTIVE_EPHEMERIS,
+                GlowsL3Flags.PERSISTED_LAST_POINT,
+                MapL3Flags.PREDICTIVE_EPHEMERIS | MapL3Flags.PERSISTED_LAST_POINT
+            )
+        }
+
+        for pset1_flags, pset2_flags, expected_quality_flags in cases:
+            with self.subTest(pset1_flags=pset1_flags, pset2_flags=pset2_flags, expected=expected_quality_flags):
+                pset1_glows = copy.deepcopy(self.glows_data)
+                pset1_glows.flags[0] = pset1_flags
+                pset1_l1c = pset2_l1c = self.l1c_hi_dataset
+
+                pset2_glows = copy.deepcopy(self.glows_data)
+                pset2_glows.flags[0] = pset2_flags
+
+                pset1 = RectangularSurvivalProbabilityPointingSet(pset1_l1c, Sensor.Hi90, SpinPhase.RamOnly,
+                                                                  pset1_glows, self.hi_energies)
+
+                pset2 = RectangularSurvivalProbabilityPointingSet(pset2_l1c, Sensor.Hi90, SpinPhase.RamOnly,
+                                                                  pset2_glows, self.hi_energies)
+
+                spice_frame = SpiceFrame.IMAP_HAE
+                actual_skymap = RectangularSurvivalProbabilitySkyMap([pset1, pset2],
+                                                                     0.1, spice_frame)
+                survival_probability_dataset = actual_skymap.to_dataset()
+
+                expected_flags_in_full_shape = np.full((1, 2, 3600, 1800), MapL3Flags.NONE)
+                expected_flags_in_full_shape[:, :, 300, :] = expected_quality_flags
+
+                self.assertIn("quality_flags", survival_probability_dataset)
+                self.assertEqual((1, 2, 3600, 1800), survival_probability_dataset["quality_flags"].values.shape)
+
+                np.testing.assert_array_equal(expected_flags_in_full_shape, survival_probability_dataset["quality_flags"].values)

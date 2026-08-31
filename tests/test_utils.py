@@ -15,8 +15,7 @@ from requests import RequestException
 from spacepy.pycdf import CDF
 
 from imap_l3_processing.constants import TEMP_CDF_FOLDER_PATH, TT2000_EPOCH
-from imap_l3_processing.maps.map_models import GlowsL3eRectangularMapInputData, InputRectangularPointingSet, \
-    RectangularSpectralIndexDataProduct, RectangularIntensityDataProduct
+from imap_l3_processing.maps.map_models import RectangularSpectralIndexDataProduct, RectangularIntensityDataProduct
 from imap_l3_processing.models import InputMetadata, VersionMap
 from imap_l3_processing.swapi.l3a.models import SwapiL3AlphaSolarWindData
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
@@ -25,7 +24,6 @@ from imap_l3_processing.utils import (
     read_mag_data,
     save_data,
     download_external_dependency,
-    combine_glows_l3e_with_l1c_pointing,
     furnish_local_spice,
     get_spice_parent_file_names,
     furnish_spice_metakernel,
@@ -33,21 +31,20 @@ from imap_l3_processing.utils import (
     FurnishMetakernelOutput,
     read_cdf_parents,
     get_dependency_paths_by_descriptor,
-    filter_bad_days,
     get_version_from_query_result,
+    get_temp_cache_dir,
 )
 from imap_l3_processing.version import VERSION
 from tests.cdf.test_cdf_utils import TestDataProduct
-from tests.maps.test_builders import create_rectangular_spectral_index_map_data, create_rectangular_intensity_map_data
+from tests.maps.test_builders import (
+    create_rectangular_spectral_index_map_data,
+    create_rectangular_intensity_map_data,
+)
 from tests.test_helpers import (
     get_spice_data_path,
     with_tempdir,
-    create_dataclass_mock,
     create_mock_version_map,
 )
-
-
-
 
 
 class TestUtils(TestCase):
@@ -442,47 +439,6 @@ class TestUtils(TestCase):
                 np.testing.assert_array_equal(epoch, results.epoch)
                 np.testing.assert_array_equal(trimmed_vectors, results.mag_data)
 
-    def test_combine_glows_l3e_with_l1c_pointing(self):
-        glows_l3e_data = [
-            create_dataclass_mock(GlowsL3eRectangularMapInputData, repointing=1),
-            create_dataclass_mock(GlowsL3eRectangularMapInputData, repointing=0),
-            create_dataclass_mock(GlowsL3eRectangularMapInputData, repointing=0),
-            create_dataclass_mock(GlowsL3eRectangularMapInputData, repointing=3),
-        ]
-
-        hi_l1c_data = [
-            create_dataclass_mock(InputRectangularPointingSet, repointing=1),
-            create_dataclass_mock(InputRectangularPointingSet, repointing=2),
-            create_dataclass_mock(InputRectangularPointingSet, repointing=3),
-            create_dataclass_mock(InputRectangularPointingSet, repointing=4)
-        ]
-
-        expected = [
-            (hi_l1c_data[0], glows_l3e_data[0]),
-            (hi_l1c_data[1], None),
-            (hi_l1c_data[2], glows_l3e_data[3]),
-            (hi_l1c_data[3], None),
-        ]
-
-        actual = combine_glows_l3e_with_l1c_pointing(glows_l3e_data, hi_l1c_data)
-
-        self.assertEqual(expected, actual)
-
-    def test_filter_bad_days(self):
-        good_day_exposures = np.full((1, 7, 3600, 40), 100.0)
-        bad_day_exposures = np.zeros((1, 7, 3600, 40))
-
-        hi_l1c_data = [
-            create_dataclass_mock(InputRectangularPointingSet, exposure_times=good_day_exposures.copy()),
-            create_dataclass_mock(InputRectangularPointingSet, exposure_times=bad_day_exposures.copy()),
-            create_dataclass_mock(InputRectangularPointingSet, exposure_times=good_day_exposures.copy()),
-            create_dataclass_mock(InputRectangularPointingSet, exposure_times=bad_day_exposures.copy())
-        ]
-
-        filtered_psets = filter_bad_days(hi_l1c_data)
-
-        self.assertEqual([hi_l1c_data[0], hi_l1c_data[2]], filtered_psets)
-
     @patch("imap_l3_processing.utils.spiceypy")
     def test_furnish_local_spice(self, mock_spiceypy):
         mock_spiceypy.kdata.side_effect = [
@@ -557,7 +513,7 @@ class TestUtils(TestCase):
 
             fake_imap_data_access_config = {"DATA_DIR": mock_data_dir, "DATA_ACCESS_URL": mock_data_access_url}
             with patch.object(imap_data_access, "config", new=fake_imap_data_access_config):
-                actual_output = furnish_spice_metakernel(start_date, end_date, kernel_types)
+                actual_output = furnish_spice_metakernel(start_date, end_date, kernel_types, metakernel_file_name="metakernel_file.txt")
 
                 expected_request_params = {
                     "file_types": ["leapseconds", "imap_frames"],
@@ -577,7 +533,7 @@ class TestUtils(TestCase):
                     call('imap_001.tf')
                 ])
 
-                expected_metakernel_path = mock_data_dir / "metakernel" / "metakernel.txt"
+                expected_metakernel_path = mock_data_dir / "metakernel" / "metakernel_file.txt"
                 self.assertEqual(metakernel_bytes, expected_metakernel_path.read_bytes())
 
                 mock_spiceypy.furnsh.assert_called_once_with(str(expected_metakernel_path))
@@ -677,3 +633,12 @@ class TestUtils(TestCase):
 
         self.assertEqual(None, ancillary_file_version.major)
         self.assertEqual(3, ancillary_file_version.minor)
+
+    def test_get_cache_directory(self):
+        cache_temp_dir = get_temp_cache_dir()
+        self.assertIsInstance(cache_temp_dir, Path)
+        second_cache_temp_dir = get_temp_cache_dir()
+        self.assertEqual(cache_temp_dir, second_cache_temp_dir)
+
+        self.assertTrue(cache_temp_dir.is_relative_to(Path(tempfile.gettempdir())))
+

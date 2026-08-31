@@ -562,41 +562,67 @@ class TestHitProcessor(TestCase):
         np.testing.assert_array_equal(direct_event_product.culling_flag, np.array([True, True, False]))
 
         self.assertEqual((3, 64), direct_event_product.pha_value.shape)
-        expected_values = {(0, pha_word_1.detector.address): (
-            pha_word_1.adc_value, event_output_1.energies[0], pha_word_1.is_low_gain),
+        expected_values = {
+            (0, pha_word_1.detector.address): (
+                pha_word_1.adc_value,
+                event_output_1.energies[0],
+                pha_word_1.is_low_gain,
+            ),
             (1, pha_word_1.detector.address): (
-                pha_word_1.adc_value, event_output_2.energies[0], pha_word_1.is_low_gain),
+                pha_word_1.adc_value,
+                event_output_2.energies[0],
+                pha_word_1.is_low_gain,
+            ),
             (2, pha_word_2.detector.address): (
-                pha_word_2.adc_value, event_output_3.energies[0], pha_word_2.is_low_gain),
+                pha_word_2.adc_value,
+                event_output_3.energies[0],
+                pha_word_2.is_low_gain,
+            ),
             (2, pha_word_3.detector.address): (
-                pha_word_3.adc_value, event_output_3.energies[1], pha_word_3.is_low_gain)}
+                pha_word_3.adc_value,
+                event_output_3.energies[1],
+                pha_word_3.is_low_gain,
+            ),
+        }
 
         mask = np.full_like(direct_event_product.pha_value, True, dtype=bool)
         for idx, (adc_val, energy, is_low_gain) in expected_values.items():
-            np.testing.assert_array_equal(direct_event_product.pha_value[idx], adc_val,
-                                          err_msg=f"Did not match at index {idx}")
+            np.testing.assert_array_equal(
+                direct_event_product.pha_value[idx],
+                adc_val,
+                err_msg=f"Did not match at index {idx}",
+            )
             np.testing.assert_array_equal(direct_event_product.energy_at_detector[idx], energy,
                                           err_msg=f"Did not match at index {idx}")
             np.testing.assert_array_equal(direct_event_product.is_low_gain[idx], is_low_gain,
                                           err_msg=f"Did not match at index {idx}")
             mask[idx] = False
 
-        self.assertTrue(np.all(direct_event_product.pha_value[mask] == UNSIGNED_INT2_FILL_VALUE))
+        self.assertTrue(
+            np.all(direct_event_product.pha_value[mask] == UNSIGNED_INT2_FILL_VALUE)
+        )
         self.assertTrue(np.all(np.isnan(direct_event_product.energy_at_detector[mask])))
         self.assertTrue(np.all(direct_event_product.is_low_gain[mask] == False))
 
-        np.testing.assert_array_equal(direct_event_product.detector_flags,
-                                      np.array([UNSIGNED_INT2_FILL_VALUE, UNSIGNED_INT2_FILL_VALUE, 2]))
+        np.testing.assert_array_equal(
+            direct_event_product.detector_flags,
+            np.array([UNSIGNED_INT2_FILL_VALUE, UNSIGNED_INT2_FILL_VALUE, 2]),
+        )
         np.testing.assert_array_equal(direct_event_product.deindex,
                                       np.array([UNSIGNED_INT2_FILL_VALUE, UNSIGNED_INT2_FILL_VALUE, 2]))
-        np.testing.assert_array_equal(direct_event_product.epindex,
-                                      np.array([UNSIGNED_INT2_FILL_VALUE, UNSIGNED_INT2_FILL_VALUE, True]))
-        np.testing.assert_array_equal(direct_event_product.stim_gain, np.array([False, False, True]))
+        np.testing.assert_array_equal(
+            direct_event_product.epindex,
+            np.array([UNSIGNED_INT2_FILL_VALUE, UNSIGNED_INT2_FILL_VALUE, True]),
+        )
+        np.testing.assert_array_equal(
+            direct_event_product.stim_gain, np.array([False, False, True])
+        )
         np.testing.assert_array_equal(direct_event_product.a_l_stim, np.array([False, False, True]))
         np.testing.assert_array_equal(direct_event_product.stim_step,
                                       np.array([UNSIGNED_INT1_FILL_VALUE, UNSIGNED_INT1_FILL_VALUE, 1]))
         np.testing.assert_array_equal(direct_event_product.dac_value,
                                       np.array([UNSIGNED_INT2_FILL_VALUE, UNSIGNED_INT2_FILL_VALUE, 123]))
+        np.testing.assert_array_equal(direct_event_product.hit_flags, np.zeros_like(direct_event_product.epoch, dtype=np.uint16), strict=True)
 
     @patch("imap_l3_processing.hit.l3.hit_processor.PHAEventReader.read_all_pha_events")
     @patch("imap_l3_processing.hit.l3.hit_processor.process_pha_event", autospec=True)

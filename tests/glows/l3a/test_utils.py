@@ -117,38 +117,53 @@ class TestUtils(unittest.TestCase):
             self.assertEqual("2013-09-08 08:52:14", result.start_time)
             self.assertEqual("2013-09-09 04:58:14", result.end_time)
 
-            self.assertEqual((1, 65), result.spin_angle.shape)
+            self.assertEqual((1, 90), result.spin_angle.shape)
             self.assertEqual(2.000, result.spin_angle[0, 0])
 
-            self.assertEqual((1, 65), result.spin_angle_delta.shape)
+            self.assertEqual((1, 90), result.spin_angle_delta.shape)
             self.assertEqual(expected_spin_delta, result.spin_angle_delta[0, 0])
 
-            self.assertEqual((1, 65), result.photon_flux.shape)
+            self.assertEqual((1, 90), result.photon_flux.shape)
             self.assertEqual(620.9, result.photon_flux[0, 0])
 
-            self.assertEqual((1, 65), result.raw_histogram.shape)
+            self.assertEqual((1, 90), result.raw_histogram.shape)
             self.assertEqual(498484, result.raw_histogram[0, 0])
 
-            self.assertEqual((1, 65), result.exposure_times.shape)
+            self.assertEqual((1, 90), result.exposure_times.shape)
             self.assertEqual(8.028e+02, result.exposure_times[0, 0])
 
             self.assertEqual(1, len(result.epoch_delta))
             self.assertEqual(72360 / 2 * 1e9, result.epoch_delta[0])
 
-            self.assertEqual((1, 65), result.photon_flux_uncertainty.shape)
+            self.assertEqual((1, 90), result.photon_flux_uncertainty.shape)
             self.assertEqual(8.795e-01, result.photon_flux_uncertainty[0, 0])
 
-            self.assertEqual((1, 65), result.longitude.shape)
+            self.assertEqual((1, 90), result.longitude.shape)
             self.assertEqual(154.671, result.longitude[0, 0])
 
-            self.assertEqual((1, 65), result.latitude.shape)
+            self.assertEqual((1, 90), result.latitude.shape)
             self.assertEqual(74.870, result.latitude[0, 0])
 
-            self.assertEqual((1, 65), result.extra_heliospheric_background.shape)
+            self.assertEqual((1, 90), result.extra_heliospheric_background.shape)
             self.assertEqual(1.23, result.extra_heliospheric_background[0, 10])
 
-            self.assertEqual((1, 65), result.time_dependent_background.shape)
+            self.assertEqual((1, 90), result.time_dependent_background.shape)
             self.assertEqual(1.66, result.time_dependent_background[0, 15])
+
+            for values in (
+                result.spin_angle,
+                result.spin_angle_delta,
+                result.photon_flux,
+                result.photon_flux_uncertainty,
+                result.exposure_times,
+                result.longitude,
+                result.latitude,
+                result.extra_heliospheric_background,
+                result.time_dependent_background,
+            ):
+                np.testing.assert_array_equal(np.isnan(values[0, 65:]), True)
+            np.testing.assert_array_equal(result.raw_histogram.mask[0, :65], False)
+            np.testing.assert_array_equal(result.raw_histogram.mask[0, 65:], True)
 
             self.assertEqual(input_metadata, result.input_metadata)
 

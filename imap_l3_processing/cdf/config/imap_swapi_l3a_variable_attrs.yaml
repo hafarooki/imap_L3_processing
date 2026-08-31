@@ -689,6 +689,7 @@ swp_flags:
     Bit 2: Bad fit: fitting resulted in invalid values or large residuals.
     Bit 3: Fit error: fit failed to complete.
     Bit 4: preliminary MAG L1D was used for acquiring the magnetic field direction instead of the nominal MAG L2 product.
+    Bit 15: indicates predictive ephemeris was used instead of reconstructed ephemeris.
     All other bits are reserved.
 velocity_rtn_label:
   NAME: velocity_rtn_label

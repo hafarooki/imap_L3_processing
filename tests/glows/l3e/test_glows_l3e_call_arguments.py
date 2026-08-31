@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from imap_l3_processing.glows.l3e.glows_l3e_call_arguments import GlowsL3eCallArguments
+from imap_l3_processing.glows.l3e.glows_l3e_call_arguments import GlowsL3eCallArguments, GlowsL3eSpacecraftInfo
 
 
 class TestGlowsL3eCallArguments(unittest.TestCase):
@@ -12,14 +12,16 @@ class TestGlowsL3eCallArguments(unittest.TestCase):
             elongation=80.0001,
             decimal_date="2024.0001",
             formatted_date="20240101",
-            spacecraft_radius=np.float32(987),
-            spin_axis_latitude=np.float32(.01234),
-            spin_axis_longitude=np.float32(87.11213),
-            spacecraft_latitude=np.float32(1.134141),
-            spacecraft_longitude=np.float32(84.12314),
-            spacecraft_velocity_x=np.float32(1.23143),
-            spacecraft_velocity_y=np.float32(12.34141),
-            spacecraft_velocity_z=np.float32(123)
+            spacecraft_info=GlowsL3eSpacecraftInfo(
+                spacecraft_radius=np.float32(987),
+                spin_axis_latitude=np.float32(.01234),
+                spin_axis_longitude=np.float32(87.11213),
+                spacecraft_latitude=np.float32(1.134141),
+                spacecraft_longitude=np.float32(84.12314),
+                spacecraft_velocity_x=np.float32(1.23143),
+                spacecraft_velocity_y=np.float32(12.34141),
+                spacecraft_velocity_z=np.float32(123),
+            )
         )
 
         call_args_list = glows_l3e_call_arguments.to_argument_list()

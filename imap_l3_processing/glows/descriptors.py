@@ -24,8 +24,10 @@ PIPELINE_SETTINGS_L3BCDE_DESCRIPTOR = "pipeline-settings-l3bcde"
 GLOWS_L3E_HI_45_DESCRIPTOR = 'survival-probability-hi-45'
 GLOWS_L3E_HI_90_DESCRIPTOR = 'survival-probability-hi-90'
 GLOWS_L3E_LO_DESCRIPTOR = 'survival-probability-lo'
-GLOWS_L3E_ULTRA_SF_DESCRIPTOR = 'survival-probability-ul-sf'
-GLOWS_L3E_ULTRA_HF_DESCRIPTOR = 'survival-probability-ul-hf'
+GLOWS_L3E_ULTRA_SF_DESCRIPTOR = "survival-probability-ul-sf"
+GLOWS_L3E_ULTRA_HF_DESCRIPTOR = "survival-probability-ul-hf"
+
+GLOWS_REPROCESSING_DESCRIPTOR = "force-reprocessing-config"
 
 GLOWS_L3BCDE_DESCRIPTORS = [
     GLOWS_L3B_DESCRIPTOR,

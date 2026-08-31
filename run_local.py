@@ -69,8 +69,14 @@ from imap_l3_processing.swapi.swapi_processor import SwapiProcessor
 from imap_l3_processing.swe.l3.swe_l3_dependencies import SweL3Dependencies
 from imap_l3_processing.swe.swe_processor import SweProcessor
 from imap_l3_processing.ultra.models import UltraL1CPSet, UltraGlowsL3eData
-from imap_l3_processing.ultra.ultra_l3_dependencies import UltraL3Dependencies, UltraL3SpectralIndexDependencies
-from imap_l3_processing.ultra.ultra_processor import UltraProcessor
+from imap_l3_processing.ultra.ultra_l3_dependencies import (
+    UltraL3Dependencies,
+    UltraL3SpectralIndexDependencies,
+)
+from imap_l3_processing.ultra.ultra_processor import (
+    UltraProcessor,
+    correct_healpix_data_for_survival_probability,
+)
 from imap_l3_processing.utils import save_data, read_mag_data, furnish_local_spice
 from scripts.codice.create_fake_efficiency_ancillary import create_efficiency_lookup
 from scripts.codice.create_more_accurate_l3a_direct_event import create_more_accurate_l3a_direct_events_cdf
@@ -1209,7 +1215,7 @@ if __name__ == "__main__":
                 l3e_glows_paths
             )
 
-            healpix_sp_corrected_data = processor._process_survival_probability(deps=dependencies,
+            healpix_sp_corrected_data = correct_healpix_data_for_survival_probability(deps=dependencies,
                                                                                 spice_frame_name=SpiceFrame.IMAP_HAE)
             rectangular_sp_data_product = processor._process_healpix_intensity_to_rectangular(healpix_sp_corrected_data,
                                                                                               spacing_degree,

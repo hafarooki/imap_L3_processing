@@ -2,3 +2,10 @@ imap_glows_l3b_ion-rate-profile:
   Data_level: "3b"
   Data_type: L3B_ion-rate-profile>Level-3B Ion Rate Profile
   Logical_source_description: IMAP Mission GLOWS Carrington averaged ionization rate profiles
+  MODS:
+    - >-
+      Major version 2: Use CR midpoint as `epoch` and a single `epoch_delta` variable instead of
+      `epoch_delta_minus`/`epoch_delta_plus`.
+      Add new `mean_time` variable.
+      Remove `lat_grid_delta` to support plotting.
+      Pad `used_l3a` to 50 entries.

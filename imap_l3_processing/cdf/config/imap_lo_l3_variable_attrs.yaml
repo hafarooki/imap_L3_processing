@@ -785,3 +785,27 @@ survival_probability:
   LABL_PTR_2: longitude_label
   LABL_PTR_3: latitude_label
   SCALETYP: linear
+quality_flags:
+  NAME: quality_flags
+  DATA_TYPE: CDF_UINT2
+  CATDESC: "Quality flags for Lo (caution required if nonzero)"
+  DEPEND_0: epoch
+  DEPEND_1: energy
+  DEPEND_2: longitude
+  DEPEND_3: latitude
+  VAR_TYPE: data
+  RECORD_VARYING: RV
+  DISPLAY_TYPE: map_image
+  SCALETYP: linear
+  FIELDNAM: Quality Flags for Lo
+  FORMAT: I5
+  UNITS: '0: okay; nonzero: caution'
+  VALIDMIN: 0
+  VALIDMAX: 65534
+  FILLVAL: 65535
+  LABLAXIS: Quality flags for Lo
+  VAR_NOTES: >-
+    Each bit corresponds to a specific potential concern. See release notes for details.
+    Bit 2: Survival probability was calculated using a nominal Solar wind alpha/proton density ratio.
+    Bit 3: Survival probability was calculated from GLOWS L3d data that was repeated from previous CRs. 
+    Bit 15: Survival probability calculated using predicted ephemeris.

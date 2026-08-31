@@ -1,7 +1,7 @@
 epoch:
   NAME: epoch
   DATA_TYPE: CDF_TIME_TT2000
-  CATDESC: Mean time of lightcurve data, number of nanoseconds since J2000 with leap seconds
+  CATDESC: Time, number of nanoseconds since J2000 with leap seconds included for center of CR
   VAR_TYPE: support_data
   RECORD_VARYING: RV
   FIELDNAM: Epoch
@@ -14,13 +14,13 @@ epoch:
   SCALETYP: linear
   TIME_BASE: J2000
   TIME_SCALE: TT
-  DELTA_PLUS_VAR: epoch_delta_plus
-  DELTA_MINUS_VAR: epoch_delta_minus
+  DELTA_PLUS_VAR: epoch_delta
+  DELTA_MINUS_VAR: epoch_delta
   MONOTON: INCREASE
   REFERENCE_POSITION: Rotating Earth Geoid
   SI_CONVERSION: 1e-9>seconds
-epoch_delta_plus:
-  NAME: epoch_delta_plus
+epoch_delta:
+  NAME: epoch_delta
   DATA_TYPE: CDF_INT8
   CATDESC: Time bin of half a carrington rotation
   DEPEND_0: epoch
@@ -34,21 +34,26 @@ epoch_delta_plus:
   VALIDMAX: 2592000000000000
   FILLVAL: -9223372036854775808
   SCALETYP: linear
-epoch_delta_minus:
-  NAME: epoch_delta_minus
-  DATA_TYPE: CDF_INT8
-  CATDESC: Time bin of half a carrington rotation
+mean_time:
+  NAME: mean_time
+  DATA_TYPE: CDF_TIME_TT2000
+  CATDESC: Mean time of lightcurve data, number of nanoseconds since J2000 with leap seconds
   DEPEND_0: epoch
   VAR_TYPE: support_data
   RECORD_VARYING: RV
-  FIELDNAM: Epoch Delta
-  FORMAT: I19
-  LABLAXIS: Epoch delta
+  FIELDNAM: Mean Time
+  FORMAT: ' '
+  LABLAXIS: Mean Time
   UNITS: ns
-  VALIDMIN: 0
-  VALIDMAX: 2592000000000000
-  FILLVAL: -9223372036854775808
+  VALIDMIN: 2010-01-01T00:00:00.000000000
+  VALIDMAX: 2099-12-31T00:00:00.000000000
+  FILLVAL: 9999-12-31T23:59:59.999999999
   SCALETYP: linear
+  TIME_BASE: J2000
+  TIME_SCALE: TT
+  MONOTON: INCREASE
+  REFERENCE_POSITION: Rotating Earth Geoid
+  SI_CONVERSION: 1e-9>seconds
 cr:
   NAME: cr
   DATA_TYPE: CDF_INT2
@@ -70,6 +75,7 @@ uv_anisotropy_factor:
   CATDESC: UV anisotropy factor
   DEPEND_0: epoch
   DEPEND_1: lat_grid
+  VAR_NOTES: "Calculated directly at the grid point; not integrated over space."
   VAR_TYPE: support_data
   RECORD_VARYING: RV
   FIELDNAM: UV Anisotropy Factor
@@ -97,28 +103,13 @@ lat_grid:
   FILLVAL: -1.00E+31
   LABL_PTR_1: lat_grid_label
   SCALETYP: linear
-  DELTA_PLUS_VAR: lat_grid_delta
-  DELTA_MINUS_VAR: lat_grid_delta
-lat_grid_delta:
-  NAME: lat_grid_delta
-  DATA_TYPE: CDF_FLOAT
-  CATDESC: Latitudinal grid delta
-  VAR_TYPE: support_data
-  RECORD_VARYING: NRV
-  FIELDNAM: Latitude Grid Delta
-  FORMAT: F9.3
-  LABLAXIS: Lat grid delta
-  UNITS: degrees
-  VALIDMIN: 0
-  VALIDMAX: 90
-  FILLVAL: -1.00E+31
-  SCALETYP: linear
 sum_rate:
   NAME: sum_rate
   DATA_TYPE: CDF_FLOAT
   CATDESC: Averaged ionization rate profile obtained from lightcurve
   DEPEND_0: epoch
   DEPEND_1: lat_grid
+  VAR_NOTES: "Calculated directly at the grid point; not integrated over space."
   VAR_TYPE: data
   RECORD_VARYING: RV
   DISPLAY_TYPE: spectrogram
@@ -141,6 +132,7 @@ ph_rate:
   CATDESC: Averaged photoionization rate profile
   DEPEND_0: epoch
   DEPEND_1: lat_grid
+  VAR_NOTES: "Calculated directly at the grid point; not integrated over space."
   VAR_TYPE: data
   RECORD_VARYING: RV
   DISPLAY_TYPE: spectrogram
@@ -163,6 +155,7 @@ cx_rate:
   CATDESC: Averaged charge exchange rate profile (stationary atom approximation)
   DEPEND_0: epoch
   DEPEND_1: lat_grid
+  VAR_NOTES: "Calculated directly at the grid point; not integrated over space."
   VAR_TYPE: data
   RECORD_VARYING: RV
   DISPLAY_TYPE: spectrogram
@@ -185,6 +178,7 @@ sum_uncert:
   CATDESC: Averaged ionization rate profile uncertainty
   DEPEND_0: epoch
   DEPEND_1: lat_grid
+  VAR_NOTES: "Calculated directly at the grid point; not integrated over space."
   VAR_TYPE: support_data
   RECORD_VARYING: RV
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
@@ -202,6 +196,7 @@ ph_uncert:
   CATDESC: Averaged photoionization rate profile uncertainty
   DEPEND_0: epoch
   DEPEND_1: lat_grid
+  VAR_NOTES: "Calculated directly at the grid point; not integrated over space."
   VAR_TYPE: support_data
   RECORD_VARYING: RV
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
@@ -219,6 +214,7 @@ cx_uncert:
   CATDESC: Averaged charge exchange rate profile uncertainty
   DEPEND_0: epoch
   DEPEND_1: lat_grid
+  VAR_NOTES: "Calculated directly at the grid point; not integrated over space."
   VAR_TYPE: support_data
   RECORD_VARYING: RV
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY

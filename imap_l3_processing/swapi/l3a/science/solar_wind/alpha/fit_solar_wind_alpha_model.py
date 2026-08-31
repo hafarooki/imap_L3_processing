@@ -39,7 +39,7 @@ class AlphaSolarWindFitResult:
     temperature: UFloat  # K
     velocity_rtn: tuple[UFloat, UFloat, UFloat]  # km/s, [R, T, N]; correlated
     delta_v: UFloat  # km/s, signed; +Δv ⇔ alpha drifts along +B̂ vs proton frame
-    bad_fit_flag: int
+    quality_flag: int
 
     def velocity_rtn_nominal(self) -> ndarray:
         return np.array([v.nominal_value for v in self.velocity_rtn])
@@ -60,7 +60,7 @@ def fit_solar_wind_alpha_model(
             f"{alpha_ctx.count_rate.shape}"
         )
 
-    bad_fit_flag = int(proton_moments.bad_fit_flag)
+    bad_fit_flag = int(proton_moments.quality_flag)
     proton_bulk_rtn = proton_moments.velocity_rtn_nominal()
 
     if not np.all(np.isfinite(proton_bulk_rtn)):
@@ -133,7 +133,7 @@ def _nan_alpha_fit_result(flag: int) -> AlphaSolarWindFitResult:
         temperature=nan,
         velocity_rtn=(nan, nan, nan),
         delta_v=nan,
-        bad_fit_flag=int(flag),
+        quality_flag=int(flag),
     )
 
 
@@ -182,7 +182,7 @@ def _construct_alpha_fit_result(
             velocity_rtn, velocity_covariance_rtn
         ),
         delta_v=ufloat(delta_v_fit, delta_v_sigma),
-        bad_fit_flag=int(bad_fit_flag),
+        quality_flag=int(bad_fit_flag),
     )
 
 

@@ -3,6 +3,8 @@ from astropy.time import Time
 import json
 import glob
 import toolkit.funcs as fun
+
+from imap_l3_processing.glows.quality_flags import GlowsL3Flags
 from .constants import VERSION
 from dataclasses import dataclass
 
@@ -492,7 +494,7 @@ class SolarParamsHistory():
         self.flags['uv-anis']=np.append(self.flags['uv-anis'],self.settings['l3d_source_flags']['freezed'])
         self.flags['speed']=np.append(self.flags['speed'],self.settings['l3d_source_flags']['freezed'])
         self.flags['p-dens']=np.append(self.flags['p-dens'],self.settings['l3d_source_flags']['freezed'])
-        self.glows_flags=np.append(self.glows_flags,self.glows_flags[-1])
+        self.glows_flags=np.append(self.glows_flags, self.glows_flags[-1] | GlowsL3Flags.PERSISTED_LAST_POINT)
 
 
     def _freeze_lya_data(self):

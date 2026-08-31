@@ -39,7 +39,7 @@ class ProtonSolarWindFitResult:
     density: UFloat  # cm^-3
     temperature: UFloat  # K
     velocity_rtn: tuple[UFloat, UFloat, UFloat]  # km/s, [R, T, N]; correlated
-    bad_fit_flag: int
+    quality_flag: int
 
     def velocity_rtn_nominal(self) -> ndarray:
         return np.array([v.nominal_value for v in self.velocity_rtn])
@@ -81,7 +81,7 @@ def _construct_fit_result(final_result, ctx):
         density=density,
         temperature=temperature,
         velocity_rtn=velocity_rtn,
-        bad_fit_flag=int(SwapiL3Flags.NONE),
+        quality_flag=int(SwapiL3Flags.NONE),
     )
 
 
@@ -91,7 +91,7 @@ def _nan_proton_fit_result(bad_fit_flag: int) -> ProtonSolarWindFitResult:
         density=nan,
         temperature=nan,
         velocity_rtn=(nan, nan, nan),
-        bad_fit_flag=bad_fit_flag,
+        quality_flag=bad_fit_flag,
     )
 
 

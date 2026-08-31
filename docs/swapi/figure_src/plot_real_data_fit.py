@@ -541,7 +541,7 @@ def _print_fit(result, sc_velocity_rtn: np.ndarray):
         f"v_RTN_sun=[{v_sun_nom[0]:7.2f}±{v_sc[0].std_dev:.2f}, "
         f"{v_sun_nom[1]:6.2f}±{v_sc[1].std_dev:.2f}, "
         f"{v_sun_nom[2]:6.2f}±{v_sc[2].std_dev:.2f}], "
-        f"bad_fit={int(fit.bad_fit_flag)}"
+        f"bad_fit={int(fit.quality_flag)}"
     )
 
 

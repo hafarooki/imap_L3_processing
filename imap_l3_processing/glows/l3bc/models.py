@@ -13,7 +13,7 @@ import imap_data_access
 import numpy as np
 from spacepy import pycdf
 
-from imap_l3_processing.constants import TEMP_CDF_FOLDER_PATH
+from imap_l3_processing.constants import TEMP_CDF_FOLDER_PATH, ONE_SECOND_IN_NANOSECONDS
 from imap_l3_processing.glows.l3bc.dependency_validator import validate_dependencies
 from imap_l3_processing.glows.l3bc.utils import get_date_range_of_cr
 from imap_l3_processing.models import DataProduct, DataProductVariable, InputMetadata
@@ -22,6 +22,7 @@ from imap_l3_processing.utils import download_external_dependency
 F107_FLUX_TABLE_URL = "https://www.spaceweather.gc.ca/solar_flux_data/daily_flux_values/fluxtable.txt"
 LYMAN_ALPHA_COMPOSITE_INDEX_URL = "https://lasp.colorado.edu/data/timed_see/composite_lya/lyman_alpha_composite.nc"
 OMNI2_URL = "https://spdf.gsfc.nasa.gov/pub/data/omni/low_res_omni/omni2_all_years.dat"
+MAX_USED_L3A_FILES = 50
 
 
 @dataclass
@@ -132,12 +133,11 @@ def read_pipeline_settings(pipeline_settings_file_path: Path) -> dict:
 @dataclass
 class GlowsL3BIonizationRate(DataProduct):
     epoch: np.ndarray[datetime]
-    epoch_delta_plus: np.ndarray[int]
-    epoch_delta_minus: np.ndarray[int]
+    epoch_delta: np.ndarray[int]
+    mean_time: np.ndarray[datetime]
     cr: np.ndarray[float]
     uv_anisotropy_factor: np.ndarray[float]
     lat_grid: np.ndarray[float]
-    lat_grid_delta: np.ndarray[float]
     sum_rate: np.ndarray[float]
     ph_rate: np.ndarray[float]
     cx_rate: np.ndarray[float]
@@ -151,12 +151,11 @@ class GlowsL3BIonizationRate(DataProduct):
 
     def to_data_product_variables(self) -> list[DataProductVariable]:
         return [DataProductVariable("epoch", self.epoch),
-                DataProductVariable("epoch_delta_plus", self.epoch_delta_plus),
-                DataProductVariable("epoch_delta_minus", self.epoch_delta_minus),
+                DataProductVariable("epoch_delta", self.epoch_delta),
+                DataProductVariable("mean_time", self.mean_time),
                 DataProductVariable("cr", self.cr),
                 DataProductVariable("uv_anisotropy_factor", self.uv_anisotropy_factor),
                 DataProductVariable("lat_grid", self.lat_grid),
-                DataProductVariable("lat_grid_delta", self.lat_grid_delta),
                 DataProductVariable("sum_rate", self.sum_rate),
                 DataProductVariable("ph_rate", self.ph_rate),
                 DataProductVariable("cx_rate", self.cx_rate),
@@ -174,12 +173,20 @@ class GlowsL3BIonizationRate(DataProduct):
         latitude_grid = model["ion_rate_profile"]["lat_grid"]
         mean_time = datetime.fromisoformat(model["date"])
         start_of_cr, end_of_cr = get_date_range_of_cr(model["CR"])
+        mid_time = start_of_cr + ((end_of_cr - start_of_cr) / 2)
 
-        epoch = mean_time
-        epoch_delta_plus = (end_of_cr - mean_time).total_seconds() * 1e9
-        epoch_delta_minus = (mean_time - start_of_cr).total_seconds() * 1e9
+        epoch = mid_time
+        epoch_delta = (end_of_cr - mid_time).total_seconds() * ONE_SECOND_IN_NANOSECONDS
 
         l3a_file_names = [Path(f).name for f in model["header"]["l3a_input_files_name"]]
+        if len(l3a_file_names) > MAX_USED_L3A_FILES:
+            raise ValueError(
+                f"GLOWS L3b referenced L3a files ({len(l3a_file_names)}) exceed "
+                f"the allowed maximum ({MAX_USED_L3A_FILES})."
+            )
+
+        # Pad the CDF used_l3a length to a fixed size.
+        l3a_file_names += [""] * (MAX_USED_L3A_FILES - len(l3a_file_names))
 
         parent_file_names = []
         parent_file_names += collect_file_names(model['header']['ancillary_data_files'])
@@ -188,12 +195,11 @@ class GlowsL3BIonizationRate(DataProduct):
             input_metadata=input_metadata,
             parent_file_names=parent_file_names,
             epoch=np.array([epoch]),
-            epoch_delta_plus=np.array([epoch_delta_plus]),
-            epoch_delta_minus=np.array([epoch_delta_minus]),
+            epoch_delta=np.array([epoch_delta]),
+            mean_time=np.array([mean_time]),
             cr=np.array([model["CR"]]),
             uv_anisotropy_factor=np.array([model["uv_anisotropy_factor"]]),
             lat_grid=np.array(latitude_grid),
-            lat_grid_delta=np.zeros(len(latitude_grid)),
             sum_rate=np.array([model["ion_rate_profile"]["sum_rate"]]),
             ph_rate=np.array([model["ion_rate_profile"]["ph_rate"]]),
             cx_rate=np.array([model["ion_rate_profile"]["cx_rate"]]),
@@ -217,11 +223,10 @@ class GlowsL3BCProcessorOutput:
 @dataclass
 class GlowsL3CSolarWind(DataProduct):
     epoch: np.ndarray[datetime]
-    epoch_delta_plus: np.ndarray[int]
-    epoch_delta_minus: np.ndarray[int]
+    epoch_delta: np.ndarray[int]
+    mean_time: np.ndarray[datetime]
     cr: np.ndarray[float]
     lat_grid: np.ndarray[float]
-    lat_grid_delta: np.ndarray[float]
     lat_grid_label: list[str]
     plasma_speed_ecliptic: np.ndarray[float]
     proton_density_ecliptic: np.ndarray[float]
@@ -233,12 +238,10 @@ class GlowsL3CSolarWind(DataProduct):
     def to_data_product_variables(self) -> list[DataProductVariable]:
         return [
             DataProductVariable("epoch", self.epoch, cdf_data_type=pycdf.const.CDF_TIME_TT2000),
-            DataProductVariable("epoch_delta_plus", self.epoch_delta_plus, cdf_data_type=pycdf.const.CDF_INT8),
-            DataProductVariable("epoch_delta_minus", self.epoch_delta_minus, cdf_data_type=pycdf.const.CDF_INT8),
+            DataProductVariable("epoch_delta", self.epoch_delta, cdf_data_type=pycdf.const.CDF_INT8),
+            DataProductVariable("mean_time", self.mean_time, cdf_data_type=pycdf.const.CDF_TIME_TT2000),
             DataProductVariable("cr", self.cr, cdf_data_type=pycdf.const.CDF_INT2),
             DataProductVariable("lat_grid", self.lat_grid, cdf_data_type=pycdf.const.CDF_FLOAT, record_varying=False),
-            DataProductVariable("lat_grid_delta", self.lat_grid_delta, cdf_data_type=pycdf.const.CDF_FLOAT,
-                                record_varying=False),
             DataProductVariable("lat_grid_label", self.lat_grid_label, cdf_data_type=pycdf.const.CDF_CHAR,
                                 record_varying=False),
             DataProductVariable("plasma_speed_ecliptic", self.plasma_speed_ecliptic,
@@ -259,9 +262,8 @@ class GlowsL3CSolarWind(DataProduct):
         mean_time = datetime.fromisoformat(model["date"])
         start_of_cr, end_of_cr = get_date_range_of_cr(model["CR"])
 
-        epoch = mean_time
-        epoch_delta_plus = (end_of_cr - mean_time).total_seconds() * 1e9
-        epoch_delta_minus = (mean_time - start_of_cr).total_seconds() * 1e9
+        epoch = start_of_cr + (end_of_cr - start_of_cr)/2
+        epoch_delta = (epoch - start_of_cr).total_seconds()*ONE_SECOND_IN_NANOSECONDS
 
         parent_file_names = []
         parent_file_names += collect_file_names(model['header']['ancillary_data_files'])
@@ -269,11 +271,10 @@ class GlowsL3CSolarWind(DataProduct):
         return cls(
             input_metadata=input_metadata,
             epoch=np.array([epoch]),
-            epoch_delta_plus=np.array([epoch_delta_plus]),
-            epoch_delta_minus=np.array([epoch_delta_minus]),
+            epoch_delta=np.array([epoch_delta]),
+            mean_time=np.array([mean_time]),
             cr=np.array([model['CR']]),
             lat_grid=np.array(latitude_grid),
-            lat_grid_delta=np.zeros(len(latitude_grid)),
             lat_grid_label=[f"{x}°" for x in latitude_grid],
             plasma_speed_ecliptic=np.array([model["solar_wind_ecliptic"]['plasma_speed']]),
             proton_density_ecliptic=np.array([model["solar_wind_ecliptic"]['proton_density']]),

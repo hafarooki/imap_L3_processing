@@ -12,7 +12,6 @@ float_data: &float_data
 species_3d_distribution: &species_3d_distribution
   <<: *float_data
   UNITS: "#/(cm^2-s-sr-keV/q)"
-  VAR_TYPE: data
   DISPLAY_TYPE: spectrogram
   RECORD_VARYING: RV
   SCALETYP: linear
@@ -23,7 +22,6 @@ species_3d_distribution: &species_3d_distribution
   LABL_PTR_1: energy_label
   LABL_PTR_2: spin_angle_label
   LABL_PTR_3: elevation_label
-  VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
 
 epoch:
   NAME: epoch
@@ -149,6 +147,18 @@ heplusplus:
   CATDESC: He++ Intensity 3d distribution
   FIELDNAM: He++ Intensity
   LABLAXIS: He++ Intensity
+  DELTA_PLUS_VAR: heplusplus_stat_uncert
+  DELTA_MINUS_VAR: heplusplus_stat_uncert
+  VAR_TYPE: data
+  VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
+
+heplusplus_stat_uncert:
+  <<: *species_3d_distribution
+  NAME: heplusplus_stat_uncert
+  CATDESC: He++ Intensity 3d distribution statistical uncertainty
+  FIELDNAM: He++ Intensity Statistical Uncertainty
+  LABLAXIS: He++ Intensity Statistical Uncertainty
+  VAR_TYPE: support_data
 
 elevation_label:
   NAME: elevation_label
@@ -177,5 +187,76 @@ energy_label:
   VAR_TYPE: metadata
   FILLVAL: ' '
 
+half_spin_per_esa_step:
+  NAME: half_spin_per_esa_step
+  CATDESC: Half spin number for each step of energy
+  DEPEND_0: epoch
+  DEPEND_1: energy
+  DISPLAY_TYPE: spectrogram
+  FIELDNAM: Half Spin Number
+  DATA_TYPE: CDF_UINT1
+  FILLVAL: 255
+  FORMAT: I3
+  LABLAXIS: Half Spin Number
+  SCALETYP: linear
+  UNITS: " "
+  VALIDMIN: 0
+  VALIDMAX: 31
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+
+rgfo_spin_sector:
+  NAME: rgfo_spin_sector
+  CATDESC: Spin Sector When Reduced Gain Factor Operation (RGFO) was activated
+  DEPEND_0: epoch
+  DISPLAY_TYPE: time_series
+  FIELDNAM: RGFO Spin Sector
+  DATA_TYPE: CDF_UINT1
+  FILLVAL: 255
+  FORMAT: I3
+  LABLAXIS: RGFO Spin Sector
+  SCALETYP: linear
+  UNITS: " "
+  VALIDMIN: 0
+  VALIDMAX: 23
+  VAR_NOTES: Indicates the spin sector when Reduced Gain Factor Operation (RGFO) was activated. In RGFO, the Entrance ESA voltage is reduced in order to limit the number of ions that reach the detectors.
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
+
+rgfo_half_spin:
+  NAME: rgfo_half_spin
+  DEPEND_0: epoch
+  RECORD_VARYING: RV
+  DISPLAY_TYPE: time_series
+  CATDESC: Half Spin When Reduced Gain Factor Operation (RGFO) was activated
+  FIELDNAM: RGFO Half Spin
+  DATA_TYPE: CDF_UINT1
+  FILLVAL: 255
+  FORMAT: I3
+  LABLAXIS: RGFO Half Spin
+  SCALETYP: linear
+  UNITS: " "
+  VALIDMAX: 31
+  VALIDMIN: 0
+  VAR_NOTES: Indicates the half spin when Reduced Gain Factor Operation (RGFO) was activated. In RGFO, the Entrance ESA voltage is reduced in order to limit the number of ions that reach the detectors.
+  VAR_TYPE: support_data
+
+rgfo_esa_step:
+  NAME: rgfo_esa_step
+  CATDESC: Energy Step When Reduced Gain Factor Operation (RGFO) was activated
+  DEPEND_0: epoch
+  DISPLAY_TYPE: time_series
+  FIELDNAM: RGFO Energy Step
+  DATA_TYPE: CDF_UINT1
+  FILLVAL: 255
+  FORMAT: I3
+  LABLAXIS: RGFO Energy Step
+  SCALETYP: linear
+  UNITS: " "
+  VALIDMIN: 0
+  VALIDMAX: 127
+  VAR_NOTES: Indicates the energy step when Reduced Gain Factor Operation (RGFO) was activated. In RGFO, the Entrance ESA voltage is reduced in order to limit the number of ions that reach the detectors.
+  VAR_TYPE: support_data
+  RECORD_VARYING: RV
 
 

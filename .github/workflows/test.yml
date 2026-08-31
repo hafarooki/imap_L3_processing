@@ -1,0 +1,77 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: "${{ matrix.instrument }}::${{ matrix.suite }}"
+    # This is advisory for now and should not block pull requests
+    continue-on-error: true
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Run every test
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ['3.12']
+        instrument: [core, codice, glows, hi, hit, lo, maps, swapi, swe, ultra]
+        suite: [unit_tests, integration_tests]
+        exclude:
+          # These instruments have no integration tests (yet).
+          - instrument: core
+            suite: integration_tests
+          - instrument: hi
+            suite: integration_tests
+          - instrument: lo
+            suite: integration_tests
+          - instrument: ultra
+            suite: integration_tests
+    defaults:
+      run:
+        shell: bash
+
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # We need the full history to generate the proper version number
+          fetch-depth: 0
+          # We need to download files from git lfs
+          lfs: true
+
+      - name: Verify Docker is available
+        if: matrix.instrument == 'glows' && matrix.suite == 'integration_tests'
+        continue-on-error: true
+        run: docker version
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --extra test
+
+      - name: Run tests
+        run: |
+          if [[ "${{ matrix.suite }}" == "integration_tests" ]]; then
+            name="${{ matrix.instrument }}"
+            # the "maps" instrument's integration test file is named "test_map_...", singular
+            [[ "$name" == "maps" ]] && name="map"
+            paths=("tests/integration/test_${name}_processor_integration.py")
+          elif [[ "${{ matrix.instrument }}" == "core" ]]; then
+            paths=(tests/test_*.py tests/cdf tests/scripts)
+          else
+            paths=("tests/${{ matrix.instrument }}")
+          fi
+          uv run pytest "${paths[@]}"

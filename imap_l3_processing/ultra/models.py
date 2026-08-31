@@ -13,8 +13,12 @@ from spacepy.pycdf import CDF
 from imap_l3_processing.cdf.cdf_utils import read_numeric_variable
 from imap_l3_processing.constants import TT2000_EPOCH, ONE_SECOND_IN_NANOSECONDS
 from imap_l3_processing.glows.l3e.glows_l3e_hi_model import PROBABILITY_OF_SURVIVAL_VAR_NAME
-from imap_l3_processing.glows.l3e.glows_l3e_ultra_model import HEALPIX_INDEX_VAR_NAME, ENERGY_VAR_NAME, \
-    EPOCH_CDF_VAR_NAME
+from imap_l3_processing.glows.l3e.glows_l3e_ultra_model import (
+    HEALPIX_INDEX_VAR_NAME,
+    ENERGY_VAR_NAME,
+    EPOCH_CDF_VAR_NAME,
+    GLOWS_FLAGS_VAR_NAME,
+)
 
 
 @dataclass
@@ -24,10 +28,12 @@ class UltraGlowsL3eData:
     energy: ndarray
     healpix_index: ndarray
     survival_probability: ndarray
+    flags: ndarray
 
     @classmethod
     def read_from_path(cls, path_to_cdf: Path) -> UltraGlowsL3eData:
         repointing = ScienceFilePath(path_to_cdf).repointing
+
         with CDF(str(path_to_cdf)) as cdf:
             return UltraGlowsL3eData(
                 epoch=cdf[EPOCH_CDF_VAR_NAME][0],
@@ -35,6 +41,7 @@ class UltraGlowsL3eData:
                 energy=read_numeric_variable(cdf[ENERGY_VAR_NAME]),
                 healpix_index=cdf[HEALPIX_INDEX_VAR_NAME][...],
                 survival_probability=read_numeric_variable(cdf[PROBABILITY_OF_SURVIVAL_VAR_NAME]),
+                flags=cdf[GLOWS_FLAGS_VAR_NAME][...]
             )
 
 

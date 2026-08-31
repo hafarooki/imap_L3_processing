@@ -1,9 +1,13 @@
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Self
 
 import numpy as np
+from spacepy.pycdf import CDF
 from uncertainties.unumpy import nominal_values, std_devs
 
+from imap_l3_processing.cdf.cdf_utils import read_numeric_variable
 from imap_l3_processing.constants import (
     THIRTY_SECONDS_IN_NANOSECONDS,
     FIVE_MINUTES_IN_NANOSECONDS,
@@ -294,3 +298,31 @@ class SwapiL2Data:
     energy: np.ndarray[float]
     coincidence_count_rate: np.ndarray[float]
     coincidence_count_rate_uncertainty: np.ndarray[float]
+
+
+@dataclass
+class SwapiL3aProtonDataFromCDF:
+    l2_parent_file_name: str
+    velocity_rtn: np.ndarray
+    velocity_rtn_covariance: np.ndarray
+    density: np.ndarray
+    temperature: np.ndarray
+    quality_flags: np.ndarray
+
+    @classmethod
+    def from_file(cls, data_file:Path)-> Self:
+        with CDF(str(data_file)) as cdf:
+            l2_parent_file_name = next(parent for parent in cdf.attrs["Parents"] if parent.startswith("imap_swapi_l2_"))
+            velocity_rtn = read_numeric_variable(cdf[PROTON_SOLAR_WIND_VELOCITY_RTN_CDF_VAR_NAME])
+            velocity_rtn_covariance = read_numeric_variable(cdf[PROTON_SOLAR_WIND_VELOCITY_RTN_COVARIANCE_CDF_VAR_NAME])
+            density = read_numeric_variable(cdf[PROTON_SOLAR_WIND_DENSITY_CDF_VAR_NAME])
+            temperature = read_numeric_variable(cdf[PROTON_SOLAR_WIND_TEMPERATURE_CDF_VAR_NAME])
+            quality_flags = cdf[SWAPI_QUALITY_FLAGS_CDF_VAR_NAME][...]
+        return cls(
+            l2_parent_file_name,
+            velocity_rtn,
+            velocity_rtn_covariance,
+            density,
+            temperature,
+            quality_flags
+        )

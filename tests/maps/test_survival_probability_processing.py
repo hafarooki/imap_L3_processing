@@ -8,9 +8,13 @@ from imap_processing.spice.geometry import SpiceFrame
 
 from imap_l3_processing.maps.hilo_l3_survival_dependencies import HiLoL3SurvivalDependencies
 from imap_l3_processing.maps.map_descriptors import PixelSize, parse_map_descriptor, ReferenceFrame
-from imap_l3_processing.maps.survival_probability_processing import process_survival_probabilities
+from imap_l3_processing.maps.map_models import GlowsL3eRectangularMapInputData, InputRectangularPointingSet
+from imap_l3_processing.maps.quality_flags import MapL3Flags
+from imap_l3_processing.maps.survival_probability_processing import process_survival_probabilities, \
+    combine_glows_l3e_with_l1c_pointing, filter_bad_days
 from tests.maps.test_builders import create_rectangular_intensity_map_data, create_l1c_pset, create_l3e_pset
 from tests.spice_test_case import SpiceTestCase
+from tests.test_helpers import create_dataclass_mock
 
 
 class TestSurvivalProbabilityProcessing(SpiceTestCase):
@@ -48,6 +52,10 @@ class TestSurvivalProbabilityProcessing(SpiceTestCase):
         mock_survival_probability_pointing_set.side_effect = [sentinel.pset_1, sentinel.pset_2, sentinel.pset_3]
 
         computed_survival_probabilities = rng.random((1, 9, 90, 45))
+        quality_flags = np.full((1, 9, 90, 45), MapL3Flags.NONE)
+        quality_flags[rng.random((1, 9, 90, 45)) > 0.8] = MapL3Flags.PREDICTIVE_EPHEMERIS
+        quality_flags[rng.random((1, 9, 90, 45)) > 0.7] = MapL3Flags.NOMINAL_ALPHA_PROTON_RATIO
+
         mock_survival_skymap.return_value.to_dataset.return_value = xr.Dataset(
             data_vars={
                 "exposure_weighted_survival_probabilities": (
@@ -58,7 +66,16 @@ class TestSurvivalProbabilityProcessing(SpiceTestCase):
                         CoordNames.ELEVATION_L2.value,
                     ],
                     computed_survival_probabilities
-                )
+                ),
+                "quality_flags": (
+                    [
+                        CoordNames.TIME.value,
+                        CoordNames.ENERGY_ULTRA_L1C.value,
+                        CoordNames.AZIMUTH_L2.value,
+                        CoordNames.ELEVATION_L2.value,
+                    ],
+                    quality_flags
+                ),
             },
             coords={
                 CoordNames.TIME.value: [epoch],
@@ -139,6 +156,7 @@ class TestSurvivalProbabilityProcessing(SpiceTestCase):
         np.testing.assert_array_equal(survival_data.intensity_map_data.obs_date_range,
                                       intensity_map_data.obs_date_range)
         np.testing.assert_array_equal(survival_data.intensity_map_data.solid_angle, intensity_map_data.solid_angle)
+        np.testing.assert_array_equal(survival_data.intensity_map_data.quality_flags, quality_flags)
 
     @patch('imap_l3_processing.maps.survival_probability_processing.RectangularSurvivalProbabilitySkyMap')
     @patch('imap_l3_processing.maps.survival_probability_processing.RectangularSurvivalProbabilityPointingSet')
@@ -156,7 +174,6 @@ class TestSurvivalProbabilityProcessing(SpiceTestCase):
 
             input_map = create_rectangular_intensity_map_data(epoch=[epoch], flux=input_map_flux)
 
-            intensity_map_data = input_map.intensity_map_data
             input_map.intensity_map_data.energy = sentinel.hi_l2_energies
 
             l2_grid = PixelSize.FourDegrees
@@ -175,6 +192,8 @@ class TestSurvivalProbabilityProcessing(SpiceTestCase):
             mock_survival_probability_pointing_set.side_effect = [sentinel.pset_1, sentinel.pset_2, sentinel.pset_3]
 
             computed_survival_probabilities = rng.random((1, 9, 90, 45))
+            quality_flags = np.full_like(computed_survival_probabilities, MapL3Flags.NONE)
+
             mock_survival_skymap.return_value.to_dataset.return_value = xr.Dataset({
                 "exposure_weighted_survival_probabilities": (
                     [
@@ -184,7 +203,16 @@ class TestSurvivalProbabilityProcessing(SpiceTestCase):
                         CoordNames.ELEVATION_L2.value,
                     ],
                     computed_survival_probabilities
-                )
+                ),
+                "quality_flags": (
+                    [
+                        CoordNames.TIME.value,
+                        CoordNames.ENERGY_ULTRA_L1C.value,
+                        CoordNames.AZIMUTH_L2.value,
+                        CoordNames.ELEVATION_L2.value,
+                    ],
+                    quality_flags
+                ),
             },
                 coords={
                     CoordNames.TIME.value: [epoch],
@@ -193,7 +221,7 @@ class TestSurvivalProbabilityProcessing(SpiceTestCase):
                     CoordNames.ELEVATION_L2.value: rng.random((45,)),
                 })
 
-            survival_data = process_survival_probabilities(dependencies, SpiceFrame.IMAP_DPS,
+            process_survival_probabilities(dependencies, SpiceFrame.IMAP_DPS,
                                                            cg_corrected=cg_correction_value)
 
             mock_survival_probability_pointing_set.assert_has_calls([
@@ -237,10 +265,49 @@ class TestSurvivalProbabilityProcessing(SpiceTestCase):
                                                            Mock())
 
         expected_sky_strip = np.full(45, 2.0)
-        default_sp_sky_strip = np.full(45, 1.0)
+        default_sp_sky_strip = np.full(45, np.nan)
 
         output_map = process_survival_probabilities(survival_dependencies, SpiceFrame.IMAP_HAE)
         np.testing.assert_equal(output_map.intensity_map_data.ena_intensity[0, 0, 76, :], expected_sky_strip)
         np.testing.assert_equal(output_map.intensity_map_data.ena_intensity[0, 0, 78, :], expected_sky_strip)
         np.testing.assert_equal(output_map.intensity_map_data.ena_intensity[0, 0, 79, :], default_sp_sky_strip)
         np.testing.assert_equal(output_map.intensity_map_data.ena_intensity[0, 0, 80, :], expected_sky_strip)
+
+    def test_combine_glows_l3e_with_l1c_pointing(self):
+        glows_l3e_data = [
+            create_dataclass_mock(GlowsL3eRectangularMapInputData, repointing=0),
+            create_dataclass_mock(GlowsL3eRectangularMapInputData, repointing=0),
+            create_dataclass_mock(GlowsL3eRectangularMapInputData, repointing=1),
+            create_dataclass_mock(GlowsL3eRectangularMapInputData, repointing=3),
+        ]
+
+        hi_l1c_data = [
+            create_dataclass_mock(InputRectangularPointingSet, repointing=1),
+            create_dataclass_mock(InputRectangularPointingSet, repointing=2),
+            create_dataclass_mock(InputRectangularPointingSet, repointing=3),
+            create_dataclass_mock(InputRectangularPointingSet, repointing=4)
+        ]
+
+        expected = [
+            (hi_l1c_data[0], glows_l3e_data[2]),
+            (hi_l1c_data[2], glows_l3e_data[3]),
+        ]
+
+        actual = combine_glows_l3e_with_l1c_pointing(glows_l3e_data, hi_l1c_data)
+
+        self.assertEqual(expected, actual)
+
+    def test_filter_bad_days(self):
+        good_day_exposures = np.full((1, 7, 3600, 40), 100.0)
+        bad_day_exposures = np.zeros((1, 7, 3600, 40))
+
+        hi_l1c_data = [
+            create_dataclass_mock(InputRectangularPointingSet, exposure_times=good_day_exposures.copy()),
+            create_dataclass_mock(InputRectangularPointingSet, exposure_times=bad_day_exposures.copy()),
+            create_dataclass_mock(InputRectangularPointingSet, exposure_times=good_day_exposures.copy()),
+            create_dataclass_mock(InputRectangularPointingSet, exposure_times=bad_day_exposures.copy())
+        ]
+
+        filtered_psets = filter_bad_days(hi_l1c_data)
+
+        self.assertEqual([hi_l1c_data[0], hi_l1c_data[2]], filtered_psets)

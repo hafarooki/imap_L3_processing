@@ -1,20 +1,32 @@
+shared_mods: &MODS
+  MODS:
+    - >-
+      Major version 2: Add `epoch_delta`, `energy_delta_plus`, and `energy_delta_minus` to support plotting.
+      Add quality flags for L3d data copied from a previous CR and the use of predicted ephemeris.
+      Quality flags are propagated from the nearest two L3d data points.
+
 imap_glows_l3e_survival-probability-lo:
   Data_level: "3e"
   Data_type: L3E_survival-probability-lo>Level-3E Survival Probability Lo
   Logical_source_description: IMAP Mission GLOWS L3e Lo Survival Probability
+  <<: *MODS
 imap_glows_l3e_survival-probability-hi-45:
   Data_level: "3e"
   Data_type: L3E_survival-probability-hi-45>Level-3E Survival Probability Hi 45
   Logical_source_description: IMAP Mission GLOWS L3e Hi 45 Survival Probability
+  <<: *MODS
 imap_glows_l3e_survival-probability-hi-90:
   Data_level: "3e"
   Data_type: L3E_survival-probability-hi-90>Level-3E Survival Probability Hi 90
   Logical_source_description: IMAP Mission GLOWS L3e Hi 90 Survival Probability
+  <<: *MODS
 imap_glows_l3e_survival-probability-ul-sf:
   Data_level: "3e"
   Data_type: L3E_survival-probability-ul>Level-3E Survival Probability Ul
   Logical_source_description: IMAP Mission GLOWS L3e Ultra Survival Probability
+  <<: *MODS
 imap_glows_l3e_survival-probability-ul-hf:
   Data_level: "3e"
   Data_type: L3E_survival-probability-ul>Level-3E Survival Probability Ul HF
   Logical_source_description: IMAP Mission GLOWS L3e Ultra Survival Probability HF
+  <<: *MODS

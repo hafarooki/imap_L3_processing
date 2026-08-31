@@ -6,3 +6,4 @@ class SwapiL3Flags(FlagNameMixin):
     BAD_FIT = 2**2
     FIT_ERROR = 2**3
     PRELIMINARY_MAG = 2**4
+    PREDICTIVE_EPHEMERIS = 2**15

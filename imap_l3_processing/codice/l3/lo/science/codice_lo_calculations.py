@@ -44,10 +44,8 @@ def calculate_mass_per_charge(energy_per_charge: np.ndarray, tof: np.ndarray) ->
 
 
 def rebin_direct_events_for_normalization(num_events: np.ndarray, spin_sector: np.ndarray, energy_step: np.ndarray,
-                                          apd_id: np.ndarray,
-                                          num_spin_sectors: int,
-                                          num_energies: int) -> np.ndarray:
-    base_counts = rebin_direct_events_by_energy_and_spin_sector(num_events, spin_sector, energy_step, apd_id, num_spin_sectors,
+                                          num_spin_sectors: int, num_energies: int) -> np.ndarray:
+    base_counts = rebin_direct_events_by_energy_and_spin_sector(num_events, spin_sector, energy_step, num_spin_sectors,
                                                                 num_energies)
     half_spin = num_spin_sectors // 2
     result = np.zeros_like(base_counts)
@@ -57,10 +55,7 @@ def rebin_direct_events_for_normalization(num_events: np.ndarray, spin_sector: n
 
 
 def rebin_direct_events_by_energy_and_spin_sector(num_events: np.ndarray, spin_sector: np.ndarray,
-                                                  energy_step: np.ndarray,
-                                                  apd_id: np.ndarray,
-                                                  num_spin_sectors: int,
-                                                  num_energies: int) -> np.ndarray:
+                                                  energy_step: np.ndarray, num_spin_sectors: int, num_energies: int) -> np.ndarray:
     num_epochs = num_events.shape[0]
     num_priorities = num_events.shape[1]
 
@@ -74,12 +69,10 @@ def rebin_direct_events_by_energy_and_spin_sector(num_events: np.ndarray, spin_s
 
             spin_sectors = spin_sector[time_index, priority_index, :events_at_index]
             energy_indices = energy_step[time_index, priority_index, :events_at_index]
-            apd_indices = apd_id[time_index, priority_index, :events_at_index]
 
-            spin_sector_mask = np.ma.getmaskarray(spin_sectors)
-            energy_indices_mask = np.ma.getmaskarray(energy_indices)
-            apd_id_mask = np.ma.getmaskarray(apd_indices) | (apd_indices < 1) | (apd_indices > CODICE_LO_NUM_AZIMUTH_BINS)
-            valid_events_mask = ~np.logical_or(np.logical_or(spin_sector_mask, energy_indices_mask), apd_id_mask)
+            spin_sector_valid = ~np.ma.getmaskarray(spin_sectors)
+            energy_index_valid = ~np.ma.getmaskarray(energy_indices)
+            valid_events_mask = np.logical_and(spin_sector_valid, energy_index_valid)
 
             valid_spin_sectors = spin_sectors[valid_events_mask]
             valid_energy_indices = energy_indices[valid_events_mask]
@@ -89,11 +82,11 @@ def rebin_direct_events_by_energy_and_spin_sector(num_events: np.ndarray, spin_s
 
 
 def calculate_normalization_factor(priority_counts: np.ndarray, num_events: np.ndarray, energy_steps: np.ndarray,
-                                   spin_sectors: np.ndarray, apd_id: np.ndarray) -> np.ndarray:
+                                   spin_sectors: np.ndarray) -> np.ndarray:
     numerator = np.concatenate((priority_counts, priority_counts), axis=3)
     num_energies = priority_counts.shape[2]
     num_spin_sectors = 2 * priority_counts.shape[3]
-    denominator = rebin_direct_events_for_normalization(num_events, spin_sectors, energy_steps, apd_id, num_spin_sectors,
+    denominator = rebin_direct_events_for_normalization(num_events, spin_sectors, energy_steps, num_spin_sectors,
                                                         num_energies)
 
     division_result = np.zeros(numerator.shape, dtype=float)

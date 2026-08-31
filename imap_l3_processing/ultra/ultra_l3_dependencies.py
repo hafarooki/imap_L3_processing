@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
+import pickle
 import re
 from dataclasses import dataclass, field
+from hashlib import sha256
 from pathlib import Path
 from typing import Optional
 
@@ -14,7 +17,10 @@ from imap_processing.ultra.l2.ultra_l2 import ultra_l2
 from imap_l3_processing.maps.map_models import HealPixIntensityMapData, RectangularIntensityMapData, \
     SpectralIndexDependencies
 from imap_l3_processing.ultra.models import UltraL1CPSet, UltraGlowsL3eData
-from imap_l3_processing.utils import get_dependency_paths_by_descriptor
+from imap_l3_processing.utils import get_dependency_paths_by_descriptor, get_temp_cache_dir
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class UltraL3Dependencies:
@@ -59,12 +65,9 @@ class UltraL3Dependencies:
         for file_path in glows_file_paths:
             glows_l3e_data.append(UltraGlowsL3eData.read_from_path(file_path))
         paths = [l2_map_path] + l1c_file_paths + glows_file_paths
-        l1c_paths_dict = {path.stem: path for path in l1c_file_paths}
 
-        l2_descriptor = ScienceInput(l2_map_path.name).descriptor
-        l2_descriptor = re.sub(r"[246]deg", "nside32", l2_descriptor)
-        l2_healpix_datasets = ultra_l2(l1c_paths_dict, descriptor=l2_descriptor)
-        l2_healpix_map_data = HealPixIntensityMapData.read_from_xarray(l2_healpix_datasets[0])
+        l2_healpix_map_data = load_or_create_healpix_l2(l2_map_path, l1c_file_paths)
+
         l2_rectangular_map_data = RectangularIntensityMapData.read_from_path(l2_map_path)
         energy_bin_group_sizes = None
         if energy_bin_path:
@@ -104,17 +107,11 @@ class UltraL3SpectralIndexDependencies(SpectralIndexDependencies):
     def get_fit_energy_ranges(self) -> np.ndarray:
         return self.fit_energy_ranges
 
+
 @dataclass
 class UltraL3CombinedDependencies:
-    u45_l2_healpix_map: HealPixIntensityMapData
-    u90_l2_healpix_map: HealPixIntensityMapData
-    u45_l2_rectangular_map: RectangularIntensityMapData
-    u90_l2_rectangular_map: RectangularIntensityMapData
-    u45_l1c_psets: list[UltraL1CPSet]
-    u90_l1c_psets: list[UltraL1CPSet]
-    glows_l3e_psets: list[UltraGlowsL3eData]
-    energy_bin_group_sizes: np.ndarray
-    dependency_file_paths: list[Path] = field(default_factory=list)
+    u45_dependencies: UltraL3Dependencies
+    u90_dependencies: UltraL3Dependencies
 
     @classmethod
     def fetch_dependencies(cls, deps: ProcessingInputCollection) -> UltraL3CombinedDependencies:
@@ -144,47 +141,44 @@ class UltraL3CombinedDependencies:
     def from_file_paths(cls, u45_pset_paths: list[Path], u90_pset_paths: list[Path], glows_l3e_pset_paths: list[Path],
                         u45_map_path: Path, u90_map_path: Path,
                         energy_bin_group_sizes_path: Optional[Path]) -> UltraL3CombinedDependencies:
-        u45_l1c_psets = []
-        u90_l1c_psets = []
-        survival_probability_ul_pset = []
 
-        for pset in u45_pset_paths:
-            u45_l1c_psets.append(UltraL1CPSet.read_from_path(pset))
+        return cls(
+            u45_dependencies=UltraL3Dependencies.from_file_paths(
+                l2_map_path=u45_map_path,
+                l1c_file_paths=u45_pset_paths,
+                glows_file_paths=glows_l3e_pset_paths,
+                energy_bin_path=energy_bin_group_sizes_path
+            ),
+            u90_dependencies=UltraL3Dependencies.from_file_paths(
+                l2_map_path=u90_map_path,
+                l1c_file_paths=u90_pset_paths,
+                glows_file_paths=glows_l3e_pset_paths,
+                energy_bin_path=energy_bin_group_sizes_path
+            ),
+        )
 
-        u45_pset_paths = sorted(u45_pset_paths, key=lambda pset: pset.name)
 
-        for pset in u90_pset_paths:
-            u90_l1c_psets.append(UltraL1CPSet.read_from_path(pset))
+def load_or_create_healpix_l2(
+    l2_map_path: Path, l1c_file_paths: list[Path]
+) -> HealPixIntensityMapData:
+    l2_descriptor = ScienceInput(l2_map_path.name).descriptor
+    l2_descriptor = re.sub(r"[246]deg", "nside32", l2_descriptor)
+    sorted_l1c_paths = sorted(l1c_file_paths, key=lambda p: p.name)
+    l1c_paths_dict = {path.stem: path for path in sorted_l1c_paths}
 
-        u90_pset_paths = sorted(u90_pset_paths, key=lambda pset: pset.name)
+    cache_key = str([p.name for p in sorted_l1c_paths]) + l2_descriptor
+    cache_filename = sha256(cache_key.encode("utf-8")).hexdigest()
+    cache_path = get_temp_cache_dir() / cache_filename
+    if cache_path.exists():
+        logger.info("Loading cached HEALPix L2 from %s", cache_path)
+        with open(cache_path, "rb") as f:
+            l2_healpix_data = pickle.load(f)
+    else:
+        logger.info("Cached HEALPix L2 not found; building from pointing sets")
+        l2_healpix_datasets = ultra_l2(l1c_paths_dict, descriptor=l2_descriptor)
+        l2_healpix_data = HealPixIntensityMapData.read_from_xarray(l2_healpix_datasets[0])
+        logger.info("Saving HEALPix L2 to cache at %s", cache_path)
+        with open(cache_path, "wb") as f:
+            pickle.dump(l2_healpix_data, f)
 
-        for pset in glows_l3e_pset_paths:
-            survival_probability_ul_pset.append(UltraGlowsL3eData.read_from_path(pset))
-        u45_l2_descriptor = ScienceInput(u45_map_path.name).descriptor
-        u45_l2_descriptor = re.sub(r"[246]deg", "nside32", u45_l2_descriptor)
-        l1c_u45_paths_dict = {path.stem: path for index, path in enumerate(u45_pset_paths)}
-        l2_u45_maps = ultra_l2(l1c_u45_paths_dict, descriptor=u45_l2_descriptor)
-        l2_u45_healpix_map_data = HealPixIntensityMapData.read_from_xarray(l2_u45_maps[0])
-
-        u90_l2_descriptor = ScienceInput(u90_map_path.name).descriptor
-        u90_l2_descriptor = re.sub(r"[246]deg", "nside32", u90_l2_descriptor)
-        l1c_u90_paths_dict = {path.stem: path for index, path in enumerate(u90_pset_paths)}
-        l2_u90_maps = ultra_l2(l1c_u90_paths_dict, descriptor=u90_l2_descriptor)
-        l2_u90_healpix_map_data = HealPixIntensityMapData.read_from_xarray(l2_u90_maps[0])
-
-        l2_u45_rectangular_map_data = RectangularIntensityMapData.read_from_path(u45_map_path)
-        l2_u90_rectangular_map_data = RectangularIntensityMapData.read_from_path(u90_map_path)
-
-        dependency_paths = [*u45_pset_paths, *u90_pset_paths, *glows_l3e_pset_paths, u45_map_path,
-                            u90_map_path]
-        if energy_bin_group_sizes_path:
-            energy_bin_group_sizes = np.loadtxt(energy_bin_group_sizes_path, delimiter=",", dtype=np.uint8)
-            dependency_paths.append(energy_bin_group_sizes_path)
-        else:
-            energy_bin_group_sizes = None
-
-        return cls(u45_l2_healpix_map=l2_u45_healpix_map_data, u90_l2_healpix_map=l2_u90_healpix_map_data,
-                   u45_l2_rectangular_map=l2_u45_rectangular_map_data, u90_l2_rectangular_map=l2_u90_rectangular_map_data,
-                   u45_l1c_psets=u45_l1c_psets, u90_l1c_psets=u90_l1c_psets,
-                   glows_l3e_psets=survival_probability_ul_pset, energy_bin_group_sizes=energy_bin_group_sizes,
-                   dependency_file_paths=dependency_paths)
+    return l2_healpix_data

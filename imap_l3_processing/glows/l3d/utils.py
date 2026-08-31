@@ -52,7 +52,7 @@ def create_glows_l3b_json_file_from_cdf(cdf_file_path: Path):
             'header': {
                 'filename': cdf_file_path.name,
             },
-            'date': cdf['epoch'][0].isoformat(),
+            'date': cdf['mean_time'][0].isoformat(),
             'CR': cr_number,
             'uv_anisotropy_factor': read_numeric_variable(cdf['uv_anisotropy_factor'])[0].tolist(),
             'ion_rate_profile': {

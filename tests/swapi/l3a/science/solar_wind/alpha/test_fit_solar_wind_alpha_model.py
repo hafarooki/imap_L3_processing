@@ -166,7 +166,7 @@ def _build_proton_fit_result(
             ufloat(velocity_rtn[1], _STAGE1_PROTON_VELOCITY_SIGMA_KM_S),
             ufloat(velocity_rtn[2], _STAGE1_PROTON_VELOCITY_SIGMA_KM_S),
         ),
-        bad_fit_flag=int(bad_fit_flag),
+        quality_flag=int(bad_fit_flag),
     )
 
 
@@ -293,7 +293,7 @@ class TestFitAlphaMomentsGuardBranches(unittest.TestCase):
             proton_moments=proton_moments,
             magnetic_field_direction=_B_HAT_RTN,
         )
-        self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.FIT_ERROR))
+        self.assertEqual(result.quality_flag, int(SwapiL3Flags.FIT_ERROR))
 
     def test_proton_fill_values_return_nan_filled_alpha_moments(self):
         """When the Stage-1 proton fit returned NaN moments, every alpha moment field is filled with NaN so downstream consumers can distinguish "no fit attempted" from "fit succeeded with degenerate values"."""
@@ -319,7 +319,7 @@ class TestFitAlphaMomentsGuardBranches(unittest.TestCase):
             proton_moments=proton_moments,
             magnetic_field_direction=nan_b_hat,
         )
-        self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.NONE))
+        self.assertEqual(result.quality_flag, int(SwapiL3Flags.NONE))
 
     def test_nan_magnetic_field_direction_returns_nan_filled_moments(self):
         """A NaN B̂ short-circuits before any forward-model call and every moment field is filled with NaN, mirroring the Stage-1-failure guard."""
@@ -361,7 +361,7 @@ class TestFitAlphaMomentsRecoversTruth(
 
     def test_fit_succeeds_with_no_quality_flags(self):
         """A clean synthetic spectrum + exact proton moments must yield `bad_fit_flag == NONE` — no LM convergence issues, no missing inputs."""
-        self.assertEqual(self.result.bad_fit_flag, int(SwapiL3Flags.NONE))
+        self.assertEqual(self.result.quality_flag, int(SwapiL3Flags.NONE))
 
     def test_recovers_alpha_density(self):
         """The fitted alpha density matches the synthesis truth to ~1% (LM termination + deadtime rounding)."""
@@ -500,7 +500,7 @@ class TestAlphaSolarWindFitResultAccessors(unittest.TestCase):
             temperature=ufloat(4.0e5, 1.0e3),
             velocity_rtn=velocity_triple,
             delta_v=ufloat(30.0, 1.0),
-            bad_fit_flag=int(SwapiL3Flags.NONE),
+            quality_flag=int(SwapiL3Flags.NONE),
         )
 
     def test_velocity_rtn_nominal_returns_per_component_nominals(self):
@@ -571,7 +571,7 @@ class TestFitAlphaMomentsLMFailureFlag(unittest.TestCase):
                 magnetic_field_direction=_B_HAT_RTN,
             )
 
-        self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.FIT_ERROR))
+        self.assertEqual(result.quality_flag, int(SwapiL3Flags.FIT_ERROR))
         self.assertTrue(np.isnan(result.density.nominal_value))
 
 
@@ -601,7 +601,7 @@ class TestFitAlphaMomentsInitialGuessFailures(unittest.TestCase):
         )
 
     def _assert_fit_error_nan(self, result):
-        self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.FIT_ERROR))
+        self.assertEqual(result.quality_flag, int(SwapiL3Flags.FIT_ERROR))
         _assert_moments_are_nan_filled(self, result)
 
     def test_one_dimensional_inputs_raise_value_error(self):

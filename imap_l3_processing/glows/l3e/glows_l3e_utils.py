@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import typing
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -7,6 +9,9 @@ import imap_data_access
 import numpy as np
 import spiceypy
 from astropy.time import Time
+from spiceypy import SpiceyError
+
+from imap_l3_processing.glows.quality_flags import GlowsL3Flags
 from imap_data_access.file_validation import Version
 from imap_processing.spice.repoint import set_global_repoint_table_paths, get_repoint_data
 from spacepy.pycdf import CDF
@@ -17,12 +22,26 @@ from imap_l3_processing.constants import ONE_AU_IN_KM, TT2000_EPOCH, ONE_SECOND_
 from imap_l3_processing.glows.descriptors import GLOWS_L3E_ULTRA_HF_DESCRIPTOR, GLOWS_L3E_ULTRA_SF_DESCRIPTOR, \
     GLOWS_L3E_LO_DESCRIPTOR, GLOWS_L3E_HI_45_DESCRIPTOR, GLOWS_L3E_HI_90_DESCRIPTOR, GLOWS_L3E_DESCRIPTORS
 from imap_l3_processing.glows.l3bc.l3bc_toolkit.funcs import jd_fm_Carrington
-from imap_l3_processing.glows.l3e.glows_l3e_call_arguments import GlowsL3eCallArguments
+from imap_l3_processing.glows.l3e.glows_l3e_call_arguments import GlowsL3eCallArguments, GlowsL3eSpacecraftInfo
+from imap_l3_processing.utils import FurnishMetakernelOutput
 from imap_l3_processing.models import VersionMap
 
+if typing.TYPE_CHECKING:
+    from imap_l3_processing.glows.l3e.reprocess_info import ReprocessInfo
 
-def determine_call_args_for_l3e_executable(start_date: datetime, repointing_midpoint: datetime,
-                                           elongation: float) -> GlowsL3eCallArguments:
+def determine_call_args_for_l3e_executable(start_date: datetime, repointing_midpoint: datetime, elongation: float,
+                                           spacecraft_info: GlowsL3eSpacecraftInfo) -> GlowsL3eCallArguments:
+    formatted_date = start_date.strftime("%Y%m%d_%H%M%S")
+    decimal_date = _decimal_time(repointing_midpoint)
+
+    return GlowsL3eCallArguments(
+        formatted_date=formatted_date,
+        decimal_date=decimal_date,
+        elongation=elongation,
+        spacecraft_info=spacecraft_info,
+    )
+
+def determine_spacecraft_info_for_l3e_executable(repointing_midpoint: datetime) -> GlowsL3eSpacecraftInfo:
     ephemeris_time = spiceypy.datetime2et(repointing_midpoint)
 
     [x, y, z, vx, vy, vz], _ = spiceypy.spkezr("IMAP", ephemeris_time, "ECLIPJ2000", "NONE", "SUN")
@@ -34,12 +53,7 @@ def determine_call_args_for_l3e_executable(start_date: datetime, repointing_midp
 
     _, spin_axis_long, spin_axis_lat = spiceypy.reclat(spin_axis)
 
-    formatted_date = start_date.strftime("%Y%m%d_%H%M%S")
-    decimal_date = _decimal_time(repointing_midpoint)
-
-    return GlowsL3eCallArguments(
-        formatted_date=formatted_date,
-        decimal_date=decimal_date,
+    return GlowsL3eSpacecraftInfo(
         spacecraft_radius=radius / ONE_AU_IN_KM,
         spacecraft_longitude=np.rad2deg(longitude) % 360,
         spacecraft_latitude=np.rad2deg(latitude),
@@ -48,8 +62,26 @@ def determine_call_args_for_l3e_executable(start_date: datetime, repointing_midp
         spacecraft_velocity_z=vz,
         spin_axis_longitude=np.rad2deg(spin_axis_long) % 360,
         spin_axis_latitude=np.rad2deg(spin_axis_lat),
-        elongation=elongation
     )
+
+
+def determine_spacecraft_info_using_predict_if_needed(repointing_midpoint: datetime, spice_with_predict: FurnishMetakernelOutput, spice_without_predict: FurnishMetakernelOutput) -> \
+    tuple[GlowsL3eSpacecraftInfo, GlowsL3Flags, list[str]]:
+    try:
+        with spiceypy.KernelPool([str(spice_without_predict.metakernel_path)]):
+            spacecraft_info: GlowsL3eSpacecraftInfo = determine_spacecraft_info_for_l3e_executable(repointing_midpoint)
+
+            glows_l3_flags: GlowsL3Flags = GlowsL3Flags.NONE
+            kernel_names = [n.name for n in spice_without_predict.spice_kernel_paths]
+    except SpiceyError:
+        with spiceypy.KernelPool([str(spice_with_predict.metakernel_path)]):
+            spacecraft_info: GlowsL3eSpacecraftInfo = determine_spacecraft_info_for_l3e_executable(
+                repointing_midpoint)
+
+            glows_l3_flags: GlowsL3Flags = GlowsL3Flags.PREDICTIVE_EPHEMERIS
+            kernel_names = [n.name for n in spice_with_predict.spice_kernel_paths]
+
+    return spacecraft_info, glows_l3_flags, kernel_names
 
 
 def _decimal_time(t: datetime) -> str:
@@ -67,9 +99,8 @@ class GlowsL3eVersionsForRepointings:
     ultra_sf_repointings: dict[int, Version]
     ultra_hf_repointings: dict[int, Version]
 
-
 def identify_versions_for_l3e_output_files(start_cr_of_mission: int, end_cr_of_mission: int, first_updated_cr_from_l3d: Optional[int],
-                                           repointing_path: Path, version_map: VersionMap) -> GlowsL3eVersionsForRepointings:
+                                           repointing_path: Path, version_map: VersionMap, reprocess_info: ReprocessInfo) -> GlowsL3eVersionsForRepointings:
 
     set_global_repoint_table_paths([repointing_path])
     repointing_data = get_repoint_data()
@@ -80,6 +111,10 @@ def identify_versions_for_l3e_output_files(start_cr_of_mission: int, end_cr_of_m
     updated_pointings_per_instruments = {}
     updated_pointing_numbers = {}
     for descriptor in GLOWS_L3E_DESCRIPTORS:
+        repointings_to_force_processing = reprocess_info.get_repoints_for_descriptor(
+            descriptor, repointing_data
+        )
+        repointings_to_process = set(pointing_numbers_updated_by_l3d + repointings_to_force_processing)
         l3e_files = imap_data_access.query(instrument='glows', data_level='l3e', version="latest", descriptor=descriptor)
         existing_file_versions = {}
         for l3e in l3e_files:
@@ -94,16 +129,13 @@ def identify_versions_for_l3e_output_files(start_cr_of_mission: int, end_cr_of_m
             new_major_version = version_map.lookup(descriptor).major
             if pointing_number in existing_file_versions:
                 previous_version = existing_file_versions[pointing_number]
+                higher_major_version_given = new_major_version > previous_version.major
 
-                if previous_version.major is None:
-                    if new_major_version or pointing_number in pointing_numbers_updated_by_l3d:
-                        new_file_versions[pointing_number] = Version(new_major_version, previous_version.minor + 1)
-
-                elif new_major_version is not None:
-                    higher_major_version_given = new_major_version > previous_version.major
-                    same_major_but_updated_by_l3d = new_major_version == previous_version.major and pointing_number in pointing_numbers_updated_by_l3d
-                    if higher_major_version_given or same_major_but_updated_by_l3d:
-                        new_file_versions[pointing_number] = Version(new_major_version, previous_version.minor + 1)
+                if (
+                    higher_major_version_given
+                    or pointing_number in repointings_to_process
+                ):
+                    new_file_versions[pointing_number] = Version(new_major_version, previous_version.minor + 1)
 
             else:
                 new_file_versions[pointing_number] = Version(new_major_version, 1)
@@ -121,16 +153,22 @@ def identify_versions_for_l3e_output_files(start_cr_of_mission: int, end_cr_of_m
                                           )
 
 
-def compute_glows_flags_for_window(l3d_cdf_path: Path, window_start: datetime, window_end: datetime) -> int:
+def compute_glows_flags_for_repoint(l3d_cdf_path: Path, repoint_midpoint: datetime) -> int:
     with CDF(str(l3d_cdf_path)) as cdf:
-        epochs = cdf['epoch'][...]
-        epoch_deltas = cdf['epoch_delta'][...] / 1e9 * timedelta(seconds=1)
+        cr_epochs = cdf['epoch'][...]
         flags = cdf['glows_flags'][...]
-    cr_starts = epochs - epoch_deltas
-    cr_ends = epochs + epoch_deltas
 
-    cr_intersects_window = (window_start < cr_ends) & (cr_starts < window_end)
-    selected = flags[cr_intersects_window]
+    cr_after_repoint = np.searchsorted(cr_epochs, repoint_midpoint)
+    cr_before_repoint = cr_after_repoint - 1
+
+    relevant_crs = [cr_before_repoint]
+    if cr_after_repoint < len(cr_epochs):
+        if cr_epochs[cr_after_repoint] != repoint_midpoint:
+            relevant_crs.append(cr_after_repoint)
+        else:
+            relevant_crs = [cr_after_repoint]
+
+    selected = flags[relevant_crs]
 
     return int(np.bitwise_or.reduce(selected.astype(np.uint16), initial=0))
 
@@ -218,3 +256,15 @@ def get_repoint_numbers_within_cr_window(start_cr_number: int | None, end_cr_num
             repoint_numbers.append(int(repoint_ids[i]))
 
     return repoint_numbers
+
+def calculate_energy_deltas(centers: np.ndarray):
+    edges = np.empty_like(centers, shape=(len(centers) + 1,))
+    edges[1:-1] = np.sqrt(centers[1:] * centers[:-1])
+    edges[0] = np.sqrt(centers[0] / centers[1]) * centers[0]
+    edges[-1] = np.sqrt(centers[-1] / centers[-2]) * centers[-1]
+
+    delta_plus = edges[1:] - centers
+    delta_minus = centers - edges[:-1]
+
+    return delta_plus, delta_minus
+

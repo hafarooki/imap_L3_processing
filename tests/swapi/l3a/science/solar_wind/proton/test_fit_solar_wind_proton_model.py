@@ -208,9 +208,9 @@ class TestFitSolarWindProtonModelEndToEnd(_ProtonFitFixture):
             nominal, _TRUE_VELOCITY_RTN_KM_S, atol=1.0
         )
 
-    def test_bad_fit_flag_is_none_on_successful_convergence(self):
+    def test_quality_flag_is_none_on_successful_convergence(self):
         """A clean LM convergence on noise-free data leaves the bad-fit flag cleared (`SwapiL3Flags.NONE`)."""
-        self.assertEqual(self.result.bad_fit_flag, SwapiL3Flags.NONE)
+        self.assertEqual(self.result.quality_flag, SwapiL3Flags.NONE)
 
 
 class TestFitSolarWindProtonModelUncertainties(_ProtonFitFixture):
@@ -309,11 +309,11 @@ class TestQualityFlagBranches(unittest.TestCase):
         )
         with self._patch_optimizer_with_result(failed_result):
             result = fit_solar_wind_proton_model(self.fit_ctx)
-        self.assertEqual(result.bad_fit_flag, SwapiL3Flags.FIT_ERROR)
+        self.assertEqual(result.quality_flag, SwapiL3Flags.FIT_ERROR)
         self.assertTrue(np.isnan(result.density.nominal_value))
         self.assertTrue(np.isnan(result.temperature.nominal_value))
 
-    def test_bad_fit_flag_when_temperature_above_threshold(self):
+    def test_quality_flag_when_temperature_above_threshold(self):
         """A converged fit whose temperature exceeds 5e5 K is flagged `BAD_FIT` and its moments are NaN-filled, distinguishing it from a clean fit but matching `FIT_ERROR`'s fill-value contract."""
         too_hot_temperature = 6.0e5
         too_hot_result = OptimizeSolarWindProtonParamsResult(
@@ -334,7 +334,7 @@ class TestQualityFlagBranches(unittest.TestCase):
             return_value=too_hot_result,
         ):
             result = fit_solar_wind_proton_model(self.fit_ctx)
-        self.assertEqual(result.bad_fit_flag, int(SwapiL3Flags.BAD_FIT))
+        self.assertEqual(result.quality_flag, int(SwapiL3Flags.BAD_FIT))
         self.assertTrue(np.isnan(result.density.nominal_value))
         self.assertTrue(np.isnan(result.temperature.nominal_value))
         for component in result.velocity_rtn:

@@ -50,6 +50,12 @@ def get_spice_data_path(filename: str) -> Path:
     return Path(tests.__file__).parent.parent / "spice_kernels" / filename
 
 
+def get_integration_test_spice_data_path(filename: str) -> Path:
+    return (
+        Path(tests.__file__).parent / "integration" / "test_data" / "spice" / filename
+    )
+
+
 def get_test_data_folder() -> Path:
     return Path(tests.__file__).parent / "test_data"
 
@@ -135,6 +141,7 @@ def build_swe_moment_data(epoch_len):
     mock_moment_data.halo_t_parallel_fit = np.arange(epoch_len, dtype=np.float64)
     mock_moment_data.halo_t_perpendicular_integrated = np.arange(epoch_len * 2, dtype=np.float64).reshape((-1, 2))
     mock_moment_data.halo_t_perpendicular_fit = np.arange(epoch_len, dtype=np.float64)
+    mock_moment_data.quality_flags = np.zeros(epoch_len, dtype=np.uint16)
     return mock_moment_data
 
 

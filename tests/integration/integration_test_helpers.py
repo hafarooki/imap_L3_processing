@@ -92,13 +92,31 @@ def stage_input_file(file_path: Path) -> Path:
     shutil.copy(file_path, destination)
     return destination
 
-metakernel_text = """
+METAKERNEL_TEMPLATE = """
 \\begindata
 
 \tKERNELS_TO_LOAD = ({kernels})
 
 \\begintext
 """
+
+
+def create_metakernel(path_to_spice_dir: str, requested_spice_paths: list[SPICEFilePath]) -> str:
+    all_spice_paths = []
+    for spice_file in requested_spice_paths:
+        spice_subdir_name = spice_file.construct_path().parent.name
+        spice_file_name = spice_file.construct_path().name
+        spice_path = str(Path(path_to_spice_dir) / spice_subdir_name / spice_file_name)
+
+        chunked_spice_path = [spice_path[i:i + 79] for i in range(0, len(spice_path), 79)]
+        for i, chunk in enumerate(chunked_spice_path[:-1]):
+            chunked_spice_path[i] = f"{chunk}+"
+
+        all_spice_paths.extend(chunked_spice_path)
+
+    formatted_spice_file_names = ',\n'.join([f"'{spice}'" for spice in all_spice_paths])
+    return METAKERNEL_TEMPLATE.format(kernels=formatted_spice_file_names)
+
 
 class RequestsGetPatcher:
     def __init__(self, spice_inputs: list[Path], omni_file: Path | None = None):
@@ -122,25 +140,18 @@ class RequestsGetPatcher:
                 if 'params' in kwargs and kwargs['params'].get('list_files') == 'true':
                     response.text = json.dumps(self.spice_file_names)
                 elif 'params' in kwargs:
-                    prefix = kwargs['params'].get("spice_path") or ""
+                    prefix = kwargs["params"].get("spice_path") or ""
 
-                    spice_file_paths = [SPICEFilePath(fn) for fn in self.spice_file_names]
-                    requested_spice_paths = [p for p in spice_file_paths if p.spice_metadata["type"] in
-                                             kwargs["params"]["file_types"]]
-                    all_spice_paths = []
-                    for spice_file in requested_spice_paths:
-                        spice_subdir_name = spice_file.construct_path().parent.name
-                        spice_file_name = spice_file.construct_path().name
-                        spice_path = str(Path(prefix) / spice_subdir_name / spice_file_name)
-
-                        chunked_spice_path = [spice_path[i:i+79] for i in range(0, len(spice_path), 79)]
-                        for i, chunk in enumerate(chunked_spice_path[:-1]):
-                            chunked_spice_path[i] = f"{chunk}+"
-
-                        all_spice_paths.extend(chunked_spice_path)
-
-                    formatted_spice_file_names = ',\n'.join([f"'{spice}'" for spice in all_spice_paths])
-                    response.text = metakernel_text.format(kernels=formatted_spice_file_names)
+                    spice_file_paths = [
+                        SPICEFilePath(fn) for fn in self.spice_file_names
+                    ]
+                    requested_spice_paths = [
+                        p
+                        for p in spice_file_paths
+                        if p.spice_metadata["type"] in kwargs["params"]["file_types"]
+                    ]
+                    metakernel_text = create_metakernel(prefix, requested_spice_paths)
+                    response.text = metakernel_text
                     response.content = response.text.encode()
             else:
                 assert False, "I don't know how to mock that IMAP endpoint!"
@@ -151,6 +162,7 @@ class RequestsGetPatcher:
             response = self.original_requests_get(url, **kwargs)
 
         return response
+
 
 class mock_imap_data_access:
     def __init__(self, data_dir: Path, input_files: list[Path], omni_file: Path | None = None):

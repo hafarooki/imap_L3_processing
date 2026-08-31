@@ -1,9 +1,13 @@
-from unittest.mock import Mock, sentinel
+from datetime import datetime
+from unittest.mock import Mock, sentinel, patch
 
+import imap_data_access
 import numpy as np
+from imap_data_access.file_validation import Version
 from uncertainties.unumpy import uarray
 
 from imap_l3_processing.constants import THIRTY_SECONDS_IN_NANOSECONDS, FIVE_MINUTES_IN_NANOSECONDS
+from imap_l3_processing.models import InputMetadata, VersionMap
 from imap_l3_processing.swapi.l3a.models import SwapiL3ProtonSolarWindData, EPOCH_CDF_VAR_NAME, \
     PROTON_SOLAR_WIND_SPEED_UNCERTAINTY_CDF_VAR_NAME, PROTON_SOLAR_WIND_SPEED_CDF_VAR_NAME, EPOCH_DELTA_CDF_VAR_NAME, \
     PROTON_SOLAR_WIND_SPEED_SUN_CDF_VAR_NAME, PROTON_SOLAR_WIND_SPEED_SUN_UNCERTAINTY_CDF_VAR_NAME, \
@@ -28,9 +32,12 @@ from imap_l3_processing.swapi.l3a.models import SwapiL3ProtonSolarWindData, EPOC
     PUI_BACKGROUND_COUNT_RATE_UNCERTAINTY_CDF_VAR_NAME, PUI_DENSITY_UNCERTAINTY_CDF_VAR_NAME, \
     PUI_TEMPERATURE_UNCERTAINTY_CDF_VAR_NAME, SWAPI_QUALITY_FLAGS_CDF_VAR_NAME, VELOCITY_RTN_LABEL_CDF_VAR_NAME, \
     ALPHA_VELOCITY_RTN_SUN_LABEL_CDF_VAR_NAME, ALPHA_VELOCITY_RTN_LABEL_CDF_VAR_NAME, \
-    PROTON_SOLAR_WIND_VELOCITY_RTN_SUN_LABEL_CDF_VAR_NAME, PROTON_SOLAR_WIND_VELOCITY_RTN_LABEL_CDF_VAR_NAME
+    PROTON_SOLAR_WIND_VELOCITY_RTN_SUN_LABEL_CDF_VAR_NAME, PROTON_SOLAR_WIND_VELOCITY_RTN_LABEL_CDF_VAR_NAME, \
+    SwapiL3aProtonDataFromCDF
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
+from imap_l3_processing.utils import save_data
 from tests.swapi.cdf_model_test_case import CdfModelTestCase
+from tests.test_helpers import with_tempdir
 
 
 class TestModels(CdfModelTestCase):
@@ -223,3 +230,50 @@ class TestModels(CdfModelTestCase):
                                         PUI_TEMPERATURE_UNCERTAINTY_CDF_VAR_NAME)
         self.assert_variable_attributes(variables[14], expected_quality_flags,
                                         SWAPI_QUALITY_FLAGS_CDF_VAR_NAME)
+
+
+
+    @with_tempdir
+    def test_reads_data_into_model(self, tempdir):
+        with patch.dict(imap_data_access.config, {"DATA_DIR":tempdir}):
+            input_metadata = InputMetadata(
+                instrument="swapi",
+                data_level="l3a",
+                start_date=datetime(2026,8,21),
+                end_date=None,
+                version=VersionMap({},Version(None, 1)),
+                descriptor="proton-sw",
+            )
+            l2_parent_file_name = "imap_swapi_l2_sci_20260120_v002.cdf"
+            initial_data = SwapiL3ProtonSolarWindData(
+                input_metadata=input_metadata,
+                parent_file_names=[
+                    "imap_sclk_0170.tsc",
+                    l2_parent_file_name,
+                    "imap_swapi_efficiency-lut_20241020_v001.dat"
+                ],
+                epoch=[datetime(2026,8,21), datetime(2026,8,22)],
+                proton_sw_speed=[500, 501],
+                proton_sw_speed_uncert=[5, 6],
+                proton_sw_speed_sun=[400, 401],
+                proton_sw_speed_sun_uncert=[5, 6],
+                proton_sw_temperature=[50_000, np.nan],
+                proton_sw_temperature_uncert=[500, np.nan],
+                proton_sw_density=[np.nan, 5],
+                proton_sw_density_uncert=[np.nan, 0.05],
+                proton_sw_velocity_rtn_sun=[[500, 15, 16], [501, 17, 18]],
+                proton_sw_velocity_rtn=[[440, 13, np.nan], [441, 12, 11]],
+                proton_sw_velocity_rtn_covariance=[
+                    [[40, 20, 10],[30, 30, 30],[np.nan, 14, 18]],
+                    [[40, 20, 10],[30, 30, 30],[np.nan, 14, 18]],
+                ],
+                quality_flags = [0, SwapiL3Flags.PREDICTIVE_EPHEMERIS],
+            )
+            path = save_data(initial_data)
+            loaded = SwapiL3aProtonDataFromCDF.from_file(path)
+            np.testing.assert_equal(loaded.l2_parent_file_name, l2_parent_file_name)
+            np.testing.assert_equal(loaded.velocity_rtn, initial_data.proton_sw_velocity_rtn)
+            np.testing.assert_equal(loaded.velocity_rtn_covariance, initial_data.proton_sw_velocity_rtn_covariance)
+            np.testing.assert_equal(loaded.density, initial_data.proton_sw_density)
+            np.testing.assert_equal(loaded.temperature, initial_data.proton_sw_temperature)
+            np.testing.assert_equal(loaded.quality_flags, initial_data.quality_flags)

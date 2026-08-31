@@ -140,6 +140,7 @@ class TestModels(CdfModelTestCase):
                 core_temperature_tensor_integrated=sentinel.core_temperature_tensor_integrated,
                 halo_temperature_tensor_integrated=sentinel.halo_temperature_tensor_integrated,
                 total_temperature_tensor_integrated=sentinel.total_temperature_tensor_integrated,
+                quality_flags=sentinel.moment_quality_flags,
             ),
             swe_flags=sentinel.swp_flags,
             inst_el=sentinel.inst_el,

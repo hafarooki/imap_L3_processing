@@ -1,22 +1,27 @@
 import unittest
 from dataclasses import replace
-from datetime import datetime, timedelta
-from unittest.mock import patch, call, Mock, sentinel
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch, call, Mock, sentinel, create_autospec
 
 import numpy as np
 from imap_data_access.processing_input import ScienceInput, ProcessingInputCollection, AncillaryInput
 from imap_processing.quality_flags import SweL1bFlags
+from spiceypy import SpiceyError
 
+from imap_l3_processing.data_utils import NearestInterpolator
 from imap_l3_processing.models import MagData, InputMetadata
+from imap_l3_processing.predicted_ephemeris_tracker import PredictedEphemerisTracker
 from imap_l3_processing.swe.l3.models import SweL2Data, SwapiL3aProtonData, SweL1bData
 from imap_l3_processing.swe.l3.models import SweL3MomentData
-from imap_l3_processing.swe.l3.science.moment_calculations import MomentFitResults, ScaleDensityOutput
+from imap_l3_processing.swe.l3.science.moment_calculations import IntegrateOutputs, MomentFitResults, ScaleDensityOutput
 from imap_l3_processing.swe.l3.science.moment_calculations import Moments
 from imap_l3_processing.swe.l3.swe_l3_dependencies import SweL3Dependencies
 from imap_l3_processing.swe.quality_flags import SweL3Flags
 from imap_l3_processing.swe.swe_processor import SweProcessor, check_and_mask_negative_moments, logger
 from tests.test_helpers import NumpyArrayMatcher, build_swe_configuration, create_dataclass_mock, build_moments, \
     build_moment_fit_results, build_swe_moment_data
+
+MODULE = "imap_l3_processing.swe.swe_processor"
 
 
 class TestSweProcessor(unittest.TestCase):
@@ -134,7 +139,6 @@ class TestSweProcessor(unittest.TestCase):
         )
         mock_average_over_look_directions.return_value = np.array([5, 10, 15])
 
-
         swe_config = build_swe_configuration(
             geometric_fractions=geometric_fractions,
             pitch_angle_delta=[45, 45, 45],
@@ -150,6 +154,16 @@ class TestSweProcessor(unittest.TestCase):
         )
 
         mock_moment_data = build_swe_moment_data(len(epochs))
+        mock_moment_data.quality_flags = np.array([
+            SweL3Flags.NONE,
+            SweL3Flags.NONE,
+            SweL3Flags.PREDICTIVE_EPHEMERIS,
+            SweL3Flags.NONE,
+            SweL3Flags.PREDICTIVE_EPHEMERIS,
+            SweL3Flags.NONE,
+            SweL3Flags.NONE,
+        ], dtype=np.uint16)
+
         mock_calculate_moment_products.return_value = mock_moment_data
 
         negative_moment_flags_return = np.array([SweL3Flags.NONE] * len(epochs), dtype=np.uint16)
@@ -158,6 +172,7 @@ class TestSweProcessor(unittest.TestCase):
 
         calculate_pitch_angle_flags = np.array([SweL3Flags.NONE] * len(epochs), dtype=np.uint16)
         calculate_pitch_angle_flags[0] = SweL3Flags.FALLBACK_SWAPI_SPEED
+        calculate_pitch_angle_flags[2] = SweL3Flags.FALLBACK_SWAPI_SPEED
 
         expected_phase_space_density_by_pitch_angle = np.full((7, 3, 3), physical_psd_value)
         expected_phase_space_density_by_pitch_angle[1, 0, 0] = unphysical_psd_value
@@ -184,7 +199,8 @@ class TestSweProcessor(unittest.TestCase):
         input_metadata = InputMetadata("swe", "l3", datetime(2025, 2, 21),
                                        datetime(2025, 2, 22), "v001")
         swe_l1b_data = Mock()
-        swe_l3_dependency = SweL3Dependencies(swe_l2_data, swe_l1b_data, mag_l1d_data, swapi_l3a_proton_data, swe_config,
+        swe_l3_dependency = SweL3Dependencies(swe_l2_data, swe_l1b_data, mag_l1d_data, swapi_l3a_proton_data,
+                                              swe_config,
                                               mag_is_preliminary=True)
 
         swe_processor = SweProcessor(swe_l3_dependency, input_metadata)
@@ -315,9 +331,9 @@ class TestSweProcessor(unittest.TestCase):
         expected_quality_flags = np.array([
             SweL3Flags.FALLBACK_SWAPI_SPEED | SweL3Flags.FALLBACK_POTENTIAL_ESTIMATE | SweL3Flags.POTENTIAL_FIT_UNCONVERGED | SweL3Flags.PRELIMINARY_MAG,
             SweL3Flags.PRELIMINARY_MAG | SweL3Flags.FALLBACK_CALIBRATION_EXTRAPOLATED | SweL3Flags.UNPHYSICAL_PSD,
-            SweL3Flags.PRELIMINARY_MAG | SweL3Flags.FALLBACK_CALIBRATION_EXTRAPOLATED | SweL3Flags.UNPHYSICAL_PSD,
+            SweL3Flags.PRELIMINARY_MAG | SweL3Flags.FALLBACK_CALIBRATION_EXTRAPOLATED | SweL3Flags.UNPHYSICAL_PSD | SweL3Flags.PREDICTIVE_EPHEMERIS | SweL3Flags.FALLBACK_SWAPI_SPEED,
             SweL3Flags.FALLBACK_POTENTIAL_ESTIMATE | SweL3Flags.PRELIMINARY_MAG | SweL3Flags.UNPHYSICAL_PSD,
-            SweL3Flags.PRELIMINARY_MAG | SweL3Flags.NEGATIVE_MOMENT | SweL3Flags.FALLBACK_CALIBRATION_EXTRAPOLATED | SweL3Flags.UNPHYSICAL_PSD,
+            SweL3Flags.PRELIMINARY_MAG | SweL3Flags.NEGATIVE_MOMENT | SweL3Flags.FALLBACK_CALIBRATION_EXTRAPOLATED | SweL3Flags.UNPHYSICAL_PSD | SweL3Flags.PREDICTIVE_EPHEMERIS,
             SweL3Flags.PRELIMINARY_MAG | SweL3Flags.UNPHYSICAL_PSD,
             SweL3Flags.PRELIMINARY_MAG | SweL3Flags.UNPHYSICAL_PSD,
         ])
@@ -423,8 +439,8 @@ class TestSweProcessor(unittest.TestCase):
     @patch('imap_l3_processing.swe.swe_processor.correct_and_rebin')
     @patch('imap_l3_processing.swe.swe_processor.integrate_distribution_to_get_1d_spectrum')
     @patch('imap_l3_processing.swe.swe_processor.integrate_distribution_to_get_inbound_and_outbound_1d_spectrum')
-    @patch('imap_l3_processing.swe.swe_processor.find_closest_neighbor')
-    def test_calculate_pitch_angle_and_gyrophase_products(self, mock_find_closest_neighbor,
+    @patch('imap_l3_processing.swe.swe_processor.NearestInterpolator')
+    def test_calculate_pitch_angle_and_gyrophase_products(self, mock_nearest_interpolator,
                                                           mock_integrate_distribution_to_get_inbound_and_outbound_1d_spectrum,
                                                           mock_integrate_distribution_to_get_1d_spectrum,
                                                           mock_correct_and_rebin,
@@ -432,9 +448,9 @@ class TestSweProcessor(unittest.TestCase):
                                                           _,
                                                           mock_average_over_look_directions,
                                                           mock_calculate_velocities, mock_swe_rebin_intensity):
-        epochs = datetime.now() + np.arange(3) * timedelta(minutes=1)
-        mag_epochs = datetime.now() - timedelta(seconds=15) + np.arange(10) * timedelta(minutes=.5)
-        swapi_epochs = datetime.now() - timedelta(seconds=15) + np.arange(10) * timedelta(minutes=.5)
+        epochs = np.arange(3) * timedelta(minutes=1) + datetime.now()
+        mag_epochs = np.arange(10) * timedelta(minutes=.5) + datetime.now() - timedelta(seconds=15)
+        swapi_epochs = np.arange(10) * timedelta(minutes=.5) + datetime.now() - timedelta(seconds=15)
         spacecraft_potential = np.array([12, 16, 19])
         energies = np.array([2, 4, 6])
 
@@ -478,17 +494,22 @@ class TestSweProcessor(unittest.TestCase):
             swp_flags=np.zeros(10),
         )
         rotated_dps_vectors = np.arange(30).reshape(10, 3).astype(float)
-        rotated_dps_vectors[3] = np.nan
-        rotated_dps_vectors[4] = np.nan
-        mock_rotate_rtn_vectors_to_dps.return_value = rotated_dps_vectors
+        rotated_dps_vectors[3, :] = np.nan
+        rotated_dps_vectors[4, :] = np.nan
+
+        mock_rotate_rtn_vectors_to_dps.return_value = rotated_dps_vectors, sentinel.solar_wind_uses_pred_ephem_flags
         counts = swe_l1b_data.count_rates * swe_l2_data.acquisition_duration[:, :, np.newaxis] / 1e6
         mock_average_over_look_directions.return_value = np.array([5, 10, 15])
         closest_mag_data = np.arange(9).reshape(3, 3)
         closest_swapi_data = np.arange(8, 17).reshape(3, 3)
-        mock_find_closest_neighbor.side_effect = [
-            (closest_mag_data, sentinel.mag_best_indices),
-            (closest_swapi_data, np.array([3,4,5]))
-        ]
+
+        mock_interpolator_mag = create_autospec(NearestInterpolator, best_indices=sentinel.mag_best_indices)
+        mock_interpolator_swapi = create_autospec(NearestInterpolator, best_indices=np.array([3,4,5]))
+
+        mock_interpolator_mag.interpolate_data.return_value = closest_mag_data
+        mock_interpolator_swapi.interpolate_data.return_value = closest_swapi_data
+
+        mock_nearest_interpolator.side_effect = [mock_interpolator_mag, mock_interpolator_swapi]
 
         rebinned_by_pitch_list = [
             i + np.arange(len(swe_l2_data.energy) * len(pitch_angle_bins)).reshape(len(swe_l2_data.energy),
@@ -548,6 +569,11 @@ class TestSweProcessor(unittest.TestCase):
         swel3_dependency = SweL3Dependencies(swe_l2_data, swe_l1b_data, mag_l1d_data, swapi_l3a_proton_data, swe_config)
         swe_processor = SweProcessor(dependencies=[], input_metadata=input_metadata)
 
+        mock_interpolator_swapi.interpolate_flags.side_effect = [
+            np.array([True, True, False]),
+            np.array([False, True, False]),
+        ]
+
         actual_phase_space_density_by_pitch_angle, actual_phase_space_density_by_pa_and_gyrophase, actual_energy_spectrum, actual_energy_spectrum_inbound, actual_energy_spectrum_outbound, \
             actual_intensity_by_pa_and_gyro, actual_intensity_by_pa, actual_uncertainty_by_pa_and_gyro, actual_uncertainty_by_pa, actual_swe_flags \
             = swe_processor.calculate_pitch_angle_products(swel3_dependency, corrected_energy_bins)
@@ -561,7 +587,7 @@ class TestSweProcessor(unittest.TestCase):
         expected_dps_vectors_after_speed_fallback = rotated_dps_vectors.copy()
         expected_dps_vectors_after_speed_fallback[3] = [0.0, 0.0, -400.0]
         expected_dps_vectors_after_speed_fallback[4] = [0.0, 0.0, -400.0]
-        mock_find_closest_neighbor.assert_has_calls([
+        mock_nearest_interpolator.assert_has_calls([
             call(
                 from_epoch=mag_epochs,
                 from_data=mag_l1d_data.mag_data,
@@ -575,7 +601,16 @@ class TestSweProcessor(unittest.TestCase):
                 maximum_distance=np.timedelta64(5, 'm')
             )
         ])
-        expected_flags = np.array([SweL3Flags.FALLBACK_SWAPI_SPEED, SweL3Flags.FALLBACK_SWAPI_SPEED, SweL3Flags.NONE])
+
+        mock_interpolator_swapi.interpolate_flags.call_args_list[0][0]
+
+        expected_fallback_flags = [False, False, False, True, True, False, False, False, False, False,]
+
+        self.assertEqual(2, mock_interpolator_swapi.interpolate_flags.call_count)
+        mock_interpolator_swapi.interpolate_flags.assert_has_calls([call(NumpyArrayMatcher(expected_fallback_flags)), call(sentinel.solar_wind_uses_pred_ephem_flags)], any_order=False)
+
+
+        expected_flags = np.array([SweL3Flags.FALLBACK_SWAPI_SPEED, SweL3Flags.FALLBACK_SWAPI_SPEED | SweL3Flags.PREDICTIVE_EPHEMERIS, SweL3Flags.NONE])
 
         np.testing.assert_array_equal(actual_phase_space_density_by_pitch_angle, rebinned_by_pitch_list)
         np.testing.assert_array_equal(actual_phase_space_density_by_pa_and_gyrophase,
@@ -658,7 +693,7 @@ class TestSweProcessor(unittest.TestCase):
             datetime(2025, 3, 6, 0, 10, 30),
         ])
         swapi_epochs = np.array([datetime(2025, 3, 6)])
-        mock_rotate_rtn_vectors_to_dps.return_value = np.tile([0.0, 0.0, -400.0], (len(swapi_epochs), 1))
+        mock_rotate_rtn_vectors_to_dps.return_value = np.tile([0.0, 0.0, -400.0], (len(swapi_epochs), 1)), np.zeros(len(swapi_epochs), dtype=bool)
 
         pitch_angle_bins = [70, 100, 130]
 
@@ -763,7 +798,7 @@ class TestSweProcessor(unittest.TestCase):
         swapi_epochs = np.array([datetime(2025, 3, 6), datetime(2025, 3, 10)])
         swp_flags = np.zeros(2)
         mock_calculate_moments.return_value = build_swe_moment_data(len(epochs))
-        mock_rotate_rtn_vectors_to_dps.return_value = np.full((len(swapi_epochs), 3), np.nan)
+        mock_rotate_rtn_vectors_to_dps.return_value = np.full((len(swapi_epochs), 3), np.nan), np.zeros(len(swapi_epochs), dtype=bool)
         pitch_angle_bins = [70, 100, 130]
 
         num_energies = 9
@@ -870,6 +905,7 @@ class TestSweProcessor(unittest.TestCase):
         ])
         np.testing.assert_array_equal(swe_l3_data.swe_flags, expected_swe_flags)
 
+    @patch(f"{MODULE}.get_dps_to_rtn_rotation_matrix")
     @patch('imap_l3_processing.swe.swe_processor.rotate_temperature_tensor_to_mag')
     @patch('imap_l3_processing.swe.swe_processor.calculate_primary_eigenvector')
     @patch('imap_l3_processing.swe.swe_processor.rotate_vector_to_rtn_spherical_coordinates')
@@ -880,7 +916,7 @@ class TestSweProcessor(unittest.TestCase):
     @patch('imap_l3_processing.swe.swe_processor.core_fit_moments_retrying_on_failure')
     @patch('imap_l3_processing.swe.swe_processor.compute_maxwellian_weight_factors')
     @patch('imap_l3_processing.swe.swe_processor.calculate_velocity_in_dsp_frame_km_s')
-    @patch('imap_l3_processing.swe.swe_processor.rotate_dps_vector_to_rtn')
+    @patch('imap_l3_processing.swe.swe_processor.apply_rotation_matrix')
     @patch('imap_l3_processing.swe.swe_processor.rotate_temperature')
     def test_calculate_moment_products(self, mock_rotate_temperature,
                                        mock_rotate_dps_vector_to_rtn,
@@ -893,8 +929,15 @@ class TestSweProcessor(unittest.TestCase):
                                        mock_scale_halo_density: Mock,
                                        mock_rotate_vector_to_rtn_spherical_coordinates,
                                        mock_calculate_primary_eigenvector,
-                                       mock_rotate_temperature_tensor_to_mag):
+                                       mock_rotate_temperature_tensor_to_mag,
+                                       mock_get_dps_to_rtn_rotation_matrix):
         epochs = datetime.now() + np.arange(3) * timedelta(minutes=1)
+        dps_to_rtn_matrices = [
+            sentinel.dps_to_rtn_1,
+            sentinel.dps_to_rtn_2,
+            sentinel.dps_to_rtn_3,
+        ]
+        mock_get_dps_to_rtn_rotation_matrix.side_effect = dps_to_rtn_matrices
 
         instrument_elevation = np.array([-63, -42, -21, 0, 21, 42, 63])
         swe_l2_data = SweL2Data(
@@ -1164,48 +1207,52 @@ class TestSweProcessor(unittest.TestCase):
         self.assertEqual(spacecraft_potential[2], halo_fit_moments_3.args[7])
         self.assertEqual(core_halo_breakpoint[2], halo_fit_moments_3.args[8])
 
+        self.assertEqual(
+            [call(epochs[0]), call(epochs[1]), call(epochs[2])],
+            mock_get_dps_to_rtn_rotation_matrix.call_args_list,
+        )
         self.assertEqual(7, mock_rotate_dps_vector_to_rtn.call_count)
 
-        self.assertEqual(epochs[0], mock_rotate_dps_vector_to_rtn.call_args_list[0].args[0])
+        self.assertEqual(dps_to_rtn_matrices[0], mock_rotate_dps_vector_to_rtn.call_args_list[0].args[0])
         np.testing.assert_array_equal(
             np.array([core_moments1.velocity_x, core_moments1.velocity_y, core_moments1.velocity_z]),
             mock_rotate_dps_vector_to_rtn.call_args_list[0].args[1])
-        self.assertEqual(epochs[0], mock_rotate_dps_vector_to_rtn.call_args_list[1].args[0])
+        self.assertEqual(dps_to_rtn_matrices[0], mock_rotate_dps_vector_to_rtn.call_args_list[1].args[0])
         np.testing.assert_array_equal(
             scaled_core_velocity,
             mock_rotate_dps_vector_to_rtn.call_args_list[1].args[1])
 
-        self.assertEqual(epochs[0], mock_rotate_dps_vector_to_rtn.call_args_list[2].args[0])
+        self.assertEqual(dps_to_rtn_matrices[0], mock_rotate_dps_vector_to_rtn.call_args_list[2].args[0])
         np.testing.assert_array_equal(
             total_integrate_output.velocity,
             mock_rotate_dps_vector_to_rtn.call_args_list[2].args[1])
 
-        self.assertEqual(epochs[0], mock_rotate_dps_vector_to_rtn.call_args_list[3].args[0])
+        self.assertEqual(dps_to_rtn_matrices[0], mock_rotate_dps_vector_to_rtn.call_args_list[3].args[0])
         np.testing.assert_array_equal(
             np.array([halo_moments1.velocity_x, halo_moments1.velocity_y, halo_moments1.velocity_z]),
             mock_rotate_dps_vector_to_rtn.call_args_list[3].args[1])
 
-        self.assertEqual(epochs[0], mock_rotate_dps_vector_to_rtn.call_args_list[4].args[0])
+        self.assertEqual(dps_to_rtn_matrices[0], mock_rotate_dps_vector_to_rtn.call_args_list[4].args[0])
         np.testing.assert_array_equal(
             scaled_halo_velocity,
             mock_rotate_dps_vector_to_rtn.call_args_list[4].args[1])
 
-        self.assertEqual(epochs[1], mock_rotate_dps_vector_to_rtn.call_args_list[5].args[0])
+        self.assertEqual(dps_to_rtn_matrices[1], mock_rotate_dps_vector_to_rtn.call_args_list[5].args[0])
         np.testing.assert_array_equal(
             np.array([core_moments2.velocity_x, core_moments2.velocity_y, core_moments2.velocity_z]),
             mock_rotate_dps_vector_to_rtn.call_args_list[5].args[1])
 
-        self.assertEqual(epochs[1], mock_rotate_dps_vector_to_rtn.call_args_list[6].args[0])
+        self.assertEqual(dps_to_rtn_matrices[1], mock_rotate_dps_vector_to_rtn.call_args_list[6].args[0])
         np.testing.assert_array_equal(
             np.array([halo_moments2.velocity_x, halo_moments2.velocity_y, halo_moments2.velocity_z]),
             mock_rotate_dps_vector_to_rtn.call_args_list[6].args[1])
 
         self.assertEqual(4, mock_rotate_temperature.call_count)
         mock_rotate_temperature.assert_has_calls(
-            [call(epochs[0], core_moments1.alpha, core_moments1.beta),
-             call(epochs[0], halo_moments1.alpha, halo_moments1.beta),
-             call(epochs[1], core_moments2.alpha, core_moments2.beta),
-             call(epochs[1], halo_moments2.alpha, halo_moments2.beta), ])
+            [call(dps_to_rtn_matrices[0], core_moments1.alpha, core_moments1.beta),
+             call(dps_to_rtn_matrices[0], halo_moments1.alpha, halo_moments1.beta),
+             call(dps_to_rtn_matrices[1], core_moments2.alpha, core_moments2.beta),
+             call(dps_to_rtn_matrices[1], halo_moments2.alpha, halo_moments2.beta), ])
 
         def call_with_array_matchers(*args):
             return call(*[NumpyArrayMatcher(x) for x in args])
@@ -1271,12 +1318,12 @@ class TestSweProcessor(unittest.TestCase):
         self.assertEqual(6, mock_rotate_vector_to_rtn_spherical_coordinates.call_count)
 
         mock_rotate_vector_to_rtn_spherical_coordinates.assert_has_calls([
-            call(epochs[0], core_integrate_output.heat_flux),
-            call(epochs[0], core_primary_evec),
-            call(epochs[0], total_integrate_output.heat_flux),
-            call(epochs[0], total_primary_evec),
-            call(epochs[0], halo_integrate_output.heat_flux),
-            call(epochs[0], halo_primary_evec),
+            call(dps_to_rtn_matrices[0], core_integrate_output.heat_flux),
+            call(dps_to_rtn_matrices[0], core_primary_evec),
+            call(dps_to_rtn_matrices[0], total_integrate_output.heat_flux),
+            call(dps_to_rtn_matrices[0], total_primary_evec),
+            call(dps_to_rtn_matrices[0], halo_integrate_output.heat_flux),
+            call(dps_to_rtn_matrices[0], halo_primary_evec),
         ])
 
         self.assertEqual(3, mock_calculate_primary_eigenvector.call_count)
@@ -1406,11 +1453,12 @@ class TestSweProcessor(unittest.TestCase):
 
         # @formatter:on
 
+    @patch(f"{MODULE}.get_dps_to_rtn_rotation_matrix")
     @patch('imap_l3_processing.swe.swe_processor.rotate_vector_to_rtn_spherical_coordinates')
     @patch('imap_l3_processing.swe.swe_processor.scale_halo_density')
     @patch('imap_l3_processing.swe.swe_processor.scale_core_density')
     @patch('imap_l3_processing.swe.swe_processor.rotate_temperature')
-    @patch('imap_l3_processing.swe.swe_processor.rotate_dps_vector_to_rtn')
+    @patch('imap_l3_processing.swe.swe_processor.apply_rotation_matrix')
     @patch('imap_l3_processing.swe.swe_processor.compute_maxwellian_weight_factors')
     @patch('imap_l3_processing.swe.swe_processor.integrate')
     @patch('imap_l3_processing.swe.swe_processor.halo_fit_moments_retrying_on_failure')
@@ -1423,7 +1471,8 @@ class TestSweProcessor(unittest.TestCase):
                                                                                mock_rotate_temperature,
                                                                                mock_scale_core_density,
                                                                                mock_scale_halo_density,
-                                                                               mock_rotate_vector_to_rtn_spherical_coordinates):
+                                                                               mock_rotate_vector_to_rtn_spherical_coordinates,
+                                                                               mock_get_dps_to_rtn_rotation_matrix):
         mock_core_fit_moments_retrying_on_failure.side_effect = [
             build_moment_fit_results(moments=build_moments(t_parallel=1e3 - 1, t_perpendicular=1e3 - 1)),
             build_moment_fit_results(moments=build_moments(t_parallel=1e3 + 1, t_perpendicular=1e3 + 1)),
@@ -1501,6 +1550,176 @@ class TestSweProcessor(unittest.TestCase):
         np.testing.assert_array_equal([np.nan, 1, 1, np.nan], swe_moment_data.halo_density_integrated)
         self.assertEqual(4, len(swe_moment_data.halo_velocity_vector_rtn_integrated))
 
+    @patch(f"{MODULE}.PredictedEphemerisTracker")
+    @patch(f"{MODULE}.scale_halo_density")
+    @patch(f"{MODULE}.scale_core_density")
+    @patch(f"{MODULE}.integrate")
+    @patch(f"{MODULE}.halo_fit_moments_retrying_on_failure")
+    @patch(f"{MODULE}.core_fit_moments_retrying_on_failure")
+    @patch(f"{MODULE}.compute_maxwellian_weight_factors")
+    @patch(f"{MODULE}.calculate_velocity_in_dsp_frame_km_s")
+    @patch(f"{MODULE}.get_dps_to_rtn_rotation_matrix")
+    def test_calculate_moments_products_flags_data_and_uses_fill_based_on_spice_call_result(
+            self,
+            mock_get_dps_to_rtn_rotation_matrix,
+            mock_calculate_velocity_in_dsp_frame_km_s,
+            mock_compute_maxwellian_weight_factors,
+            mock_core_fit_moments_retrying_on_failure: Mock,
+            mock_halo_fit_moments_retrying_on_failure: Mock,
+            mock_integrate: Mock,
+            mock_scale_core_density: Mock,
+            mock_scale_halo_density: Mock,
+            mock_predicted_ephemeris_tracker: Mock, ):
+        epochs = datetime(2025, 1, 1, tzinfo=timezone.utc) + np.arange(3) * timedelta(minutes=1)
+
+        mock_predicted_ephemeris_tracker_epoch_1 = create_autospec(PredictedEphemerisTracker, used_predict=False)
+        mock_predicted_ephemeris_tracker_epoch_2 = create_autospec(PredictedEphemerisTracker, used_predict=False)
+        mock_predicted_ephemeris_tracker_epoch_3 = create_autospec(PredictedEphemerisTracker, used_predict=True)
+
+        mock_predicted_ephemeris_tracker.side_effect = (mock_predicted_ephemeris_tracker_epoch_1,
+                                                        mock_predicted_ephemeris_tracker_epoch_2,
+                                                        mock_predicted_ephemeris_tracker_epoch_3)
+
+        mock_predicted_ephemeris_tracker_epoch_1.run.return_value = np.eye(3)
+        mock_predicted_ephemeris_tracker_epoch_2.run.side_effect = SpiceyError("Missing coverage for IMAP_DPS")
+        mock_predicted_ephemeris_tracker_epoch_3.run.return_value = np.eye(3)
+
+        mock_calculate_velocity_in_dsp_frame_km_s.return_value = np.full(shape=(24, 30, 7, 3), fill_value=1)
+        mock_compute_maxwellian_weight_factors.return_value = np.full(shape=(24, 30, 7), fill_value=1)
+        mock_core_fit_moments_retrying_on_failure.return_value = build_moment_fit_results()
+        mock_halo_fit_moments_retrying_on_failure.return_value = build_moment_fit_results()
+        mock_integrate.return_value = IntegrateOutputs(
+            100,
+            np.array([1, 2, 3]),
+            np.array([1, 0, 2, 0, 0, 4]),
+            np.array([1, 2, 3]),
+            1,
+        )
+        mock_scale_core_density.return_value = ScaleDensityOutput(
+            1000,
+            np.array([1, 1, 1]),
+            np.array([1, 0, 2, 0, 0, 4]),
+            np.ones(4),
+            np.ones(6),
+        )
+        mock_scale_halo_density.return_value = ScaleDensityOutput(
+            1000,
+            np.array([1, 1, 1]),
+            np.array([1, 0, 2, 0, 0, 4]),
+            np.ones(4),
+            np.ones(6),
+        )
+
+        instrument_elevation = np.array([-63, -42, -21, 0, 21, 42, 63])
+        swe_l2_data = SweL2Data(
+            epoch=epochs,
+            phase_space_density=np.arange(9).reshape(3, 3) + 100,
+            flux=np.arange(9).reshape(3, 3),
+            energy=np.array([9, 10, 12, 14, 36, 54, 96, 102, 112, 156, 172]),
+            inst_el=instrument_elevation,
+            inst_el_label=sentinel.inst_el_label,
+            inst_az=sentinel.inst_az,
+            inst_az_label=sentinel.inst_az_label,
+            inst_az_spin_sector=np.arange(10, 19).reshape(3, 3),
+            acquisition_time=np.array([]),
+            acquisition_duration=[1e7, 2e7, 3e7],
+            phase_space_density_rebinned=np.array([]),
+            data_quality=np.array([]),
+        )
+        swe_l1_data = SweL1bData(
+            epoch=epochs,
+            count_rates=[sentinel.l1b_count_rates_1, sentinel.l1b_count_rates_2, sentinel.l1b_count_rates_3],
+            settle_duration=Mock(),
+        )
+        spacecraft_potential = np.array([12, 14, 16])
+        core_halo_breakpoint = np.array([96, 54, 103])
+        corrected_energy_bins = swe_l2_data.energy.reshape(1, -1) - spacecraft_potential.reshape(-1, 1)
+
+        input_metadata = InputMetadata(
+            "swe",
+            "l3",
+            datetime(2025, 2, 21, tzinfo=timezone.utc),
+            datetime(2025, 2, 22, tzinfo=timezone.utc),
+            "v001",
+        )
+        swe_processor = SweProcessor(dependencies=[], input_metadata=input_metadata)
+        config = build_swe_configuration()
+        rebinned_mag_data = np.array([[0, 0, 1], [0, 0, 1], [0, 0, 1]])
+
+        swe_moment_data = swe_processor.calculate_moment_products(
+            swe_l2_data,
+            swe_l1_data,
+            rebinned_mag_data,
+            spacecraft_potential,
+            core_halo_breakpoint,
+            corrected_energy_bins,
+            config,
+        )
+
+        mock_predicted_ephemeris_tracker_epoch_1.run.assert_called_once_with(mock_get_dps_to_rtn_rotation_matrix, epochs[0])
+        mock_predicted_ephemeris_tracker_epoch_2.run.assert_called_once_with(mock_get_dps_to_rtn_rotation_matrix, epochs[1])
+        mock_predicted_ephemeris_tracker_epoch_3.run.assert_called_once_with(mock_get_dps_to_rtn_rotation_matrix, epochs[2])
+
+        rotated_field_names = (
+            "core_temperature_phi_rtn_fit",
+            "halo_temperature_phi_rtn_fit",
+            "core_temperature_theta_rtn_fit",
+            "halo_temperature_theta_rtn_fit",
+            "core_speed_fit",
+            "halo_speed_fit",
+            "core_velocity_vector_rtn_fit",
+            "halo_velocity_vector_rtn_fit",
+            "core_speed_integrated",
+            "halo_speed_integrated",
+            "total_speed_integrated",
+            "core_velocity_vector_rtn_integrated",
+            "halo_velocity_vector_rtn_integrated",
+            "total_velocity_vector_rtn_integrated",
+            "core_heat_flux_theta_integrated",
+            "core_heat_flux_phi_integrated",
+            "halo_heat_flux_theta_integrated",
+            "halo_heat_flux_phi_integrated",
+            "total_heat_flux_theta_integrated",
+            "total_heat_flux_phi_integrated",
+            "core_temperature_theta_rtn_integrated",
+            "core_temperature_phi_rtn_integrated",
+            "halo_temperature_theta_rtn_integrated",
+            "halo_temperature_phi_rtn_integrated",
+            "total_temperature_theta_rtn_integrated",
+            "total_temperature_phi_rtn_integrated",
+        )
+        finite_field_names = (
+            "core_density_integrated",
+            "halo_density_integrated",
+            "total_density_integrated",
+            "core_heat_flux_magnitude_integrated",
+            "halo_heat_flux_magnitude_integrated",
+            "total_heat_flux_magnitude_integrated",
+            "core_t_parallel_integrated",
+            "halo_t_parallel_integrated",
+            "total_t_parallel_integrated",
+            "core_t_perpendicular_integrated",
+            "halo_t_perpendicular_integrated",
+            "total_t_perpendicular_integrated",
+            "core_temperature_parallel_to_mag",
+            "halo_temperature_parallel_to_mag",
+            "total_temperature_parallel_to_mag",
+            "core_temperature_perpendicular_to_mag",
+            "halo_temperature_perpendicular_to_mag",
+            "total_temperature_perpendicular_to_mag",
+            "core_temperature_tensor_integrated",
+            "halo_temperature_tensor_integrated",
+            "total_temperature_tensor_integrated",
+        )
+
+        _assert_field_nan_at_index_and_finite_elsewhere(
+            self, swe_moment_data, rotated_field_names, nan_index=1, finite_indices=(0, 2)
+        )
+        _assert_fields_finite_everywhere(self, swe_moment_data, finite_field_names)
+
+        np.testing.assert_array_equal(swe_moment_data.quality_flags, np.array([SweL3Flags.NONE, SweL3Flags.NONE, SweL3Flags.PREDICTIVE_EPHEMERIS]))
+        self.assertEqual(np.uint16, swe_moment_data.quality_flags.dtype)
+
     def test_calculate_moment_products_handles_bad_fit_indices_and_continues(self):
         epochs = np.array([datetime.now()])
 
@@ -1557,7 +1776,7 @@ class TestSweProcessor(unittest.TestCase):
     @patch('imap_l3_processing.swe.swe_processor.core_fit_moments_retrying_on_failure')
     @patch('imap_l3_processing.swe.swe_processor.compute_maxwellian_weight_factors')
     @patch('imap_l3_processing.swe.swe_processor.calculate_velocity_in_dsp_frame_km_s')
-    @patch('imap_l3_processing.swe.swe_processor.rotate_dps_vector_to_rtn')
+    @patch('imap_l3_processing.swe.swe_processor.apply_rotation_matrix')
     @patch('imap_l3_processing.swe.swe_processor.rotate_temperature')
     def test_calculate_moment_products_handles_errors_with_fill(self, mock_rotate_temperature,
                                                                 mock_rotate_dps_vector_to_rtn,
@@ -1778,6 +1997,7 @@ def _build_finite_moment_data(num_epochs: int) -> SweL3MomentData:
         core_temperature_tensor_integrated=np.full(shape_6, 1.0),
         halo_temperature_tensor_integrated=np.full(shape_6, 1.0),
         total_temperature_tensor_integrated=np.full(shape_6, 1.0),
+        quality_flags=np.full(shape_1d, SweL3Flags.NONE),
     )
 
 

@@ -1175,7 +1175,7 @@ total_temperature_tensor_integrated:
   CATDESC: Total temperature tensor integrated
   DEPEND_0: epoch
   DEPEND_1: tensor_id
-  VAR_TYPE: support_datadata
+  VAR_TYPE: support_data
   RECORD_VARYING: RV
   DISPLAY_TYPE: time_series
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
@@ -1751,4 +1751,4 @@ swe_flags:
     Bit 10: any density or temperature moment is negative (unphysical)
     Bit 11: any PSD value is unphysically large (>1e-19).
     Bit 12: passthrough of LAST_CAL_INTERVAL from L2 Quality Flags: calibration was extrapolated using the last two entries in the calibration table.
-    Bit 13: Unimplemented. Reserved to indicate predictive ephemeris was used instead of reconstructed ephemeris.
+    Bit 15: indicates predictive ephemeris was used instead of reconstructed ephemeris.

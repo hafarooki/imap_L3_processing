@@ -39,7 +39,6 @@ class GlowsL3EDependencies:
     pipeline_settings: dict
     pipeline_settings_file: Path
     repointing_file: Path
-    spice_kernels: list[str] = field(default_factory=list)
 
     @classmethod
     def fetch_dependencies(cls, dependencies: ProcessingInputCollection):
@@ -98,11 +97,15 @@ class GlowsL3EDependencies:
             repointing_file=repoint_file_path,
         )
 
-    def furnish_spice_dependencies(self, start_date: datetime, end_date: datetime):
+    @staticmethod
+    def collect_spice_dependencies(start_date: datetime, end_date: datetime):
         logger.info(f"Querying for SPICE data over the range: {start_date} to {end_date}")
 
-        spice_kernels = furnish_spice_metakernel(start_date=start_date, end_date=end_date, kernel_types=GLOWS_L3E_REQUIRED_SPICE_KERNELS)
-        self.spice_kernels.extend([kernel_path.name for kernel_path in spice_kernels.spice_kernel_paths])
+        kernel_types_with_predicted = GLOWS_L3E_REQUIRED_SPICE_KERNELS
+        kernel_types_without_predicted = [kernel for kernel in GLOWS_L3E_REQUIRED_SPICE_KERNELS if kernel != SpiceKernelTypes.EphemerisPredicted]
+
+        return (furnish_spice_metakernel(start_date=start_date, end_date=end_date, kernel_types=kernel_types_with_predicted, metakernel_file_name="metakernel_with_predict_ephem.txt"),
+            furnish_spice_metakernel(start_date=start_date, end_date=end_date, kernel_types=kernel_types_without_predicted, metakernel_file_name="metakernel_without_predict_ephem.txt"))
 
     def copy_dependencies(self):
         if self.energy_grid_lo is not None:
@@ -144,7 +147,6 @@ class GlowsL3EDependencies:
             self.sw_eqtr_electrons.name,
             self.pipeline_settings_file.name,
             self.repointing_file.name,
-            *self.spice_kernels
         ]
 
     def get_lo_parents(self):
@@ -159,7 +161,6 @@ class GlowsL3EDependencies:
             self.sw_eqtr_electrons.name,
             self.pipeline_settings_file.name,
             self.repointing_file.name,
-            *self.spice_kernels
         ]
 
     def get_ul_parents(self):
@@ -174,5 +175,4 @@ class GlowsL3EDependencies:
             self.sw_eqtr_electrons.name,
             self.pipeline_settings_file.name,
             self.repointing_file.name,
-            *self.spice_kernels
         ]

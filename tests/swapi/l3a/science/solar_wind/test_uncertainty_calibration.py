@@ -272,7 +272,7 @@ def _run_trial(trial_seed: int) -> dict | None:
         mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     proton_result = fit_solar_wind_proton_model(proton_ctx)
-    if int(proton_result.bad_fit_flag) != int(SwapiL3Flags.NONE):
+    if int(proton_result.quality_flag) != int(SwapiL3Flags.NONE):
         return None
     if not state.with_alpha:
         # `_proton_moments_from_fit` only touches `data_chunk` on the
@@ -299,13 +299,13 @@ def _run_trial(trial_seed: int) -> dict | None:
         proton_moments=proton_result,
         magnetic_field_direction=_B_HAT_RTN,
     )
-    if int(alpha_moments.bad_fit_flag) != int(SwapiL3Flags.NONE):
+    if int(alpha_moments.quality_flag) != int(SwapiL3Flags.NONE):
         return None
     chunk_result = AlphaChunkFitResult(
         alpha_moments=alpha_moments,
         proton_moments=proton_result,
         b_hat_rtn=_B_HAT_RTN.copy(),
-        bad_fit_flag=int(alpha_moments.bad_fit_flag),
+        quality_flag=int(alpha_moments.quality_flag),
     )
     return _alpha_moments_from_fit(chunk_result, epoch=0, sc_velocity_rtn=_SC_VELOCITY_RTN)
 

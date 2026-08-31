@@ -1,13 +1,18 @@
 import unittest
-from datetime import datetime
-from unittest.mock import sentinel, Mock, MagicMock
+from datetime import datetime, timedelta
+from unittest.mock import sentinel, Mock, MagicMock, patch
 
 import numpy as np
 
-from imap_l3_processing.glows.l3e.glows_l3e_call_arguments import GlowsL3eCallArguments
-from imap_l3_processing.glows.l3e.glows_l3e_lo_model import GlowsL3ELoData
+from imap_l3_processing.glows.l3e.glows_l3e_call_arguments import GlowsL3eCallArguments, GlowsL3eSpacecraftInfo
+from imap_l3_processing.glows.l3e.glows_l3e_lo_model import GlowsL3ELoData, SPIN_AXIS_LONGITUDE_VAR_NAME, \
+    SPIN_AXIS_LATITUDE_VAR_NAME, EPOCH_CDF_VAR_NAME, ENERGY_VAR_NAME, SPIN_ANGLE_VAR_NAME, \
+    PROBABILITY_OF_SURVIVAL_VAR_NAME, ENERGY_LABEL_VAR_NAME, SPIN_ANGLE_LABEL_VAR_NAME, ELONGATION_VAR_NAME, \
+    PROGRAM_VERSION_VAR_NAME, SPACECRAFT_RADIUS_VAR_NAME, SPACECRAFT_LONGITUDE_VAR_NAME, SPACECRAFT_LATITUDE_VAR_NAME, \
+    SPACECRAFT_VELOCITY_X_VAR_NAME, SPACECRAFT_VELOCITY_Y_VAR_NAME, SPACECRAFT_VELOCITY_Z_VAR_NAME, \
+    GLOWS_FLAGS_VAR_NAME, ENERGY_DELTA_PLUS_VAR_NAME, ENERGY_DELTA_MINUS_VAR_NAME, EPOCH_DELTA_CDF_VAR_NAME
 from imap_l3_processing.models import DataProductVariable
-from tests.test_helpers import get_test_instrument_team_data_path
+from tests.test_helpers import get_test_instrument_team_data_path, NumpyArrayMatcher
 
 
 class TestL3eLoModel(unittest.TestCase):
@@ -32,7 +37,10 @@ class TestL3eLoModel(unittest.TestCase):
                 l3e_lo: GlowsL3ELoData = GlowsL3ELoData(
                         Mock(),
                         sentinel.epoch,
+                        sentinel.epoch_delta,
                         energy_array,
+                        sentinel.energy_delta_plus,
+                        sentinel.energy_delta_minus,
                         spin_angle_array,
                         sentinel.probability_of_survival,
                         sentinel.elongation,
@@ -49,33 +57,41 @@ class TestL3eLoModel(unittest.TestCase):
                     )
                 data_products = l3e_lo.to_data_product_variables()
 
-                expected_data_products = [
-                        DataProductVariable("epoch", sentinel.epoch),
-                        DataProductVariable("energy_grid", energy_array),
-                        DataProductVariable("spin_angle", spin_angle_array),
-                        DataProductVariable("surv_prob", sentinel.probability_of_survival),
-                        DataProductVariable("energy_label", expected_energy_labels),
-                        DataProductVariable("spin_angle_label", expected_spin_angle_labels),
-                        DataProductVariable("elongation", sentinel.elongation),
-                        DataProductVariable("spin_axis_latitude", np.array([sentinel.spin_axis_latitude])),
-                        DataProductVariable("spin_axis_longitude", np.array([sentinel.spin_axis_longitude])),
-                        DataProductVariable("program_version", np.array([sentinel.program_version])),
-                        DataProductVariable("spacecraft_radius", np.array([sentinel.spacecraft_radius])),
-                        DataProductVariable("spacecraft_latitude", np.array([sentinel.spacecraft_latitude])),
-                        DataProductVariable("spacecraft_longitude", np.array([sentinel.spacecraft_longitude])),
-                        DataProductVariable("spacecraft_velocity_x", np.array([sentinel.spacecraft_velocity_x])),
-                        DataProductVariable("spacecraft_velocity_y", np.array([sentinel.spacecraft_velocity_y])),
-                        DataProductVariable("spacecraft_velocity_z", np.array([sentinel.spacecraft_velocity_z])),
-                        DataProductVariable("glows_flags", sentinel.glows_flags),
-                ]
 
+                expected_data_products = [
+                        DataProductVariable(EPOCH_CDF_VAR_NAME, sentinel.epoch),
+                        DataProductVariable(EPOCH_DELTA_CDF_VAR_NAME, sentinel.epoch_delta),
+                        DataProductVariable(ENERGY_VAR_NAME, energy_array),
+                        DataProductVariable(ENERGY_DELTA_PLUS_VAR_NAME, sentinel.energy_delta_plus),
+                        DataProductVariable(ENERGY_DELTA_MINUS_VAR_NAME, sentinel.energy_delta_minus),
+                        DataProductVariable(SPIN_ANGLE_VAR_NAME, spin_angle_array),
+                        DataProductVariable(PROBABILITY_OF_SURVIVAL_VAR_NAME, sentinel.probability_of_survival),
+                        DataProductVariable(ENERGY_LABEL_VAR_NAME, expected_energy_labels),
+                        DataProductVariable(SPIN_ANGLE_LABEL_VAR_NAME, expected_spin_angle_labels),
+                        DataProductVariable(ELONGATION_VAR_NAME, sentinel.elongation),
+                        DataProductVariable(SPIN_AXIS_LATITUDE_VAR_NAME, np.array([sentinel.spin_axis_latitude])),
+                        DataProductVariable(SPIN_AXIS_LONGITUDE_VAR_NAME, np.array([sentinel.spin_axis_longitude])),
+                        DataProductVariable(PROGRAM_VERSION_VAR_NAME, np.array([sentinel.program_version])),
+                        DataProductVariable(SPACECRAFT_RADIUS_VAR_NAME, np.array([sentinel.spacecraft_radius])),
+                        DataProductVariable(SPACECRAFT_LATITUDE_VAR_NAME, np.array([sentinel.spacecraft_latitude])),
+                        DataProductVariable(SPACECRAFT_LONGITUDE_VAR_NAME, np.array([sentinel.spacecraft_longitude])),
+                        DataProductVariable(SPACECRAFT_VELOCITY_X_VAR_NAME, np.array([sentinel.spacecraft_velocity_x])),
+                        DataProductVariable(SPACECRAFT_VELOCITY_Y_VAR_NAME, np.array([sentinel.spacecraft_velocity_y])),
+                        DataProductVariable(SPACECRAFT_VELOCITY_Z_VAR_NAME, np.array([sentinel.spacecraft_velocity_z])),
+                        DataProductVariable(GLOWS_FLAGS_VAR_NAME, sentinel.glows_flags),
+                ]
                 self.assertEqual(expected_data_products, data_products)
 
-    def test_convert_dat_to_glows_l3e_lo_product(self):
+    @patch("imap_l3_processing.glows.l3e.glows_l3e_lo_model.calculate_energy_deltas")
+    def test_convert_dat_to_glows_l3e_lo_product(self, mock_calculate_energy_deltas):
         lo_file_path = get_test_instrument_team_data_path("glows/probSur.Imap.Lo_20090101_010101_2009.000_60.00.txt")
         epoch = datetime(year=2009, month=1, day=1)
+        epoch_delta = timedelta(hours=3)
+        expected_epoch_delta_in_nanoseconds = 3*3600*1e9
         expected_energy = [0.1700000, 0.2212954, 0.2880685, 0.3749897, 0.4881381, 0.6354278, 0.8271602, 1.0767456,
                            1.4016403, 1.8245678, 2.3751086, 3.0917682, 4.0246710]
+
+        mock_calculate_energy_deltas.return_value = sentinel.energy_delta_plus, sentinel.energy_delta_minus
 
         expected_prob_of_survival_first_col_1 = [
             0.48543928E+00, 0.48415770E+00, 0.48286930E+00, 0.48155365E+00, 0.48022886E+00, 0.47885535E+00,
@@ -150,26 +166,35 @@ class TestL3eLoModel(unittest.TestCase):
         spin_axis_lon = 90.0
 
         args = MagicMock(spec=GlowsL3eCallArguments)
-        args.spin_axis_latitude = spin_axis_lat
-        args.spin_axis_longitude = spin_axis_lon
-
         expected_program_version = 'Lo.v00.01'
 
-        args.spacecraft_radius = .5
-        args.spacecraft_longitude = 85.4
-        args.spacecraft_latitude = 45.1
+        spacecraft_info = MagicMock(spec=GlowsL3eSpacecraftInfo)
+        spacecraft_info.spin_axis_latitude = spin_axis_lat
+        spacecraft_info.spin_axis_longitude = spin_axis_lon
+        spacecraft_info.spacecraft_radius = .5
+        spacecraft_info.spacecraft_longitude = 85.4
+        spacecraft_info.spacecraft_latitude = 45.1
 
-        args.spacecraft_velocity_x = 2.1
-        args.spacecraft_velocity_y = 2.2
-        args.spacecraft_velocity_z = 2.3
+        spacecraft_info.spacecraft_velocity_x = 2.1
+        spacecraft_info.spacecraft_velocity_y = 2.2
+        spacecraft_info.spacecraft_velocity_z = 2.3
+
+        args.spacecraft_info = spacecraft_info
 
         l3e_lo_product: GlowsL3ELoData = GlowsL3ELoData.convert_dat_to_glows_l3e_lo_product(mock_metadata, lo_file_path,
                                                                                             epoch,
+                                                                                            epoch_delta,
                                                                                             elongation_value,
                                                                                             args)
 
+        mock_calculate_energy_deltas.assert_called_once_with(NumpyArrayMatcher(l3e_lo_product.energy))
+
         np.testing.assert_equal([epoch], l3e_lo_product.epoch, strict=True)
+        np.testing.assert_equal([expected_epoch_delta_in_nanoseconds], l3e_lo_product.epoch_delta, strict=True)
         np.testing.assert_equal(l3e_lo_product.energy, expected_energy, strict=True)
+        np.testing.assert_equal(l3e_lo_product.energy_delta_plus, sentinel.energy_delta_plus)
+        np.testing.assert_equal(l3e_lo_product.energy_delta_minus, sentinel.energy_delta_minus,)
+
         np.testing.assert_equal(l3e_lo_product.spin_angle, expected_spin_angle, strict=True)
         np.testing.assert_equal(l3e_lo_product.probability_of_survival.shape, expected_survival_probability_shape,
                                 strict=True)
@@ -189,3 +214,4 @@ class TestL3eLoModel(unittest.TestCase):
         np.testing.assert_equal(l3e_lo_product.spacecraft_velocity_x, np.array([2.1]), strict=True)
         np.testing.assert_equal(l3e_lo_product.spacecraft_velocity_y, np.array([2.2]), strict=True)
         np.testing.assert_equal(l3e_lo_product.spacecraft_velocity_z, np.array([2.3]), strict=True)
+

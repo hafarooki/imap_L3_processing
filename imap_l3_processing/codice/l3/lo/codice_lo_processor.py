@@ -248,13 +248,9 @@ class CodiceLoProcessor(Processor):
         stacked_priorities = np.concatenate([
             np.ma.filled(sw_aligned, np.nan), np.ma.filled(nsw_aligned, np.nan)], axis=1)
 
-        normalization = calculate_normalization_factor(
-            stacked_priorities,
-            codice_direct_events.num_events,
-            codice_direct_events.energy_step,
-            codice_direct_events.spin_sector,
-            codice_direct_events.apd_id,
-        )
+        normalization = calculate_normalization_factor(stacked_priorities, codice_direct_events.num_events,
+                                                       codice_direct_events.energy_step,
+                                                       codice_direct_events.spin_sector)
         normalization_per_event = lookup_normalization_per_event(
             normalization,
             codice_direct_events.num_events,
@@ -319,7 +315,8 @@ class CodiceLoProcessor(Processor):
             direct_event_data=dependencies.l3a_direct_event_data, mass_species_bin_lookup=mass_species_bin_lookup)
 
         species_index = mass_species_bin_lookup.get_species_index(dependencies.species)
-        normalized_count_rates = combine_priorities_for_species_and_convert_to_rate(counts_3d_data[species_index],
+        counts_for_species = counts_3d_data[species_index]
+        normalized_count_rates = combine_priorities_for_species_and_convert_to_rate(counts_for_species,
                                                                                     dependencies.l3a_direct_event_data.acquisition_time_per_esa_step)
 
         geometric_factors = geometric_factor_lut.get_geometric_factors(
@@ -348,6 +345,11 @@ class CodiceLoProcessor(Processor):
             energy_delta_minus=np.flip(energy_lut.delta_minus),
             species=dependencies.species,
             species_data=np.flip(intensity, axis=1),
+            species_data_stat_uncert=np.flip(np.sqrt(counts_for_species), axis=1),
+            rgfo_esa_step=dependencies.l3a_direct_event_data.rgfo_esa_step,
+            rgfo_spin_sector=dependencies.l3a_direct_event_data.rgfo_spin_sector,
+            rgfo_half_spin=dependencies.l3a_direct_event_data.rgfo_half_spin,
+            half_spin_per_esa_step=np.flip(dependencies.l3a_direct_event_data.half_spin_per_esa_step),
         )
 
 
