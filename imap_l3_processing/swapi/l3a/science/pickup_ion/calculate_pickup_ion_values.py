@@ -106,7 +106,8 @@ def _fit_pickup_ion_parameters(
     residual constructs a `FittingParameters` from each iteration's lmfit values.
     """
     params = Parameters()
-    params.add("cooling_index", value=1.5, min=1.0, max=5.0)
+
+    # free parameters
     params.add("ionization_rate", value=1e-7, min=0.6e-9, max=8.0e-7)
     params.add(
         "cutoff_speed",
@@ -114,37 +115,19 @@ def _fit_pickup_ion_parameters(
         min=sw_speed_kms * 0.8,
         max=sw_speed_kms * 1.2,
     )
-    params.add("background_count_rate", value=0.1, min=0, max=10.0)
+    
+    # held constant, not fit
+    params.add("cooling_index", value=1.5, vary=False)
+    params.add("background_count_rate", value=0.1, vary=False)
 
-    def map_to_internal(value, param):
-        return np.arcsin(2 * (value - param.min) / (param.max - param.min) - 1)
-
-    def simplex_vertex(cooling_index, ionization_rate, cutoff_speed, background):
-        return [
-            map_to_internal(cooling_index, params["cooling_index"]),
-            map_to_internal(ionization_rate, params["ionization_rate"]),
-            map_to_internal(cutoff_speed, params["cutoff_speed"]),
-            map_to_internal(background, params["background_count_rate"]),
-        ]
-
-    initial_simplex = np.array(
-        [
-            simplex_vertex(1.5, 1e-7, sw_speed_kms, 0.1),
-            simplex_vertex(5.0, 1e-7, sw_speed_kms, 0.1),
-            simplex_vertex(1.5, 2.1e-7, sw_speed_kms, 0.1),
-            simplex_vertex(1.5, 1e-7, sw_speed_kms * 1.2, 0.1),
-            simplex_vertex(1.5, 1e-7, sw_speed_kms, 0.2),
-        ]
-    )
 
     minimizer = lmfit.Minimizer(
-        _calculate_poisson_negative_log_likelihood,
+        _calculate_residuals,
         params,
         fcn_args=(observed_count_rates, chunk_response, vasyliunas_siscoe_distribution),
-        scale_covar=False,
-        options=dict(initial_simplex=initial_simplex),
+        scale_covar=False
     )
-    result = minimizer.minimize(method="nelder")
+    result = minimizer.minimize(method="lm")
 
     nominal_values = result.params.valuesdict()
 
@@ -194,12 +177,13 @@ def _fit_pickup_ion_parameters(
             nan_param, nan_param, nan_param, nan_param, flags,
         )
 
+    fitted_standard_errors = dict(zip(result.var_names, standard_errors))
+    # Claude: parameters held fixed contribute no column to the Hessian, so they
+    # have no fitted uncertainty; report them at sigma = 0.
     param_vals = {
-        name: ufloat(nominal_values[name], std_err)
-        for name, std_err in zip(result.var_names, standard_errors)
+        name: ufloat(value, fitted_standard_errors.get(name, 0.0))
+        for name, value in nominal_values.items()
     }
-
-    _set_background_to_fill_if_too_high(param_vals)
 
     return FittingParameters(
         param_vals["cooling_index"],
@@ -210,7 +194,7 @@ def _fit_pickup_ion_parameters(
     )
 
 
-def _calculate_poisson_negative_log_likelihood(
+def _calculate_residuals(
     params: Parameters,
     observed_count_rates: np.ndarray,  # (n_sweeps, n_steps)
     chunk_response: ChunkCollapsedResponse,
@@ -227,12 +211,5 @@ def _calculate_poisson_negative_log_likelihood(
     modeled_rates = calculate_coincidence_rate(
         chunk_response, vasyliunas_siscoe_distribution, fitting_params
     )
-    modeled_counts = modeled_rates * swapi_l2.SWAPI_LIVETIME
-    observed_counts = observed_count_rates * swapi_l2.SWAPI_LIVETIME
-    return float(np.sum(modeled_counts - observed_counts * np.log(modeled_counts)))
 
-
-def _set_background_to_fill_if_too_high(param_vals):
-    background = param_vals["background_count_rate"]
-    if background.nominal_value > 1.0:
-        param_vals["background_count_rate"] = ufloat(np.nan, np.nan)
+    return modeled_rates.mean(axis=0) - observed_count_rates.mean(axis=0)
