@@ -192,15 +192,16 @@ Below, the optimized 1D integral is validated by comparing it to a reference 3D 
 
 ## Optimization Strategy
 
-The PUI parameters to be determined are $\mathbf{x} = (\alpha_\text{PUI}, \beta_E, v_b, C_\text{bg})$, with initial values given by the table below.
+The free parameters are $\mathbf{x} = (\ln(\beta_E / \text{s}^{-1}), \ln(v_b/[\text{km}/\text{s}]))$.
+They are parameterized in log space to ensure that they remain positive, but no other constraints are imposed.
+The initial values are given by the table below.
 
 | Parameter | Initial |
 |---|---|
-| $\alpha_\text{PUI}$ | 1.5 |
 | $\beta_E$ | $10^{-7}$ s⁻¹ |
 | $v_b$ | $v_\text{sw}$ |
-| $C_\text{bg}$ | 0.1 Hz |
 
+Aside from the free parameters, there are two fixed parameters: cooling index $\alpha = 1.5$ (corresponding to adiabatic cooling) and background coincidence rate $C_\text{bg} = 0.1\,\text{Hz}$.
 The model $C^\text{(model)}_{ij}(\mathbf{x})$ is evaluated for each measurement time (sweep $i$, step $j$) within the ten-minute chunk.
 The optimal parameters are found by minimizing:
 
@@ -223,6 +224,8 @@ To estimate the uncertainty, the [HC3 method is used](./proton-sw.md#erroruncert
 > **TODO** extract a common documentation file for the HC3 method
 
 ## Failure Cases
+
+> **TODO**: Exclude if too few points
 
 When $C_\text{bg}$ is higher than 1 Hz, a fill value is reported for $C_\text{bg}$ because of the probable influence of suprathermal populations, but the other parameters are kept.
 
