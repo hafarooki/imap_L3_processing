@@ -12,6 +12,7 @@ from scipy.linalg import inv
 from uncertainties import ufloat
 
 from imap_l3_processing.constants import (
+    HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E,
     METERS_PER_KILOMETER,
     ONE_AU_IN_KM,
     PROTON_CHARGE_COULOMBS,
@@ -37,7 +38,7 @@ from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 
 
 _COARSE_SWEEP_LEN = 62
-_HELIUM_MASS_PER_CHARGE_M_P_PER_E = 4.0
+_HELIUM_MASS_PER_CHARGE_M_P_PER_E = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 
 
 @dataclass

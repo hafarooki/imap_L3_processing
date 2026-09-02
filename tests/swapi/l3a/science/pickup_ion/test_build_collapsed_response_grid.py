@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from imap_l3_processing.constants import HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 from imap_l3_processing.swapi.l3a.science.pickup_ion.collapsed_response_grid import (
     build_collapsed_response_grid,
 )
@@ -20,7 +21,7 @@ _REFERENCE_CSV_PATH = (
 # Must match the fixed condition baked into the reference CSV (see
 # scripts/swapi/generate_collapsed_response_grid_reference.py).
 _ESA_VOLTAGE = 5000.0
-_MASS_PER_CHARGE = 4.0
+_MASS_PER_CHARGE = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 _BULK_SPEED = 450.0
 _BULK_AZIMUTH = 5.0
 _BULK_ELEVATION = -10.0

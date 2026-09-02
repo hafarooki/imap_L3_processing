@@ -37,7 +37,7 @@ import pandas as pd
 
 from figure_utils import FIGURES_DIR, load_swapi_response
 
-from imap_l3_processing.constants import ONE_AU_IN_KM
+from imap_l3_processing.constants import HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E, ONE_AU_IN_KM
 from imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_coincidence_rate import (
     apply_partial_heaviside_at_cutoff,
     calculate_coincidence_rate,
@@ -62,7 +62,7 @@ _COOLING_INDEX = 2.0
 _IONIZATION_RATE_HZ = 2e-7
 _SW_SPEED_INERTIAL_KMS = 450.0
 _INFLOW_PSI_DEG = 75.0
-_HELIUM_MASS_PER_CHARGE_M_P_PER_E = 4.0
+_HELIUM_MASS_PER_CHARGE_M_P_PER_E = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 _HELIUM_EFFICIENCY_RATIO = 1.05
 
 # Grid top is the largest fit-allowed cutoff (1.2 * upstream speed), so the
