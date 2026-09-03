@@ -29,7 +29,6 @@ import numpy as np
 import pandas as pd
 
 from figure_utils import FIGURES_DIR
-from imap_l3_processing.constants import HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 
 _REFERENCE_CSV_PATH = (
     REPO_ROOT / "tests" / "test_data" / "swapi" / "pui_count_rate_reference.csv"
@@ -47,7 +46,7 @@ _BACKGROUND_RATE_HZ = 0.0
 _HELIO_DIST_AU = 1.0
 _SW_SPEED_INERTIAL_KMS = 450.0
 _INFLOW_PSI_DEG = 75.0
-_HELIUM_MASS_PER_CHARGE_M_P_PER_E = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
+_HELIUM_MASS_PER_CHARGE_M_P_PER_E = 4.0
 _HELIUM_EFFICIENCY_RATIO = 1.05
 
 _DENSITY_LUT_PATH = (

@@ -19,8 +19,6 @@ import pint
 import pint_xarray  # noqa: F401
 import xarray as xr
 
-from imap_l3_processing.constants import HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
-
 ureg = pint.UnitRegistry(force_ndarray_like=True)
 ureg.define("counts = []")
 pint.set_application_registry(ureg)
@@ -28,7 +26,7 @@ Q = ureg.Quantity
 
 K_FACTOR = Q(1.89, "eV/V/e")
 ONE_AU = Q(1.0, "au")
-HE_PLUS_MASS_PER_CHARGE = Q(HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E, "m_p/e")
+HE_PLUS_MASS_PER_CHARGE = Q(4.0, "m_p/e")
 HELIUM_EFFICIENCY_RATIO = 1.05
 
 
@@ -309,7 +307,7 @@ if __name__ == "__main__":
     INFLOW_PSI_DEG = 75.0
     SW_SPEED_INERTIAL_KMS = 450.0
     BACKGROUND_RATE_HZ = 0.3
-    HELIUM_MASS_PER_CHARGE_M_P_PER_E = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
+    HELIUM_MASS_PER_CHARGE_M_P_PER_E = 4.0
 
     # Proton + alpha Maxwellian shoulder truth.
     PROTON_DENSITY_CM3 = 5.0

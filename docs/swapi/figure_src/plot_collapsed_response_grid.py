@@ -6,7 +6,7 @@ integral reference (line) overlaid with the closed-form φ-inversion result
 
 Fixed condition matches the CSV reference produced by
 scripts/swapi/generate_collapsed_response_grid_reference.py:
-ESA voltage = 5000 V, He+ (m/q ≈ 3.973 m_p/e), bulk = 450 km/s @ (az=5°, el=−10°).
+ESA voltage = 5000 V, m/q = 4 m_p/e, bulk = 450 km/s @ (az=5°, el=−10°).
 
 Output: docs/swapi/figures/collapsed_response_grid.svg
 Usage:  uv run python docs/swapi/figure_src/plot_collapsed_response_grid.py
@@ -29,14 +29,13 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.collapsed_response_grid imp
     solar_wind_frame_speed_range,
 )
 from figure_utils import FIGURES_DIR, REPO_ROOT, load_swapi_response
-from imap_l3_processing.constants import HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 
 _REFERENCE_CSV_PATH = (
     REPO_ROOT / "tests" / "test_data" / "swapi" / "collapsed_response_grid_reference.csv"
 )
 
 _ESA_VOLTAGE = 5000.0
-_MASS_PER_CHARGE = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
+_MASS_PER_CHARGE = 4.0
 _BULK_SPEED = 450.0
 _BULK_AZIMUTH = 5.0
 _BULK_ELEVATION = -10.0

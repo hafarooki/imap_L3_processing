@@ -35,7 +35,6 @@ from uncertainties import unumpy
 
 from imap_l3_processing.constants import (
     HE_PUI_PARTICLE_MASS_KG,
-    HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E,
     ONE_AU_IN_KM,
     ONE_SECOND_IN_NANOSECONDS,
     PROTON_MASS_KG,
@@ -67,7 +66,7 @@ from imap_l3_processing.swapi.l3a.utils import chunk_l2_data
 from imap_l3_processing.utils import SpiceKernelTypes, get_spice_kernels_file_names
 
 
-_HELIUM_MASS_PER_CHARGE_M_P_PER_E = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
+_HELIUM_MASS_PER_CHARGE_M_P_PER_E = 4.0
 _COARSE_SWEEP_LEN = 62
 
 
