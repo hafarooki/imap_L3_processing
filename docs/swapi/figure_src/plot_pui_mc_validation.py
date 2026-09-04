@@ -56,6 +56,7 @@ from uncertainties import ufloat
 from imap_l3_processing.constants import (
     FIVE_MINUTES_IN_NANOSECONDS,
     HE_PUI_PARTICLE_MASS_KG,
+    HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E,
     ONE_AU_IN_KM,
     ONE_SECOND_IN_NANOSECONDS,
     PROTON_MASS_KG,
@@ -97,7 +98,7 @@ from tests.swapi._helpers import load_swapi_response
 _MC_N_SAMPLES = 1000
 _EXAMPLE_SEED = 0
 
-_HELIUM_MASS_PER_CHARGE_M_P_PER_E = 4.0
+_HELIUM_MASS_PER_CHARGE_M_P_PER_E = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 
 _REFERENCE_50SWEEP_H5_PATH = (
     REPO_ROOT / "tests" / "test_data" / "swapi" / "pui_count_rate_reference_50sweep.h5"
