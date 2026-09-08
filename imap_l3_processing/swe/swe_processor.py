@@ -859,9 +859,9 @@ class SweProcessor(Processor):
             halo_temperature_perpendicular_to_mag=halo_temperature_perpendicular_to_mag,
             total_temperature_parallel_to_mag=total_temperature_parallel_to_mag,
             total_temperature_perpendicular_to_mag=total_temperature_perpendicular_to_mag,
-            core_temperature_tensor_integrated=core_temperature_tensor_integrated,
-            halo_temperature_tensor_integrated=halo_temperature_tensor_integrated,
-            total_temperature_tensor_integrated=total_temperature_tensor_integrated,
+            core_temperature_tensor_integrated = core_temperature_tensor_integrated*1e4,
+            halo_temperature_tensor_integrated = halo_temperature_tensor_integrated*1e4,
+            total_temperature_tensor_integrated = total_temperature_tensor_integrated*1e4,
             quality_flags=quality_flags,
         )
 

@@ -117,7 +117,7 @@ sum_rate:
   FIELDNAM: Sum Rate
   FORMAT: F9.3
   LABLAXIS: Sum rate
-  UNITS: s^-1
+  UNITS: 1/s
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.00E+31
@@ -140,7 +140,7 @@ ph_rate:
   FIELDNAM: Photoionization Rate
   FORMAT: F9.3
   LABLAXIS: Photoionization rate
-  UNITS: s^-1
+  UNITS: 1/s
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.00E+31
@@ -163,7 +163,7 @@ cx_rate:
   FIELDNAM: Charge Exchange Rate
   FORMAT: F9.3
   LABLAXIS: Charge exchange rate
-  UNITS: s^-1
+  UNITS: 1/s
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.00E+31
@@ -185,7 +185,7 @@ sum_uncert:
   FIELDNAM: Sum Rate Uncertainty
   FORMAT: F9.3
   LABLAXIS: Sum rate uncertainty
-  UNITS: s^-1
+  UNITS: 1/s
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.00E+31
@@ -203,7 +203,7 @@ ph_uncert:
   FIELDNAM: Photoionization Rate Uncertainty
   FORMAT: F9.3
   LABLAXIS: Photoionization rate uncertainty
-  UNITS: s^-1
+  UNITS: 1/s
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.00E+31
@@ -221,7 +221,7 @@ cx_uncert:
   FIELDNAM: Charge Exchange Rate Uncertainty
   FORMAT: F9.3
   LABLAXIS: Charge exchange rate uncertainty
-  UNITS: s^-1
+  UNITS: 1/s
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.00E+31

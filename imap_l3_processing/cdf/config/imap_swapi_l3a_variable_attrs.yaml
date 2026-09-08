@@ -81,7 +81,7 @@ pui_ionization_rate:
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
   FORMAT: E19.3
   LABLAXIS: Ion Rate
-  UNITS: s^-1
+  UNITS: 1/s
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.000000e+31
@@ -100,7 +100,7 @@ pui_ionization_rate_uncert:
   VAR_TYPE: support_data
   RECORD_VARYING: RV
   FORMAT: E19.3
-  UNITS: s^-1
+  UNITS: 1/s
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.000000e+31
@@ -151,7 +151,7 @@ pui_background_count_rate:
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
   FORMAT: E19.3
   LABLAXIS: Bg Rate
-  UNITS: s^-1
+  UNITS: "#/s"
   VALIDMIN: 0
   VALIDMAX: 9223372036854775807
   FILLVAL: -1.000000e+31
@@ -170,7 +170,7 @@ pui_background_count_rate_uncert:
   VAR_TYPE: support_data
   RECORD_VARYING: RV
   FORMAT: E19.3
-  UNITS: s^-1
+  UNITS: "#/s"
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.000000e+31
@@ -186,7 +186,7 @@ pui_density:
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
   FORMAT: E19.3
   LABLAXIS: n_PUI
-  UNITS: cm^-3
+  UNITS: "#/cm^3"
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.000000e+31
@@ -205,7 +205,7 @@ pui_density_uncert:
   VAR_TYPE: support_data
   RECORD_VARYING: RV
   FORMAT: E19.3
-  UNITS: cm^-3
+  UNITS: "#/cm^3"
   VALIDMIN: 0
   VALIDMAX: 1.0
   FILLVAL: -1.000000e+31
@@ -361,7 +361,7 @@ proton_sw_density:
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
   FORMAT: E19.3
   LABLAXIS: Np
-  UNITS: cm^-3
+  UNITS: "#/cm^3"
   VALIDMIN: 0
   VALIDMAX: 150
   FILLVAL: -1.000000e+31
@@ -380,7 +380,7 @@ proton_sw_density_uncert:
   VAR_TYPE: support_data
   RECORD_VARYING: RV
   FORMAT: E19.3
-  UNITS: cm^-3
+  UNITS: "#/cm^3"
   VALIDMIN: 0
   VALIDMAX: 150
   FILLVAL: -1.000000e+31
@@ -573,7 +573,7 @@ alpha_sw_density:
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
   FORMAT: E19.3
   LABLAXIS: Na
-  UNITS: cm^-3
+  UNITS: "#/cm^3"
   VALIDMIN: 0
   VALIDMAX: 100
   FILLVAL: -1.000000e+31
@@ -592,7 +592,7 @@ alpha_sw_density_uncert:
   VAR_TYPE: support_data
   RECORD_VARYING: RV
   FORMAT: E19.3
-  UNITS: cm^-3
+  UNITS: "#/cm^3"
   VALIDMIN: 0
   VALIDMAX: 100
   FILLVAL: -1.000000e+31

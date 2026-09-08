@@ -1037,14 +1037,14 @@ class TestSweProcessor(unittest.TestCase):
         core_integrate_output = Mock()
         total_integrate_output = Mock()
         total_integrate_output.density = 5
-        total_temperature = [101000, 102000, 103000, 104000, 105000, 106000]
+        total_temperature = np.array([101000, 102000, 103000, 104000, 105000, 106000])
         total_integrate_output.temperature = total_temperature
         halo_integrate_output = Mock()
 
         mock_integrate.side_effect = [core_integrate_output, total_integrate_output, halo_integrate_output, None, None]
 
         scaled_core_velocity = [900, 800, 700]
-        scaled_core_temperature = [90000, 80000, 70000, 80000, 90000, 100000]
+        scaled_core_temperature = np.array([90000, 80000, 70000, 80000, 90000, 100000])
         core_cdelnv = Mock()
         core_cdelt = Mock()
         scale_core_density_output = ScaleDensityOutput(density=400, velocity=scaled_core_velocity,
@@ -1055,7 +1055,7 @@ class TestSweProcessor(unittest.TestCase):
         mock_scale_core_density.side_effect = [scale_core_density_output]
 
         scaled_halo_velocity = [2000, 1800, 1700]
-        scaled_halo_temperature = [180000, 190000, 200000, 201000, 202000, 203000]
+        scaled_halo_temperature = np.array([180000, 190000, 200000, 201000, 202000, 203000])
         scale_halo_density_output = ScaleDensityOutput(density=500, velocity=scaled_halo_velocity,
                                                        temperature=scaled_halo_temperature,
                                                        cdelnv=None,
@@ -1445,11 +1445,11 @@ class TestSweProcessor(unittest.TestCase):
                                       [[15.4, 16.4], [np.nan, np.nan], [np.nan, np.nan]])
 
         np.testing.assert_array_equal(swe_moment_data.core_temperature_tensor_integrated,
-                                      [scaled_core_temperature, np.full(6, np.nan), np.full(6, np.nan)])
+                                      [scaled_core_temperature * 1e4, np.full(6, np.nan), np.full(6, np.nan)])
         np.testing.assert_array_equal(swe_moment_data.halo_temperature_tensor_integrated,
-                                      [scaled_halo_temperature, np.full(6, np.nan), np.full(6, np.nan)])
+                                      [scaled_halo_temperature * 1e4, np.full(6, np.nan), np.full(6, np.nan)])
         np.testing.assert_array_equal(swe_moment_data.total_temperature_tensor_integrated,
-                                      [total_temperature, np.full(6, np.nan), np.full(6, np.nan)])
+                                      [total_temperature * 1e4, np.full(6, np.nan), np.full(6, np.nan)])
 
         # @formatter:on
 

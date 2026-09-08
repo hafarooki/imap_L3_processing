@@ -221,7 +221,7 @@ h_intensity_by_pitch_angle:
   CATDESC: H intensity binned by pitch angle
   FIELDNAM: H Intensity
   LABLAXIS: H Intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   LABL_PTR_1: energy_h_label
   LABL_PTR_2: pitch_angle_label
   SCALETYP: log
@@ -238,7 +238,7 @@ h_intensity_by_pitch_angle_and_gyrophase:
   CATDESC: H intensity binned by pitch angle and gyrophase
   FIELDNAM: H Intensity
   LABLAXIS: H Intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   LABL_PTR_1: energy_h_label
   LABL_PTR_2: pitch_angle_label
   LABL_PTR_3: gyrophase_label
@@ -255,7 +255,7 @@ he3he4_intensity_by_pitch_angle:
   CATDESC: He3He4 intensity binned by pitch angle
   FIELDNAM: He3He4 Intensity
   LABLAXIS: He3He4 Intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   LABL_PTR_1: energy_he3he4_label
   LABL_PTR_2: pitch_angle_label
   SCALETYP: log
@@ -272,7 +272,7 @@ he3he4_intensity_by_pitch_angle_and_gyrophase:
   CATDESC: He3He4 intensity binned by pitch angle and gyrophase
   FIELDNAM: He3He4 Intensity
   LABLAXIS: He3He4 Intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   LABL_PTR_1: energy_he3he4_label
   LABL_PTR_2: pitch_angle_label
   LABL_PTR_3: gyrophase_label
@@ -289,7 +289,7 @@ cno_intensity_by_pitch_angle:
   CATDESC: CNO intensity binned by pitch angle
   FIELDNAM: CNO Intensity
   LABLAXIS: CNO Intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   LABL_PTR_1: energy_cno_label
   LABL_PTR_2: pitch_angle_label
   SCALETYP: log
@@ -306,7 +306,7 @@ cno_intensity_by_pitch_angle_and_gyrophase:
   CATDESC: CNO intensity binned by pitch angle and gyrophase
   FIELDNAM: CNO Intensity
   LABLAXIS: CNO Intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   LABL_PTR_1: energy_cno_label
   LABL_PTR_2: pitch_angle_label
   LABL_PTR_3: gyrophase_label
@@ -323,7 +323,7 @@ fe_intensity_by_pitch_angle:
   CATDESC: Fe intensity binned by pitch angle
   FIELDNAM: Fe Intensity
   LABLAXIS: Fe Intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   LABL_PTR_1: energy_fe_label
   LABL_PTR_2: pitch_angle_label
   SCALETYP: log
@@ -340,7 +340,7 @@ fe_intensity_by_pitch_angle_and_gyrophase:
   CATDESC: Fe intensity binned by pitch angle and gyrophase
   FIELDNAM: Fe Intensity
   LABLAXIS: Fe Intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   LABL_PTR_1: energy_fe_label
   LABL_PTR_2: pitch_angle_label
   LABL_PTR_3: gyrophase_label

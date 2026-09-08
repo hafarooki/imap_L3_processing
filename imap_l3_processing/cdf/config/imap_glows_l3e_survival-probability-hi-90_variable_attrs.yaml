@@ -281,7 +281,7 @@ elongation:
   LABLAXIS: Elongation
   DEPEND_0: epoch
   FORMAT: I3
-  UNITS: degree
+  UNITS: degrees
   FILLVAL: 65535
   VALIDMAX: 180
   VALIDMIN: 0

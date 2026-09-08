@@ -49,7 +49,7 @@ h_macropixel_intensity:
   FIELDNAM: H Intensity
   FORMAT: g9.3
   LABLAXIS: H intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -76,7 +76,7 @@ he4_macropixel_intensity:
   FIELDNAM: He4 Intensity
   FORMAT: g9.3
   LABLAXIS: He4 intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -103,7 +103,7 @@ cno_macropixel_intensity:
   FIELDNAM: CNO Intensity
   FORMAT: g9.3
   LABLAXIS: CNO intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -130,7 +130,7 @@ nemgsi_macropixel_intensity:
   FIELDNAM: NeMgSi Intensity
   FORMAT: g9.3
   LABLAXIS: NeMgSi intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -157,7 +157,7 @@ fe_macropixel_intensity:
   FIELDNAM: Fe Intensity
   FORMAT: g9.3
   LABLAXIS: Fe intensity
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -183,7 +183,7 @@ h_macropixel_intensity_pa:
   FIELDNAM: H Intensity PA
   FORMAT: g9.3
   LABLAXIS: H intensity PA
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -208,7 +208,7 @@ he4_macropixel_intensity_pa:
   FIELDNAM: He4 Intensity PA
   FORMAT: g9.3
   LABLAXIS: He4 intensity PA
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -233,7 +233,7 @@ cno_macropixel_intensity_pa:
   FIELDNAM: CNO Intensity PA
   FORMAT: g9.3
   LABLAXIS: CNO intensity PA
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -258,7 +258,7 @@ nemgsi_macropixel_intensity_pa:
   FIELDNAM: NeMgSi Intensity PA
   FORMAT: g9.3
   LABLAXIS: NeMgSi intensity PA
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -283,7 +283,7 @@ fe_macropixel_intensity_pa:
   FIELDNAM: Fe Intensity PA
   FORMAT: g9.3
   LABLAXIS: Fe intensity PA
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -307,7 +307,7 @@ h_macropixel_intensity_delta_plus:
   FIELDNAM: H Plus Uncertainty
   FORMAT: g9.3
   LABLAXIS: H unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -330,7 +330,7 @@ h_macropixel_intensity_delta_minus:
   FIELDNAM: H Minus Uncertainty
   FORMAT: g9.3
   LABLAXIS: H unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -353,7 +353,7 @@ he4_macropixel_intensity_delta_plus:
   FIELDNAM: He4 Plus Uncertainty
   FORMAT: g9.3
   LABLAXIS: He4 unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -376,7 +376,7 @@ he4_macropixel_intensity_delta_minus:
   FIELDNAM: He4 Minus Uncertainty
   FORMAT: g9.3
   LABLAXIS: He4 unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -399,7 +399,7 @@ cno_macropixel_intensity_delta_plus:
   FIELDNAM: CNO Plus Uncertainty
   FORMAT: g9.3
   LABLAXIS: CNO unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -422,7 +422,7 @@ cno_macropixel_intensity_delta_minus:
   FIELDNAM: CNO Minus Uncertainty
   FORMAT: g9.3
   LABLAXIS: CNO unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -445,7 +445,7 @@ nemgsi_macropixel_intensity_delta_plus:
   FIELDNAM: NeMgSi Plus Uncertainty
   FORMAT: g9.3
   LABLAXIS: NeMgSi unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -468,7 +468,7 @@ nemgsi_macropixel_intensity_delta_minus:
   FIELDNAM: NeMgSi Minus Uncertainty
   FORMAT: g9.3
   LABLAXIS: NeMgSi unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -491,7 +491,7 @@ fe_macropixel_intensity_delta_plus:
   FIELDNAM: Fe Plus Uncertainty
   FORMAT: g9.3
   LABLAXIS: Fe unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -514,7 +514,7 @@ fe_macropixel_intensity_delta_minus:
   FIELDNAM: Fe Minus Uncertainty
   FORMAT: g9.3
   LABLAXIS: Fe unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -536,7 +536,7 @@ h_macropixel_intensity_pa_delta_plus:
   FIELDNAM: H Plus PA Uncertainty
   FORMAT: g9.3
   LABLAXIS: H unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -557,7 +557,7 @@ h_macropixel_intensity_pa_delta_minus:
   FIELDNAM: H Minus PA Uncertainty
   FORMAT: g9.3
   LABLAXIS: H unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -578,7 +578,7 @@ he4_macropixel_intensity_pa_delta_plus:
   FIELDNAM: He4 Plus PA Uncertainty
   FORMAT: g9.3
   LABLAXIS: He4 unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -599,7 +599,7 @@ he4_macropixel_intensity_pa_delta_minus:
   FIELDNAM: He4 Minus PA Uncertainty
   FORMAT: g9.3
   LABLAXIS: He4 unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -620,7 +620,7 @@ cno_macropixel_intensity_pa_delta_plus:
   FIELDNAM: CNO Plus PA Uncertainty
   FORMAT: g9.3
   LABLAXIS: CNO unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -641,7 +641,7 @@ cno_macropixel_intensity_pa_delta_minus:
   FIELDNAM: CNO Minus PA Uncertainty
   FORMAT: g9.3
   LABLAXIS: CNO unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -662,7 +662,7 @@ nemgsi_macropixel_intensity_pa_delta_plus:
   FIELDNAM: NeMgSi Plus PA Uncertainty
   FORMAT: g9.3
   LABLAXIS: NeMgSi unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -683,7 +683,7 @@ nemgsi_macropixel_intensity_pa_delta_minus:
   FIELDNAM: NeMgSi Minus PA Uncertainty
   FORMAT: g9.3
   LABLAXIS: NeMgSi unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -704,7 +704,7 @@ fe_macropixel_intensity_pa_delta_plus:
   FIELDNAM: Fe Plus PA Uncertainty
   FORMAT: g9.3
   LABLAXIS: Fe unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31
@@ -725,7 +725,7 @@ fe_macropixel_intensity_pa_delta_minus:
   FIELDNAM: Fe Minus PA Uncertainty
   FORMAT: g9.3
   LABLAXIS: Fe unc.
-  UNITS: 1/(cm^2 s MeV/nuc sr)
+  UNITS: "#/(cm^2-s-sr-MeV/nuc)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.0000E+31

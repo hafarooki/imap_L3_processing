@@ -165,7 +165,7 @@ intensity_by_pitch_angle:
   FIELDNAM: Electron Intensity
   FORMAT: F15.3
   LABLAXIS: e- intensity
-  UNITS: cm^-2 sr^-1 s^-1 eV^-1
+  UNITS: "#/(cm^2-s-sr-eV)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   SCALEMIN: 0
@@ -191,7 +191,7 @@ intensity_by_pitch_angle_and_gyrophase:
   FIELDNAM: Electron Intensity
   FORMAT: F15.3
   LABLAXIS: e- intensity
-  UNITS: cm^-2 sr^-1 s^-1 eV^-1
+  UNITS: "#/(cm^2-s-sr-eV)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   SCALEMIN: 0
@@ -218,7 +218,7 @@ intensity_uncertainty_by_pitch_angle:
   FIELDNAM: Electron Intensity Uncertainty
   FORMAT: F15.3
   LABLAXIS: e- intensity unc.
-  UNITS: cm^-2 sr^-1 s^-1 eV^-1
+  UNITS: "#/(cm^2-s-sr-eV)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.00E+31
@@ -240,7 +240,7 @@ intensity_uncertainty_by_pitch_angle_and_gyrophase:
   FIELDNAM: Electron Intensity Uncertainty
   FORMAT: F15.3
   LABLAXIS: e- intensity unc.
-  UNITS: cm^-2 sr^-1 s^-1 eV^-1
+  UNITS: "#/(cm^2-s-sr-eV)"
   VALIDMIN: 0
   VALIDMAX: 10000000000
   FILLVAL: -1.00E+31
@@ -263,7 +263,7 @@ phase_space_density_by_pitch_angle_and_gyrophase:
   FIELDNAM: Electron Phase Space Density
   FORMAT: E8.2E3
   LABLAXIS: e- PSD
-  UNITS: s^3 cm^-6
+  UNITS: s^3/cm^6
   VALIDMIN: 0
   VALIDMAX: 1.00e-15
   FILLVAL: -1.00E+31
@@ -289,7 +289,7 @@ phase_space_density_by_pitch_angle:
   FIELDNAM: Electron Phase Space Density
   FORMAT: E8.2E3
   LABLAXIS: e- PSD
-  UNITS: s^3 cm^-6
+  UNITS: s^3/cm^6
   VALIDMIN: 0
   VALIDMAX: 1.00e-15
   FILLVAL: -1.00E+31
@@ -312,7 +312,7 @@ phase_space_density_1d:
   FIELDNAM: Electron Phase Space Density
   FORMAT: E8.2E3
   LABLAXIS: e- PSD
-  UNITS: s^3 cm^-6
+  UNITS: s^3/cm^6
   VALIDMIN: 0
   VALIDMAX: 1.00e-15
   SCALEMIN: 1.00e-33
@@ -334,7 +334,7 @@ phase_space_density_inward:
   FIELDNAM: Electron Phase Space Density Inward
   FORMAT: E8.2E3
   LABLAXIS: e- PSD In
-  UNITS: s^3 cm^-6
+  UNITS: s^3/cm^6
   VALIDMIN: 0
   VALIDMAX: 1.00e-15
   SCALEMIN: 1.00e-33
@@ -357,7 +357,7 @@ phase_space_density_outward:
   FIELDNAM: Electron Phase Space Density Outward
   FORMAT: E8.2E3
   LABLAXIS: e- PSD Out
-  UNITS: s^3 cm^-6
+  UNITS: s^3/cm^6
   VALIDMIN: 0
   VALIDMAX: 1.00e-15
   SCALEMIN: 1.00e-33
@@ -1142,11 +1142,11 @@ core_temperature_tensor_integrated:
   DISPLAY_TYPE: time_series
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
   FIELDNAM: Core Temperature Tensor Integrated
-  FORMAT: F15.3
+  FORMAT: F9.0
   LABLAXIS: Core t tensor integrated
-  UNITS: 10^4 K
-  VALIDMIN: -1000
-  VALIDMAX: 1000
+  UNITS: K
+  VALIDMIN: -1.0E+7
+  VALIDMAX: 1.0E+7
   FILLVAL: -1.00E+31
   LABL_PTR_1: core_temperature_tensor_integrated_label
   VAR_NOTES: Calculated by integration over the measured phase space distribution
@@ -1161,11 +1161,11 @@ halo_temperature_tensor_integrated:
   DISPLAY_TYPE: time_series
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
   FIELDNAM: Halo Temperature Tensor Integrated
-  FORMAT: F15.3
+  FORMAT: F9.0
   LABLAXIS: Halo t tensor integrated
-  UNITS: 10^4 K
-  VALIDMIN: -1000
-  VALIDMAX: 1000
+  UNITS: K
+  VALIDMIN: -1.0E+7
+  VALIDMAX: 1.0E+7
   FILLVAL: -1.00E+31
   LABL_PTR_1: halo_temperature_tensor_integrated_label
   VAR_NOTES: Calculated by integration over the measured phase space distribution
@@ -1180,11 +1180,11 @@ total_temperature_tensor_integrated:
   DISPLAY_TYPE: time_series
   VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
   FIELDNAM: Total Temperature Tensor Integrated
-  FORMAT: F15.3
+  FORMAT: F9.0
   LABLAXIS: Total t tensor integrated
-  UNITS: 10^4 K
-  VALIDMIN: -1000
-  VALIDMAX: 1000
+  UNITS: K
+  VALIDMIN: -1.0E+7
+  VALIDMAX: 1.0E+7
   FILLVAL: -1.00E+31
   LABL_PTR_1: total_temperature_tensor_integrated_label
   VAR_NOTES: Calculated by integration over the measured phase space distribution
@@ -1695,9 +1695,9 @@ inst_el:
   FIELDNAM: Polar Angle
   FILLVAL: -1.00E+31
   FORMAT: E9.4
-  LABLAXIS: Degree
+  LABLAXIS: degrees
   SCALE_TYP: linear
-  UNITS: Degree
+  UNITS: degrees
   VALIDMAX: 65
   VALIDMIN: -65
   VAR_TYPE: support_data
@@ -1710,9 +1710,9 @@ inst_az:
   FIELDNAM: Spin Angle
   FILLVAL: -1.00E+31
   FORMAT: E10.4
-  LABLAXIS: Degree
+  LABLAXIS: degrees
   SCALE_TYP: linear
-  UNITS: Degree
+  UNITS: degrees
   VALIDMAX: 359.999
   VALIDMIN: 0.00
   VAR_TYPE: support_data

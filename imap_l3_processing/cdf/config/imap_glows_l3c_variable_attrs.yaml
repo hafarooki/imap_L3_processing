@@ -124,7 +124,7 @@ proton_density_ecliptic:
   FIELDNAM: Ecliptic Proton Density
   FORMAT: F12.3
   LABLAXIS: Ecliptic Proton Density
-  UNITS: cm^-3
+  UNITS: "#/cm^3"
   VALIDMIN: 0
   VALIDMAX: 1.0e+6
   FILLVAL: -1.00E+31
@@ -188,7 +188,7 @@ proton_density_profile:
   FIELDNAM: Proton Density Profile
   FORMAT: F12.3
   LABLAXIS: Proton Density
-  UNITS: cm^-3
+  UNITS: "#/cm^3"
   VALIDMIN: 0
   VALIDMAX: 1.0e+6
   FILLVAL: -1.00E+31

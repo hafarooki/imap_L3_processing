@@ -148,7 +148,7 @@ lyman_alpha:
   FORMAT: F14.3
   LABLAXIS: Solar Lyman-alpha
   DISPLAY_TYPE: time_series
-  UNITS: '#/cm^2/s'
+  UNITS: '#/(cm^2-s)'
   VALIDMIN: 0
   VALIDMAX: 10000000000000
   FILLVAL: -1.00E+31
