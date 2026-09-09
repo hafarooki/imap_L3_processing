@@ -39,35 +39,6 @@ def convert_velocity_relative_to_imap(velocity, ephemeris_time, from_frame, to_f
     return velocity_in_target_frame_relative_to_imap + imap_velocity
 
 
-def calculate_pui_energy_cutoff(
-    particle_mass: float,
-    ephemeris_time: float,
-    sw_velocity_rtn_kms,
-    particle_inflow_vector: InflowVector,
-):
-    imap_velocity = spiceypy.spkezr(
-        "IMAP", ephemeris_time, "ECLIPJ2000", "NONE", "SUN"
-    )[0][3:6]
-    solar_wind_velocity = convert_velocity_relative_to_imap(
-        sw_velocity_rtn_kms, ephemeris_time, "IMAP_RTN", "ECLIPJ2000"
-    )
-    particle_velocity = spiceypy.latrec(
-        -particle_inflow_vector.speed_km_per_s,
-        particle_inflow_vector.longitude_deg_eclipj2000,
-        particle_inflow_vector.latitude_deg_eclipj2000,
-    )
-
-    particle_velocity_cutoff_vector = (
-        solar_wind_velocity - particle_velocity - imap_velocity
-    )
-    particle_speed_cutoff = np.linalg.norm(particle_velocity_cutoff_vector)
-    return (
-        0.5
-        * (particle_mass / PROTON_CHARGE_COULOMBS)
-        * (2 * particle_speed_cutoff * METERS_PER_KILOMETER) ** 2
-    )
-
-
 def calculate_ten_minute_velocities(
     bulk_solar_wind_velocities_rtn: ndarray,
     quality_flags: list[SwapiL3Flags],

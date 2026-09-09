@@ -5,7 +5,6 @@ import numpy as np
 from imap_l3_processing.constants import PROTON_CHARGE_COULOMBS, PROTON_MASS_KG, HE_PUI_PARTICLE_MASS_KG
 from imap_l3_processing.swapi.l3a.science.pickup_ion.inflow_vector import InflowVector
 from imap_l3_processing.swapi.l3a.science.pickup_ion.utils import (
-    calculate_pui_energy_cutoff,
     calculate_ten_minute_velocities,
     convert_velocity_relative_to_imap,
     convert_velocity_to_reference_frame,
@@ -25,53 +24,6 @@ _FAKE_SXFORM_ROTATION = np.array(
         [1.26218156e-07, 5.29395592e-23, 3.76211978e-09, -0.029793255, 0.0, 0.999556082],
     ]
 )
-
-
-class CalculatePuiEnergyCutoffTest(SpiceTestCase):
-    @patch(f"{_UTILS_MODULE}.convert_velocity_relative_to_imap")
-    @patch(f"{_UTILS_MODULE}.spiceypy")
-    def test_returns_proton_charge_normalized_kinetic_energy_at_cutoff(
-        self, mock_spice, mock_convert_velocity
-    ):
-        for particle_mass in (PROTON_MASS_KG, HE_PUI_PARTICLE_MASS_KG):
-            with self.subTest(particle_mass=particle_mass):
-                mock_spice.spkezr.return_value = (np.array([0, 0, 0, 4, 0, 0]), 1233.002)
-                mock_spice.latrec.return_value = np.array([0, 2, 0])
-
-                mock_convert_velocity.return_value = np.array([1, 2, 4])
-
-                sw_velocity_rtn_kms = np.array([22, 33, 44])
-                inflow_speed = 102
-                hydrogen_inflow_vector = InflowVector(
-                    inflow_speed, sentinel.inflow_lon, sentinel.inflow_lat
-                )
-                ephemeris_time = 100_000_000
-
-                energy_cutoff = calculate_pui_energy_cutoff(
-                    particle_mass,
-                    ephemeris_time,
-                    sw_velocity_rtn_kms,
-                    hydrogen_inflow_vector,
-                )
-
-                mock_spice.spkezr.assert_called_with(
-                    "IMAP", ephemeris_time, "ECLIPJ2000", "NONE", "SUN"
-                )
-                mock_spice.latrec.assert_called_with(
-                    -inflow_speed, sentinel.inflow_lon, sentinel.inflow_lat
-                )
-                mock_convert_velocity.assert_called_with(
-                    sw_velocity_rtn_kms, ephemeris_time, "IMAP_RTN", "ECLIPJ2000"
-                )
-
-                # (sw - particle - imap) = (1,2,4) - (0,2,0) - (4,0,0) = (-3,0,4); norm=5
-                velocity_cutoff_norm = 5
-                expected = (
-                    0.5
-                    * (particle_mass / PROTON_CHARGE_COULOMBS)
-                    * (2 * velocity_cutoff_norm * 1000) ** 2
-                )
-                self.assertAlmostEqual(expected, energy_cutoff)
 
 
 class ConvertVelocityRelativeToImapTest(SpiceTestCase):

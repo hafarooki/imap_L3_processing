@@ -15,7 +15,6 @@ from imap_l3_processing.constants import (
     ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     ALPHA_PARTICLE_MASS_KG,
     FIVE_MINUTES_IN_NANOSECONDS,
-    HE_PUI_PARTICLE_MASS_KG,
     ONE_SECOND_IN_NANOSECONDS,
     PROTON_MASS_KG,
     PROTON_MASS_PER_CHARGE_M_P_PER_E,
@@ -29,7 +28,6 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.moments import (
     calculate_helium_pui_temperature,
 )
 from imap_l3_processing.swapi.l3a.science.pickup_ion.utils import (
-    calculate_pui_energy_cutoff,
     calculate_ten_minute_velocities,
     rotate_rtn_velocity_to_swapi_per_bin,
 )
@@ -239,8 +237,6 @@ class PuiChunkFitter(ChunkFitter):
             proton_sw_quality_flag = int(flag)
             n_sweeps = chunk.sci_start_time.shape[0]
 
-            lower_energy_cutoff: float | None = None
-            upper_energy_cutoff: float | None = None
             vasyliunas_siscoe_distribution: VasyliunasSiscoeDistribution | None = None
 
             tracker = PredictedEphemerisTracker()
@@ -262,18 +258,6 @@ class PuiChunkFitter(ChunkFitter):
                     chunk_ephemeris_time = spiceypy.unitim(
                         epoch / ONE_SECOND_IN_NANOSECONDS, "TT", "ET"
                     )
-                    lower_energy_cutoff = 1.25 * tracker.run(calculate_pui_energy_cutoff,
-                        PROTON_MASS_KG,
-                        chunk_ephemeris_time,
-                        ten_minute_rtn,
-                        self.hydrogen_inflow_vector,
-                    )
-                    upper_energy_cutoff = 1.2 * tracker.run(calculate_pui_energy_cutoff,
-                        HE_PUI_PARTICLE_MASS_KG,
-                        chunk_ephemeris_time,
-                        ten_minute_rtn,
-                        self.helium_inflow_vector,
-                    )
                     vasyliunas_siscoe_distribution = tracker.run(build_vasyliunas_siscoe_distribution,
                         chunk_ephemeris_time,
                         ten_minute_rtn,
@@ -285,8 +269,6 @@ class PuiChunkFitter(ChunkFitter):
                         f"SPICE gap precomputing PUI chunk state at epoch {epoch};"
                         " using fill value."
                     )
-                    lower_energy_cutoff = None
-                    upper_energy_cutoff = None
                     vasyliunas_siscoe_distribution = None
 
             flag = SwapiL3Flags.PREDICTIVE_EPHEMERIS if tracker.used_predict else SwapiL3Flags.NONE
@@ -296,8 +278,6 @@ class PuiChunkFitter(ChunkFitter):
                 ten_minute_rtn,
                 bulk_sw_per_bin_swapi,
                 proton_sw_quality_flag | flag,
-                lower_energy_cutoff,
-                upper_energy_cutoff,
                 vasyliunas_siscoe_distribution,
             ))
         return geometries
@@ -309,8 +289,6 @@ class PuiChunkFitter(ChunkFitter):
         sw_velocity_rtn,
         bulk_sw_per_bin_swapi,
         quality_flag,
-        lower_energy_cutoff,
-        upper_energy_cutoff,
         vasyliunas_siscoe_distribution,
     ):
         count_rates_window = data_chunk.coincidence_count_rate[
@@ -345,8 +323,6 @@ class PuiChunkFitter(ChunkFitter):
                 sw_velocity_rtn,
                 bulk_sw_per_bin_swapi,
                 self.density_of_neutral_helium_lookup_table,
-                lower_energy_cutoff,
-                upper_energy_cutoff,
                 vasyliunas_siscoe_distribution,
                 central_effective_area_scale=central_effective_area_scale,
             )

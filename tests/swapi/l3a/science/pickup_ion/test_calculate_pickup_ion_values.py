@@ -1,17 +1,12 @@
-"""Post-fit fill-value branches of `calculate_pickup_ion_values`.
-
-End-to-end optimizer/Hessian/coincidence-rate behavior is exercised by the MC
-parameter-recovery test in `test_monte_carlo_fit_pickup_ion.py`. These tests
-mock those three seams so each assertion isolates one of the post-fit guards
-(`BAD_FIT` short-circuit, background > 1 Hz fill)."""
-
 import unittest
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+from astropy import constants, units
 
 from imap_l3_processing.constants import ONE_AU_IN_KM
 from imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_pickup_ion_values import (
+    calculate_pickup_ion_fit_energy_range,
     calculate_pickup_ion_values,
 )
 from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import (
@@ -28,12 +23,15 @@ _SW_VELOCITY_RTN_KMS = np.array([400.0, 0.0, 0.0])
 _VOLTAGE_PER_STEP = np.linspace(100.0, 8000.0, _N_COARSE_BINS)
 
 
-def _spice_state_passing_every_bin():
-    """Energy cutoffs that admit every coarse bin and a Vasyliunas–Siscoe
-    distribution with a finite distance so `min_speed_kms` calculation runs."""
+_ENERGY_RANGE_ADMITTING_EVERY_BIN = (0.0, 1.0e9)
+
+
+def _vasyliunas_siscoe_distribution():
+    """A Vasyliunas-Siscoe distribution with a finite distance so the
+    `min_speed_kms` calculation runs."""
     distribution = MagicMock(spec=VasyliunasSiscoeDistribution)
     distribution.distance_km = ONE_AU_IN_KM
-    return 0.0, 1.0e9, distribution
+    return distribution
 
 
 def _density_lookup_table():
@@ -99,11 +97,11 @@ def _run_calculate_with_mocked_fit(
         f"{_MODULE_PATH}.ndt.Hessian", return_value=lambda _: np.eye(4)
     ), patch(
         f"{_MODULE_PATH}.calculate_coincidence_rate", return_value=modeled_rates
+    ), patch(
+        f"{_MODULE_PATH}.calculate_pickup_ion_fit_energy_range",
+        return_value=_ENERGY_RANGE_ADMITTING_EVERY_BIN,
     ):
         mock_build.return_value = MagicMock()
-        lower_energy_cutoff, upper_energy_cutoff, vasyliunas_siscoe_distribution = (
-            _spice_state_passing_every_bin()
-        )
         return calculate_pickup_ion_values(
             swapi_response=MagicMock(),
             voltages=voltages,
@@ -111,9 +109,7 @@ def _run_calculate_with_mocked_fit(
             sw_velocity_rtn_kms=_SW_VELOCITY_RTN_KMS,
             bulk_sw_per_bin_swapi_kms=bulk_sw_per_bin_swapi_kms,
             density_of_neutral_helium_lookup_table=_density_lookup_table(),
-            lower_energy_cutoff=lower_energy_cutoff,
-            upper_energy_cutoff=upper_energy_cutoff,
-            vasyliunas_siscoe_distribution=vasyliunas_siscoe_distribution,
+            vasyliunas_siscoe_distribution=_vasyliunas_siscoe_distribution(),
         )
 
 
@@ -129,6 +125,10 @@ def _assert_all_nan_params(tc, fitting_params):
 
 
 class CalculatePickupIonValuesFillTest(unittest.TestCase):
+    """Tests for the post-fit guards in `calculate_pickup_ion_values`, with the
+    optimizer, Hessian and coincidence-rate seams mocked so each test isolates
+    one guard."""
+
     def test_zero_variance_observations_fill_all_params_with_bad_fit(self):
         """When every observed count rate is identical the total sum of
         squares is zero and R² is undefined; `BAD_FIT` is set and every
@@ -236,6 +236,66 @@ class CalculatePickupIonValuesFillTest(unittest.TestCase):
         ):
             self.assertTrue(np.isfinite(value.nominal_value))
             self.assertTrue(np.isfinite(value.std_dev))
+
+
+class CalculatePickupIonFitEnergyRangeTest(unittest.TestCase):
+    """Tests for `calculate_pickup_ion_fit_energy_range`."""
+
+    def test_edges_are_scaled_from_the_proton_energy_of_the_given_bulk_speed(self):
+        for label, solar_wind_bulk_speed_kms in [
+            ("slow wind", 300.0),
+            ("nominal wind", 400.0),
+            ("fast wind", 750.0),
+        ]:
+            with self.subTest(case=label):
+                bulk_speed = solar_wind_bulk_speed_kms * units.km / units.s
+                proton_energy_per_charge_volts = (
+                    (0.5 * constants.m_p * bulk_speed**2 / constants.e.si)
+                    .to(units.V)
+                    .value
+                )
+                nominal_alpha_peak = 2 * proton_energy_per_charge_volts
+                nominal_pickup_ion_cutoff = 16 * proton_energy_per_charge_volts
+                expected_upper_edge = nominal_pickup_ion_cutoff
+                expected_lower_edge = np.sqrt(
+                    nominal_alpha_peak * nominal_pickup_ion_cutoff
+                )
+
+                lower_edge, upper_edge = calculate_pickup_ion_fit_energy_range(
+                    solar_wind_bulk_speed_kms
+                )
+
+                self.assertAlmostEqual(
+                    lower_edge,
+                    expected_lower_edge,
+                    delta=expected_lower_edge * 1e-6,
+                    msg=label,
+                )
+                self.assertAlmostEqual(
+                    upper_edge,
+                    expected_upper_edge,
+                    delta=expected_upper_edge * 1e-6,
+                    msg=label,
+                )
+
+    def test_edges_scale_with_the_square_of_the_bulk_speed(self):
+        """Doubling the bulk speed quadruples both window edges, since the edges
+        are fixed multiples of a kinetic energy."""
+        lower_edge, upper_edge = calculate_pickup_ion_fit_energy_range(350.0)
+        doubled_lower_edge, doubled_upper_edge = calculate_pickup_ion_fit_energy_range(
+            700.0
+        )
+
+        self.assertAlmostEqual(doubled_lower_edge / lower_edge, 4.0)
+        self.assertAlmostEqual(doubled_upper_edge / upper_edge, 4.0)
+
+    def test_lower_edge_is_the_geometric_mean_of_the_alpha_peak_and_the_cutoff(self):
+        """The lower edge sits at the logarithmic midpoint between the nominal
+        alpha peak (2 E_p) and the nominal He+ cutoff (16 E_p), so it is
+        `sqrt(2/16)` of the upper edge."""
+        lower_edge, upper_edge = calculate_pickup_ion_fit_energy_range(425.0)
+
+        self.assertAlmostEqual(lower_edge / upper_edge, np.sqrt(2.0 / 16.0))
 
 
 if __name__ == "__main__":
