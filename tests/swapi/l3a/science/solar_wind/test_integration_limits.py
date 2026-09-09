@@ -25,8 +25,10 @@ from imap_l3_processing.swapi.response.passband_grid import (
     speed_ratio_range_at_elevation,
 )
 from imap_l3_processing.swapi.constants import SWAPI_K_FACTOR
+from imap_l3_processing.swapi.species import Species
 from tests.swapi._helpers import (
     NOMINAL_SWAPI_TO_RTN_ROTATION,
+    NOMINAL_TEST_EPOCH_TT2000,
     load_swapi_response,
     proton_params,
 )
@@ -52,7 +54,9 @@ class TestSpeedWindowMissesPassband(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.response = load_swapi_response(warm_cache_voltages=[_ESA_VOLTAGE])
-        cls.response_grid = cls.response.get_response_grid(_ESA_VOLTAGE, 1.0)
+        cls.response_grid = cls.response.get_response_grid(
+            NOMINAL_TEST_EPOCH_TT2000, _ESA_VOLTAGE, Species.PROTON
+        )
 
     def test_returns_false_when_bulk_speed_sits_in_passband(self):
         """A 450 km/s bulk at the 1 keV step sits well inside the passband envelope, so no miss is reported."""
@@ -98,7 +102,9 @@ class TestGetAngularQuadratureSunglassesRegion(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.response = load_swapi_response(warm_cache_voltages=[_ESA_VOLTAGE])
-        cls.response_grid = cls.response.get_response_grid(_ESA_VOLTAGE, 1.0)
+        cls.response_grid = cls.response.get_response_grid(
+            NOMINAL_TEST_EPOCH_TT2000, _ESA_VOLTAGE, Species.PROTON
+        )
         cls.identity = NOMINAL_SWAPI_TO_RTN_ROTATION
 
     def test_sg_region_is_active_for_sun_pointed_bulk(self):
@@ -193,7 +199,9 @@ class TestGetAngularQuadratureOpenAperturePositive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.response = load_swapi_response(warm_cache_voltages=[_ESA_VOLTAGE])
-        cls.response_grid = cls.response.get_response_grid(_ESA_VOLTAGE, 1.0)
+        cls.response_grid = cls.response.get_response_grid(
+            NOMINAL_TEST_EPOCH_TT2000, _ESA_VOLTAGE, Species.PROTON
+        )
         cls.identity = np.eye(3)
         # Bulk pointed at az=+90°: identity rotation makes v_inst = (-v, 0, 0),
         # giving azimuth = atan2(v, 0) = 90° and elevation = 0°.
@@ -248,7 +256,9 @@ class TestGetAngularQuadratureOpenApertureNegative(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.response = load_swapi_response(warm_cache_voltages=[_ESA_VOLTAGE])
-        cls.response_grid = cls.response.get_response_grid(_ESA_VOLTAGE, 1.0)
+        cls.response_grid = cls.response.get_response_grid(
+            NOMINAL_TEST_EPOCH_TT2000, _ESA_VOLTAGE, Species.PROTON
+        )
         cls.identity = np.eye(3)
         # Bulk at az=-90°: v_inst = (+v, 0, 0) ⇒ az = atan2(-v, 0) = -90°.
         cls.sw_bulk_at_minus_90 = proton_params(
@@ -302,7 +312,9 @@ class TestGetSpeedQuadrature(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.response = load_swapi_response(warm_cache_voltages=[_ESA_VOLTAGE])
-        cls.response_grid = cls.response.get_response_grid(_ESA_VOLTAGE, 1.0)
+        cls.response_grid = cls.response.get_response_grid(
+            NOMINAL_TEST_EPOCH_TT2000, _ESA_VOLTAGE, Species.PROTON
+        )
 
     def test_speed_window_lies_inside_per_elevation_passband(self):
         """For warm plasma the passband binds the window, so every GL node lies inside `[r_min(θ)·v0, r_max(θ)·v0]` at the given elevation."""

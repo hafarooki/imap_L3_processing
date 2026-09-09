@@ -1,6 +1,9 @@
-from typing import Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Union
 
 import numpy as np
+from spacepy import pycdf
 
 from imap_l3_processing.constants import PROTON_MASS_KG
 from imap_l3_processing.swapi.l3a.science.pickup_ion.collapsed_response_grid import (
@@ -12,7 +15,7 @@ from imap_l3_processing.swapi.l3a.science.solar_wind.forward_model import (
 from imap_l3_processing.swapi.l3a.science.solar_wind.params import SolarWindParams
 from imap_l3_processing.swapi.response.deadtime import deadtime_factor
 from imap_l3_processing.swapi.response.swapi_response import ResponseGrid, SwapiResponse
-from tests.test_helpers import get_test_instrument_team_data_path
+from tests.test_helpers import get_test_data_path, get_test_instrument_team_data_path
 
 
 # Calibration CSVs shipped with the repo. Loading the full SwapiResponse from
@@ -26,16 +29,28 @@ SWAPI_CENTRAL_EFFECTIVE_AREA_PATH = get_test_instrument_team_data_path(
 SWAPI_PASSBAND_FIT_COEFFICIENTS_PATH = get_test_instrument_team_data_path(
     "swapi/imap_swapi_passband-fit-coefficients_20260425_v001.csv"
 )
+SWAPI_EFFICIENCY_TABLE_PATH = get_test_data_path(
+    "swapi/imap_swapi_efficiency-lut-test_20241020_v001.dat"
+)
 
 
 def load_swapi_response(
     warm_cache_voltages: Optional[np.ndarray] = None,
+    efficiency_table_path: Optional[Union[str, Path]] = None,
 ) -> SwapiResponse:
-    """Build a `SwapiResponse` from the CSV files.."""
+    """Build a `SwapiResponse` from the CSV files..
+
+    `efficiency_table_path` overrides the shipped test efficiency table, for
+    callers that need the per-species relative efficiencies to match a
+    synthetic fixture; `get_response_grid` applies them to the effective area.
+    """
     response = SwapiResponse.from_files(
-        SWAPI_AZIMUTHAL_TRANSMISSION_PATH,
-        SWAPI_CENTRAL_EFFECTIVE_AREA_PATH,
-        SWAPI_PASSBAND_FIT_COEFFICIENTS_PATH,
+        azimuthal_transmission_path=SWAPI_AZIMUTHAL_TRANSMISSION_PATH,
+        central_effective_area_path=SWAPI_CENTRAL_EFFECTIVE_AREA_PATH,
+        passband_fit_coefficients_path=SWAPI_PASSBAND_FIT_COEFFICIENTS_PATH,
+        efficiency_table_path=efficiency_table_path
+        if efficiency_table_path is not None
+        else SWAPI_EFFICIENCY_TABLE_PATH,
     )
     if warm_cache_voltages is not None:
         response.warm_cache(warm_cache_voltages)
@@ -101,3 +116,5 @@ def synthesize_count_rates(ctx, sw_params: SolarWindParams) -> np.ndarray:
     using the same model the fitter inverts. No Poisson noise."""
     ideal, _ = model_solar_wind_ideal_coincidence_rates(sw_params, ctx)
     return ideal * deadtime_factor(ideal)
+
+NOMINAL_TEST_EPOCH_TT2000 = pycdf.lib.datetime_to_tt2000(datetime(2026, 1, 1))

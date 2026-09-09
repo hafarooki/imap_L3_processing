@@ -7,7 +7,6 @@ from imap_l3_processing.constants import (
     METERS_PER_KILOMETER,
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind.fit_context import (
     build_solar_wind_fit_context,
@@ -24,7 +23,8 @@ from imap_l3_processing.swapi.l3a.science.solar_wind.params import (
 )
 from imap_l3_processing.swapi.l3a.utils import optimal_density_scale
 from imap_l3_processing.swapi.constants import SWAPI_K_FACTOR
-from tests.swapi._helpers import load_swapi_response
+from imap_l3_processing.swapi.species import Species
+from tests.swapi._helpers import NOMINAL_TEST_EPOCH_TT2000, load_swapi_response
 
 
 # RTN → SWAPI rotation. Body +Y (the SWAPI boresight / spin axis) in RTN is
@@ -64,10 +64,9 @@ def _build_proton_ctx(count_rate: np.ndarray, esa_voltage: np.ndarray):
         count_rate=count_rate,
         esa_voltage=esa_voltage,
         swapi_response=response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=_spin_rotation_matrices(len(esa_voltage)),
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     return ctx
 

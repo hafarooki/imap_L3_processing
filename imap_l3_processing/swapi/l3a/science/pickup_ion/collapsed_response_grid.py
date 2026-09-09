@@ -14,6 +14,7 @@ from imap_l3_processing.constants import (
 from imap_l3_processing.swapi.l3a.utils import velocity_components_to_angles_in_instrument_frame
 from imap_l3_processing.swapi.response.passband_grid import interpolate_passband
 from imap_l3_processing.swapi.response.swapi_response import ResponseGrid, SwapiResponse
+from imap_l3_processing.swapi.species import Species
 from imap_l3_processing.swapi.response.azimuthal_transmission import interpolate_azimuthal_transmission
 
 
@@ -36,9 +37,9 @@ def build_chunk_collapsed_response(
     swapi_response: SwapiResponse,
     voltages_v: NDArray,
     bulk_sw_per_bin_kms: NDArray,
-    mass_per_charge_m_p_per_e: float,
+    time_as_tt2000: int,
+    species: Species,
     cutoff_speed_max_kms: float,
-    central_effective_area_scale: float = 1.0,
 ) -> ChunkCollapsedResponse:
     """
     Input shapes:
@@ -71,9 +72,7 @@ def build_chunk_collapsed_response(
                 bulk_vec[0], bulk_vec[1], bulk_vec[2]
             )
             response_grid = swapi_response.get_response_grid(
-                esa_voltage=voltage,
-                mass_per_charge_m_p_per_e=mass_per_charge_m_p_per_e,
-                central_effective_area_scale=central_effective_area_scale,
+                time_as_tt2000, voltage, species
             )
             collapsed = build_collapsed_response_grid(
                 response_grid,

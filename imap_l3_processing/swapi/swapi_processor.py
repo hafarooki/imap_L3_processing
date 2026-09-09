@@ -39,6 +39,7 @@ from imap_l3_processing.swapi.l3b.science.calculate_solar_wind_vdf import (
 )
 from imap_l3_processing.swapi.l3b.swapi_l3b_dependencies import SwapiL3BDependencies
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
+from imap_l3_processing.swapi.species import Species
 from imap_l3_processing.utils import save_data
 
 logger = logging.getLogger(__name__)
@@ -152,8 +153,8 @@ class SwapiProcessor(Processor):
         for data_chunk in chunk_l2_data(data, 50):
             center_of_epoch = data_chunk.sci_start_time[0] + FIVE_MINUTES_IN_NANOSECONDS
             instrument_efficiency = (
-                dependencies.efficiency_calibration_table.relative_proton_efficiency(
-                    center_of_epoch
+                dependencies.efficiency_calibration_table.relative_efficiency(
+                    center_of_epoch, Species.PROTON
                 )
             )
             coincidence_count_rates_with_uncertainty = uarray(

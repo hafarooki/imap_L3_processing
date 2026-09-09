@@ -13,6 +13,7 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribut
     VasyliunasSiscoeDistribution,
 )
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
+from tests.swapi._helpers import NOMINAL_TEST_EPOCH_TT2000
 
 _MODULE_PATH = (
     "imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_pickup_ion_values"
@@ -110,6 +111,7 @@ def _run_calculate_with_mocked_fit(
             bulk_sw_per_bin_swapi_kms=bulk_sw_per_bin_swapi_kms,
             density_of_neutral_helium_lookup_table=_density_lookup_table(),
             vasyliunas_siscoe_distribution=_vasyliunas_siscoe_distribution(),
+            time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
         )
 
 

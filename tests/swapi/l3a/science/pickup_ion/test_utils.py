@@ -1,9 +1,7 @@
-from unittest.mock import patch, sentinel
+from unittest.mock import patch
 
 import numpy as np
 
-from imap_l3_processing.constants import PROTON_CHARGE_COULOMBS, PROTON_MASS_KG, HE_PUI_PARTICLE_MASS_KG
-from imap_l3_processing.swapi.l3a.science.pickup_ion.inflow_vector import InflowVector
 from imap_l3_processing.swapi.l3a.science.pickup_ion.utils import (
     calculate_ten_minute_velocities,
     convert_velocity_relative_to_imap,

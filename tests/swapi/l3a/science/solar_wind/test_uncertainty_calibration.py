@@ -27,10 +27,8 @@ from datetime import timedelta
 import numpy as np
 
 from imap_l3_processing.constants import (
-    ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     ALPHA_PARTICLE_MASS_KG,
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.constants import SWAPI_LIVETIME_S
 from imap_l3_processing.swapi.l3a.chunk_fits import (
@@ -53,7 +51,9 @@ from imap_l3_processing.swapi.l3a.science.solar_wind.proton.fit_solar_wind_proto
 )
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from imap_l3_processing.swapi.response.deadtime import deadtime_factor
+from imap_l3_processing.swapi.species import Species
 from tests.swapi._helpers import (
+    NOMINAL_TEST_EPOCH_TT2000,
     NOMINAL_SWAPI_TO_RTN_ROTATION,
     load_swapi_response,
 )
@@ -140,10 +140,9 @@ def _build_truth_count_rates(response, *, with_alpha: bool) -> np.ndarray:
         count_rate=np.zeros(_VOLTAGE_AXIS.shape),
         esa_voltage=_VOLTAGE_AXIS,
         swapi_response=response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=_ROTATION_MATRICES,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     proton_rates, _ = model_solar_wind_ideal_coincidence_rates(proton_params, proton_ctx)
     total_rates = proton_rates
@@ -159,10 +158,9 @@ def _build_truth_count_rates(response, *, with_alpha: bool) -> np.ndarray:
             count_rate=np.zeros(_VOLTAGE_AXIS.shape),
             esa_voltage=_VOLTAGE_AXIS,
             swapi_response=response,
-            central_effective_area_scale=1.0,
+            time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+            species=Species.ALPHA,
             rotation_matrices=_ROTATION_MATRICES,
-            mass_kg=ALPHA_PARTICLE_MASS_KG,
-            mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
         )
         alpha_rates, _ = model_solar_wind_ideal_coincidence_rates(alpha_params, alpha_ctx)
         total_rates = proton_rates + alpha_rates
@@ -266,10 +264,9 @@ def _run_trial(trial_seed: int) -> dict | None:
         count_rate=noisy_rates,
         esa_voltage=_VOLTAGE_AXIS,
         swapi_response=state.response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=_ROTATION_MATRICES,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     proton_result = fit_solar_wind_proton_model(proton_ctx)
     if int(proton_result.quality_flag) != int(SwapiL3Flags.NONE):
@@ -288,10 +285,9 @@ def _run_trial(trial_seed: int) -> dict | None:
         count_rate=noisy_rates,
         esa_voltage=_VOLTAGE_AXIS,
         swapi_response=state.response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.ALPHA,
         rotation_matrices=_ROTATION_MATRICES,
-        mass_kg=ALPHA_PARTICLE_MASS_KG,
-        mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     )
     alpha_moments = fit_solar_wind_alpha_model(
         proton_ctx=proton_ctx,
@@ -337,7 +333,7 @@ class ProtonUncertaintyCalibration(unittest.TestCase):
     def test_proton_sigma_matches_empirical_std(self):
         _initialize_worker_state(with_alpha=False)
         accumulator, n_good = _run_mc_in_parallel(_N_TRIALS)
-        _assert_calibration(accumulator, n_good, species="proton")
+        _assert_calibration(accumulator, n_good, species=Species.PROTON)
 
 
 class AlphaUncertaintyCalibration(unittest.TestCase):
@@ -349,4 +345,4 @@ class AlphaUncertaintyCalibration(unittest.TestCase):
     def test_alpha_sigma_matches_empirical_std(self):
         _initialize_worker_state(with_alpha=True)
         accumulator, n_good = _run_mc_in_parallel(_N_TRIALS)
-        _assert_calibration(accumulator, n_good, species="alpha")
+        _assert_calibration(accumulator, n_good, species=Species.ALPHA)

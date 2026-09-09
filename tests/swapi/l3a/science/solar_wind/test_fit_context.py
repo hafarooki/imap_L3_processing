@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 
-from imap_l3_processing.constants import PROTON_MASS_KG
+from imap_l3_processing.constants import ALPHA_PARTICLE_MASS_KG, PROTON_MASS_KG
 from imap_l3_processing.swapi.l3a.science.solar_wind.fit_context import (
     SolarWindFitContext,
     build_solar_wind_fit_context,
@@ -12,16 +12,18 @@ from imap_l3_processing.swapi.response.azimuthal_transmission import (
     AzimuthalTransmissionGrid,
 )
 from imap_l3_processing.swapi.response.swapi_response import ResponseGrid
+from imap_l3_processing.swapi.species import Species
+from tests.swapi._helpers import NOMINAL_TEST_EPOCH_TT2000
 
 
 def _swapi_response_returning_per_voltage_response_grid():
-    """Mock SwapiResponse whose `get_response_grid(v, ...)` returns a real
+    """Mock SwapiResponse whose `get_response_grid(t, v, species)` returns a real
     `ResponseGrid` NamedTuple tagged with the voltage in its `central_speed`
     field — lets tests assert on order and per-sweep identity without fighting
     numba's typed-list element-type inference (which rejects MagicMock)."""
     response = MagicMock()
 
-    def _build_response_grid(voltage, *args, **kwargs):
+    def _build_response_grid(time_as_tt2000, voltage, species):
         # Tag the voltage in `central_speed` so tests can recover which
         # voltage produced which grid. Other fields use shape-correct
         # placeholders that satisfy numba's type system.
@@ -108,10 +110,9 @@ class TestBuildSolarWindFitContext(unittest.TestCase):
             count_rate=count_rate,
             esa_voltage=esa_voltage,
             swapi_response=response,
-            central_effective_area_scale=1.0,
+            time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+            species=Species.PROTON,
             rotation_matrices=rotation_matrices,
-            mass_kg=PROTON_MASS_KG,
-            mass_per_charge_m_p_per_e=1.0,
         )
         return ctx, response
 
@@ -177,24 +178,24 @@ class TestBuildSolarWindFitContext(unittest.TestCase):
         self.assertEqual(ctx.response_grids[0].central_speed, 100.0)
         self.assertEqual(ctx.response_grids[1].central_speed, 200.0)
 
-    def test_passes_species_and_efficiency_args_to_create_response_grid(self):
-        """The mass-per-charge and central-effective-area scale supplied to the factory are forwarded into the `get_response_grid` call for each sweep."""
+    def test_passes_epoch_and_species_to_create_response_grid(self):
+        """The epoch and species supplied to the factory are forwarded into the `get_response_grid` call for each bin, so the response picks up the right mass-per-charge and relative efficiency."""
         response = _swapi_response_returning_per_voltage_response_grid()
-        build_solar_wind_fit_context(
+        ctx = build_solar_wind_fit_context(
             count_rate=np.array([10.0]),
             esa_voltage=np.array([100.0]),
             swapi_response=response,
-            central_effective_area_scale=0.42,
+            time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+            species=Species.ALPHA,
             rotation_matrices=np.eye(3)[np.newaxis],
-            mass_kg=PROTON_MASS_KG,
-            mass_per_charge_m_p_per_e=2.0,  # alpha-like mass-per-charge
         )
         self.assertEqual(response.get_response_grid.call_count, 1)
         call = response.get_response_grid.call_args
         all_args = list(call.args) + list(call.kwargs.values())
+        self.assertIn(NOMINAL_TEST_EPOCH_TT2000, all_args)
         self.assertIn(100.0, all_args)
-        self.assertIn(2.0, all_args)
-        self.assertIn(0.42, all_args)
+        self.assertIn(Species.ALPHA, all_args)
+        self.assertEqual(ctx.mass_kg, ALPHA_PARTICLE_MASS_KG)
 
 
 if __name__ == "__main__":
