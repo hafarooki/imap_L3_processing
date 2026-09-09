@@ -160,7 +160,7 @@ class MonteCarloFitPickupIonTest(unittest.TestCase):
         }
 
         # Efficiency table with alpha/proton ratio matching the h5 fixture.
-        proton_eff = 0.02348
+        proton_eff = 1.0
         alpha_eff = proton_eff * helium_efficiency_ratio
         efficiency_file = tempfile.NamedTemporaryFile(
             mode="w", suffix=".dat", delete=False

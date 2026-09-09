@@ -1023,14 +1023,14 @@ if __name__ == "__main__":
                 str(get_test_data_path("swapi/imap_swapi_energy-gf-pui-lut_20100101_v001.csv")),
                 str(get_test_data_path(
                     "swapi/imap_swapi_l2_density-of-neutral-helium-lut-text-not-cdf_20241023_v002.cdf")),
-                str(get_test_data_path("swapi/imap_swapi_efficiency-lut_20241020_v000.dat")),
+                str(get_test_data_path("swapi/imap_swapi_efficiency-lut_20241020_v002.dat")),
                 str(get_test_data_path("swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf")),
             )
             print(paths)
         if "l3b" in sys.argv:
             path = create_swapi_l3b_cdf(
                 "tests/test_data/swapi/imap_swapi_energy-gf-sw-lut_20100101_v001.csv",
-                "tests/test_data/swapi/imap_swapi_efficiency-lut_20241020_v000.dat",
+                "tests/test_data/swapi/imap_swapi_efficiency-lut_20241020_v002.dat",
                 str(get_test_data_path("swapi/imap_swapi_l2_50-sweeps_20250606_v003.cdf")))
             print(path)
     if "glows" in sys.argv:

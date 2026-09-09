@@ -152,19 +152,19 @@ def _truth_velocity_rtn(rotations):
 
 
 def _efficiency_table():
-    """Synthetic `EfficiencyCalibrationTable` with realistic in-flight proton
-    (0.12) and alpha (0.15) efficiencies and a lab-cal proton efficiency of 0.12."""
+    """Synthetic `EfficiencyCalibrationTable` holding proton efficiency 1.0 and
+    helium efficiency 1.25, both relative to the lab calibration."""
     table = EfficiencyCalibrationTable.__new__(EfficiencyCalibrationTable)
     table.data = np.array(
         [
-            (np.datetime64("2024-01-01", "ns"), 0, 0.12, 0.15),
-            (np.datetime64("2025-11-01", "ns"), 0, 0.12, 0.15),
+            (np.datetime64("2024-01-01", "ns"), 0, 1.0, 1.25),
+            (np.datetime64("2025-11-01", "ns"), 0, 1.0, 1.25),
         ],
         dtype=[
             ("time", "M8[ns]"),
             ("MET", "i8"),
             ("proton efficiency", "f8"),
-            ("alpha efficiency", "f8"),
+            ("helium efficiency", "f8"),
         ],
     )
     return table
@@ -189,7 +189,7 @@ def _synthesize_chunk(*, response, rotations, proton_velocity_rtn, alpha_velocit
         count_rate=np.zeros(len(voltages)),
         esa_voltage=voltages,
         swapi_response=response,
-        central_effective_area_scale=efficiency_table.central_effective_area_scale_for(_CHUNK_EPOCH, "proton"),
+        central_effective_area_scale=efficiency_table.relative_proton_efficiency(_CHUNK_EPOCH),
         rotation_matrices=rotations,
         mass_kg=PROTON_MASS_KG,
         mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
@@ -198,7 +198,7 @@ def _synthesize_chunk(*, response, rotations, proton_velocity_rtn, alpha_velocit
         count_rate=np.zeros(len(voltages)),
         esa_voltage=voltages,
         swapi_response=response,
-        central_effective_area_scale=efficiency_table.central_effective_area_scale_for(_CHUNK_EPOCH, "helium"),
+        central_effective_area_scale=efficiency_table.relative_helium_efficiency(_CHUNK_EPOCH),
         rotation_matrices=rotations,
         mass_kg=ALPHA_PARTICLE_MASS_KG,
         mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
@@ -1407,7 +1407,7 @@ class TestPuiChunkFitterFitChunk(unittest.TestCase):
         self.vasyliunas_siscoe_distribution = Mock()
         self.swapi_response = Mock()
         self.efficiency_table = Mock()
-        self.efficiency_table.central_effective_area_scale_for.return_value = 0.42
+        self.efficiency_table.relative_helium_efficiency.return_value = 0.42
         _populate_shared(self.swapi_response, self.efficiency_table)
         self.density_lut = Mock()
         self.hydrogen_inflow = Mock()
@@ -1455,8 +1455,8 @@ class TestPuiChunkFitterFitChunk(unittest.TestCase):
         self.assertIs(result["temperature"], temperature_result)
         self.assertEqual(result["quality_flags"], int(SwapiL3Flags.NONE))
 
-        self.efficiency_table.central_effective_area_scale_for.assert_called_once_with(
-            self.epoch, "helium"
+        self.efficiency_table.relative_helium_efficiency.assert_called_once_with(
+            self.epoch
         )
         pickup_kwargs = mock_calculate_pickup_ion.call_args.kwargs
         self.assertEqual(pickup_kwargs["central_effective_area_scale"], 0.42)

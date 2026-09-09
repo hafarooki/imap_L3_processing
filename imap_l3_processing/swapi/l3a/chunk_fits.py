@@ -315,7 +315,7 @@ class PuiChunkFitter(ChunkFitter):
             ).flatten()
             central_effective_area_scale = _shared[
                 "efficiency_table"
-            ].central_effective_area_scale_for(epoch, "helium")
+            ].relative_helium_efficiency(epoch)
             fit_result = calculate_pickup_ion_values(
                 _shared["swapi_response"],
                 voltages,
@@ -536,7 +536,7 @@ def _fit_proton(
         count_rate=count_rates,
         esa_voltage=voltages,
         swapi_response=swapi_response,
-        central_effective_area_scale=efficiency_table.central_effective_area_scale_for(epoch, "proton"),
+        central_effective_area_scale=efficiency_table.relative_proton_efficiency(epoch),
         rotation_matrices=rotation_matrices,
         mass_kg=PROTON_MASS_KG,
         mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
@@ -652,7 +652,7 @@ def _fit_alpha(
             count_rate=count_rates,
             esa_voltage=voltages,
             swapi_response=swapi_response,
-            central_effective_area_scale=efficiency_table.central_effective_area_scale_for(epoch, "proton"),
+            central_effective_area_scale=efficiency_table.relative_proton_efficiency(epoch),
             rotation_matrices=coarse_rotation_matrices,
             mass_kg=PROTON_MASS_KG,
             mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
@@ -661,7 +661,7 @@ def _fit_alpha(
             count_rate=count_rates,
             esa_voltage=voltages,
             swapi_response=swapi_response,
-            central_effective_area_scale=efficiency_table.central_effective_area_scale_for(epoch, "helium"),
+            central_effective_area_scale=efficiency_table.relative_helium_efficiency(epoch),
             rotation_matrices=coarse_rotation_matrices,
             mass_kg=ALPHA_PARTICLE_MASS_KG,
             mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,

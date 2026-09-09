@@ -127,7 +127,7 @@ if __name__ == "__main__":
                             '--descriptor', 'proton-sw', '--start-date', '20250606', '--version', 'v000',
                             '--dependency',
                             '[{"type":"science","files":["imap_swapi_l2_sci_20251208_v006.cdf"]},'
-                            '{"type":"ancillary","files":["imap_swapi_efficiency-lut_20241020_v000.dat"]},'
+                            '{"type":"ancillary","files":["imap_swapi_efficiency-lut_20241020_v002.dat"]},'
                             '{"type":"ancillary","files":["imap_swapi_energy-gf-pui-lut_20100101_v001.csv"]},'
                             '{"type":"ancillary","files":["imap_swapi_density-of-neutral-helium-lut_20241023_v000.dat"]},'
                             '{"type":"ancillary","files":["imap_swapi_azimuthal-transmission_20260425_v001.csv"]},'
@@ -145,7 +145,7 @@ if __name__ == "__main__":
                             '--descriptor', 'alpha-sw', '--start-date', '20250606', '--version', 'v000',
                             '--dependency',
                             '[{"type":"science","files":["imap_swapi_l2_sci_20250606_v001.cdf"]},'
-                            '{"type":"ancillary","files":["imap_swapi_efficiency-lut_20241020_v000.dat"]},'
+                            '{"type":"ancillary","files":["imap_swapi_efficiency-lut_20241020_v002.dat"]},'
                             '{"type":"ancillary","files":["imap_swapi_energy-gf-pui-lut_20100101_v001.csv"]},'
                             '{"type":"ancillary","files":["imap_swapi_density-of-neutral-helium-lut_20241023_v000.dat"]}'
                             ']'])
@@ -154,7 +154,7 @@ if __name__ == "__main__":
                             '--descriptor', 'pui-he', '--start-date', '20250606', '--version', 'v000',
                             '--dependency',
                             '[{"type":"science","files":["imap_swapi_l2_sci_20250606_v001.cdf"]},'
-                            '{"type":"ancillary","files":["imap_swapi_efficiency-lut_20241020_v000.dat"]},'
+                            '{"type":"ancillary","files":["imap_swapi_efficiency-lut_20241020_v002.dat"]},'
                             '{"type":"ancillary","files":["imap_swapi_energy-gf-pui-lut_20100101_v001.csv"]},'
                             '{"type":"ancillary","files":["imap_swapi_density-of-neutral-helium-lut_20241023_v000.dat"]},'
                             '{"type": "spice", "files": ["imap_sclk_0000.tsc"]},' +
@@ -171,7 +171,7 @@ if __name__ == "__main__":
                             '--start-date', '20250606', '--version', 'v003', '--dependency',
                             '[{"type": "science", "files": ["imap_swapi_l2_sci_20250606_v001.cdf"]},'
                             '{"type":"ancillary","files":["imap_swapi_energy-gf-sw-lut_20100101_v001.csv"]},'
-                            '{"type":"ancillary","files":["imap_swapi_efficiency-lut_20241020_v000.dat"]}]'])
+                            '{"type":"ancillary","files":["imap_swapi_efficiency-lut_20241020_v002.dat"]}]'])
         case "codice", "lo-direct-events":
             subprocess.run(
                 [sys.executable, 'imap_l3_data_processor.py', '--instrument', 'codice', '--data-level', 'l3a',

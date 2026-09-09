@@ -569,7 +569,7 @@ class TestSwapiProcessor(TestCase):
         mock_chunk_l2_data.assert_called_with(mock_swapi_l3b_dependencies_class.fetch_dependencies.return_value.data,
                                               50)
 
-        mock_efficiency_table.get_proton_efficiency_for.assert_has_calls(
+        mock_efficiency_table.relative_proton_efficiency.assert_has_calls(
             [call(first_chunk_initial_epoch + FIVE_MINUTES_IN_NANOSECONDS),
              call(second_chunk_initial_epoch + FIVE_MINUTES_IN_NANOSECONDS)])
 
@@ -584,7 +584,7 @@ class TestSwapiProcessor(TestCase):
                                       nominal_values(mock_calculate_proton_solar_wind_vdf.call_args_list[0].args[1]))
         np.testing.assert_array_equal(std_devs_count_rates,
                                       std_devs(mock_calculate_proton_solar_wind_vdf.call_args_list[0].args[1]))
-        self.assertEqual(mock_efficiency_table.get_proton_efficiency_for.return_value,
+        self.assertEqual(mock_efficiency_table.relative_proton_efficiency.return_value,
                          mock_calculate_proton_solar_wind_vdf.call_args_list[0].args[2])
         self.assertEqual(mock_geometric_factor_calibration_table,
                          mock_calculate_proton_solar_wind_vdf.call_args_list[0].args[3])
@@ -595,7 +595,7 @@ class TestSwapiProcessor(TestCase):
         np.testing.assert_array_equal(std_devs_count_rates,
                                       std_devs(mock_calculate_alpha_solar_wind_vdf.call_args_list[0].args[1]))
 
-        self.assertEqual(mock_efficiency_table.get_proton_efficiency_for.return_value,
+        self.assertEqual(mock_efficiency_table.relative_proton_efficiency.return_value,
                          mock_calculate_alpha_solar_wind_vdf.call_args_list[0].args[2])
         self.assertEqual(mock_geometric_factor_calibration_table,
                          mock_calculate_alpha_solar_wind_vdf.call_args_list[0].args[3])
@@ -605,7 +605,7 @@ class TestSwapiProcessor(TestCase):
                                       nominal_values(mock_calculate_pui_solar_wind_vdf.call_args_list[0].args[1]))
         np.testing.assert_array_equal(std_devs_count_rates,
                                       std_devs(mock_calculate_pui_solar_wind_vdf.call_args_list[0].args[1]))
-        self.assertEqual(mock_efficiency_table.get_proton_efficiency_for.return_value,
+        self.assertEqual(mock_efficiency_table.relative_proton_efficiency.return_value,
                          mock_calculate_pui_solar_wind_vdf.call_args_list[0].args[2])
         self.assertEqual(mock_geometric_factor_calibration_table,
                          mock_calculate_pui_solar_wind_vdf.call_args_list[0].args[3])
@@ -616,7 +616,7 @@ class TestSwapiProcessor(TestCase):
             mock_calculate_combined_solar_wind_differential_flux.call_args_list[0].args[1]))
         np.testing.assert_array_equal(std_devs_count_rates, std_devs(
             mock_calculate_combined_solar_wind_differential_flux.call_args_list[0].args[1]))
-        self.assertEqual(mock_efficiency_table.get_proton_efficiency_for.return_value,
+        self.assertEqual(mock_efficiency_table.relative_proton_efficiency.return_value,
                          mock_calculate_combined_solar_wind_differential_flux.call_args_list[0].args[2])
         self.assertEqual(mock_geometric_factor_calibration_table,
                          mock_calculate_combined_solar_wind_differential_flux.call_args_list[0].args[3])

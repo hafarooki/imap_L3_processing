@@ -152,7 +152,7 @@ class SwapiProcessor(Processor):
         for data_chunk in chunk_l2_data(data, 50):
             center_of_epoch = data_chunk.sci_start_time[0] + FIVE_MINUTES_IN_NANOSECONDS
             instrument_efficiency = (
-                dependencies.efficiency_calibration_table.get_proton_efficiency_for(
+                dependencies.efficiency_calibration_table.relative_proton_efficiency(
                     center_of_epoch
                 )
             )
