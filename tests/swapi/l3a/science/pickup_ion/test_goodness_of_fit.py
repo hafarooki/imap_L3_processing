@@ -2,6 +2,7 @@ from unittest import TestCase
 
 import numpy as np
 
+from imap_l3_processing.swapi.constants import SWAPI_BACKGROUND_RATE
 from imap_l3_processing.swapi.l3a.science.pickup_ion.goodness_of_fit import (
     MAX_CUTOFF_SPEED_KMS,
     MAX_CUTOFF_SPEED_RATIO,
@@ -43,8 +44,7 @@ def _make_pui_model(
 class TestGoodnessOfFit(TestCase):
     def test_fit_acceptance_criteria(self):
         esa_energies, model_rates = _make_pui_model()
-        background_count_rate = 0.1
-        observed_rates = model_rates + background_count_rate
+        observed_rates = model_rates + SWAPI_BACKGROUND_RATE
 
         max_cutoff = MAX_CUTOFF_SPEED_KMS
         defaults = dict(
@@ -54,7 +54,6 @@ class TestGoodnessOfFit(TestCase):
             cutoff_speed_kms=max_cutoff - 50.0,
             sw_speed_kms=400.0,
             ionization_rate=1e-7,
-            background_rate=background_count_rate,
         )
 
         chunk_mean_model_rates = model_rates.mean(axis=0)
@@ -92,18 +91,16 @@ class TestGoodnessOfFit(TestCase):
         speed, or whose ionization rate leaves the allowed range, is rejected.
         Both ranges are inclusive of their endpoints."""
         esa_energies, model_rates = _make_pui_model()
-        background_count_rate = 0.1
 
         # 300 km/s keeps 1.5 * v_sw under MAX_CUTOFF_SPEED_KMS
         sw_speed = 300.0
         defaults = dict(
             esa_energies=esa_energies,
             model_rates=model_rates,
-            observed_rates=model_rates + background_count_rate,
+            observed_rates=model_rates + SWAPI_BACKGROUND_RATE,
             cutoff_speed_kms=sw_speed,
             sw_speed_kms=sw_speed,
             ionization_rate=1e-7,
-            background_rate=background_count_rate,
         )
 
         min_cutoff_speed = sw_speed * MIN_CUTOFF_SPEED_RATIO

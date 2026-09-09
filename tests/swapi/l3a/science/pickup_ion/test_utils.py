@@ -1,13 +1,13 @@
-from unittest.mock import patch
+from unittest.mock import patch, sentinel
 
 import numpy as np
 
+from imap_l3_processing.constants import PROTON_CHARGE_COULOMBS, PROTON_MASS_KG, HE_PUI_PARTICLE_MASS_KG
+from imap_l3_processing.swapi.l3a.science.pickup_ion.inflow_vector import InflowVector
 from imap_l3_processing.swapi.l3a.science.pickup_ion.utils import (
-    calculate_ten_minute_velocities,
     convert_velocity_relative_to_imap,
     convert_velocity_to_reference_frame,
 )
-from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from tests.spice_test_case import SpiceTestCase
 
 _UTILS_MODULE = "imap_l3_processing.swapi.l3a.science.pickup_ion.utils"
@@ -72,65 +72,3 @@ class ConvertVelocityToReferenceFrameTest(SpiceTestCase):
             input_2d[0], ephemeris_time, "FROM", "TO"
         )
         np.testing.assert_array_almost_equal(expected_row, result_1d)
-
-
-class CalculateTenMinuteVelocitiesTest(SpiceTestCase):
-    def _velocities(self):
-        x = np.arange(1, 22)
-        y = np.arange(10, 211, 10)
-        z = np.arange(10, 211, 10)
-        return np.transpose([x, y, z]).astype(float)
-
-    def test_averages_per_minute_velocities_in_ten_minute_windows(self):
-        velocities = self._velocities()
-        quality_flags = np.repeat(SwapiL3Flags.NONE, 21)
-
-        averaged, ten_minute_flags = calculate_ten_minute_velocities(
-            velocities, list(quality_flags)
-        )
-
-        expected_velocities = np.array(
-            [[5.5, 55.0, 55.0], [15.5, 155.0, 155.0], [21.0, 210.0, 210.0]]
-        )
-        np.testing.assert_array_equal(averaged, expected_velocities)
-        np.testing.assert_array_equal(
-            ten_minute_flags, np.repeat(SwapiL3Flags.NONE, 3)
-        )
-
-    def test_ors_per_minute_quality_flags_within_window(self):
-        velocities = self._velocities()
-        quality_flags = np.repeat(SwapiL3Flags.NONE, 21)
-        quality_flags[13] = SwapiL3Flags.FIT_ERROR
-
-        _, ten_minute_flags = calculate_ten_minute_velocities(
-            velocities, list(quality_flags)
-        )
-
-        np.testing.assert_array_equal(
-            ten_minute_flags,
-            np.array(
-                [SwapiL3Flags.NONE, SwapiL3Flags.FIT_ERROR, SwapiL3Flags.NONE]
-            ),
-        )
-
-    def test_combines_multiple_per_minute_quality_flags_within_window(self):
-        velocities = self._velocities()
-        quality_flags = np.repeat(SwapiL3Flags.NONE, 21)
-        other_flag = 1 << 3
-        quality_flags[13] = SwapiL3Flags.FIT_ERROR
-        quality_flags[14] = other_flag
-
-        _, ten_minute_flags = calculate_ten_minute_velocities(
-            velocities, list(quality_flags)
-        )
-
-        np.testing.assert_array_equal(
-            ten_minute_flags,
-            np.array(
-                [
-                    SwapiL3Flags.NONE,
-                    SwapiL3Flags.FIT_ERROR | other_flag,
-                    SwapiL3Flags.NONE,
-                ]
-            ),
-        )

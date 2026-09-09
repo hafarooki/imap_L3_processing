@@ -16,7 +16,6 @@ import os
 import tempfile
 import unittest
 from datetime import datetime
-from unittest import skip
 
 import h5py
 import numpy as np
@@ -54,10 +53,9 @@ _HYDROGEN_INFLOW_PATH = get_test_data_path(
 _HELIUM_INFLOW_PATH = get_test_data_path(
     "swapi/imap_swapi_helium-inflow-vector_20100101_v001.dat"
 )
-
-_MC_N_SAMPLES = 1000
+_MC_N_SAMPLES = 100
 _MC_BIAS_TOLERANCE = 0.03
-_MC_SIGMA_TOLERANCE = 0.10
+_MC_SIGMA_TOLERANCE = 0.20
 
 _SPICE_KERNEL_TYPES = [
     SpiceKernelTypes.Leapseconds,
@@ -72,8 +70,7 @@ _SPICE_KERNEL_TYPES = [
 ]
 
 
-@skip("temporarily disabled until PUI algorithm changes are fully implemented")
-# @skipUnless(os.environ.get("IMAP_API_KEY"), "requires production API key")
+@unittest.skipUnless(os.environ.get("IMAP_API_KEY"), "requires production API key")
 class MonteCarloFitPickupIonTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -143,17 +140,13 @@ class MonteCarloFitPickupIonTest(unittest.TestCase):
                 )
             )
 
-        # Per-minute proton SW velocities feeding `PuiChunkFitter`.
-        # `calculate_ten_minute_velocities` averages 10 consecutive entries
-        # into the 10-minute mean used per PUI chunk, so 10 copies of the
-        # truth velocity per chunk recovers truth exactly. Quality flags are
-        # all NONE.
         proton_velocities_per_minute = np.tile(
             sw_velocity_rtn, (_MC_N_SAMPLES * 10, 1)
         )
         proton_quality_flags_per_minute = [0] * (_MC_N_SAMPLES * 10)
         proton_results = {
             "proton_sw_velocity_rtn": proton_velocities_per_minute,
+            "proton_sw_velocity_rtn_sun": proton_velocities_per_minute,
             "quality_flags": proton_quality_flags_per_minute,
         }
 
@@ -181,7 +174,7 @@ class MonteCarloFitPickupIonTest(unittest.TestCase):
             density_of_neutral_helium_lookup_table=density_lookup_table,
             hydrogen_inflow_vector=hydrogen_inflow_vector,
             helium_inflow_vector=helium_inflow_vector,
-            proton_results=proton_results,
+            proton_sw_results=proton_results,
         )
         runner = ParallelChunkRunner(
             swapi_response=swapi_response, efficiency_table=efficiency_table

@@ -210,14 +210,14 @@ class SwapiProcessorIntegration(unittest.TestCase):
         expected_values = {
             'epoch': datetime.datetime(2026, 1, 1, 16, 24, 4, 954000),
             'epoch_delta': 300000000000,
-            'pui_ionization_rate': 9.058018690666358e-08,
-            'pui_ionization_rate_uncert': 1.838195595738057e-09,
-            'pui_cutoff_speed': 488.7348327636719,
-            'pui_cutoff_speed_uncert': 2.2645604610443115,
-            'pui_density': 0.0006273944163694978,
-            'pui_density_uncert': 1.2732073628285434e-05,
-            'pui_temperature': 19105096.0,
-            'pui_temperature_uncert': 177085.21875,
+            'pui_ionization_rate': 9.177568216500731e-08,
+            'pui_ionization_rate_uncert': 2.7529767354650403e-09,
+            'pui_cutoff_speed': 487.5039978027344,
+            'pui_cutoff_speed_uncert': 4.466331958770752,
+            'pui_density': 0.0006356762023642659,
+            'pui_density_uncert': 1.9068251276621595e-05,
+            'pui_temperature': 19009084.0,
+            'pui_temperature_uncert': 346333.4375,
             'swp_flags': 0,
         }
 

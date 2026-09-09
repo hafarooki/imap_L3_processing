@@ -63,6 +63,8 @@ J^{\alpha}
 \end{bmatrix}.
 ```
 
+The covariance matrix $`\Sigma_{\mathbf{x}^{\alpha}}`$ is estimated from the Jacobian and the residuals using the [HC3 method](./parameter-uncertainty.md).
+
 Some notes on error handling:
 - If the proton fit fails, fill values are reported and the proton quality flag is propagated.
 - If the alpha fit fails at any point, fill values are reported and `FIT_ERROR` is set.

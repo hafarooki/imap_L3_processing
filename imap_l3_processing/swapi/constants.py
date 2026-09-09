@@ -11,6 +11,7 @@ SWAPI_L2_K_FACTOR = 1.93
 #   Index 0       : always discarded (hardware artifact, never science data)
 #   Indices 1–62  : coarse sweep passbands (62 bins, uniform energy steps)
 #   Indices 63–71 : fine sweep passbands (9 bins, higher resolution near the proton peak)
+SWAPI_SWEEP_BIN_COUNT = 72
 SWAPI_DISCARDED_BIN = 0
 SWAPI_COARSE_SWEEP_BINS = slice(1, 63)  # indices 1–62
 SWAPI_FINE_SWEEP_BINS = slice(63, 72)  # indices 63–71

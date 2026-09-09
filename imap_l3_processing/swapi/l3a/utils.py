@@ -15,6 +15,7 @@ from imap_l3_processing.cdf.cdf_utils import read_numeric_variable
 from imap_l3_processing.constants import (
     ALPHA_PARTICLE_CHARGE_COULOMBS,
     ALPHA_PARTICLE_MASS_KG,
+    FIVE_MINUTES_IN_NANOSECONDS,
     METERS_PER_KILOMETER,
     ONE_SECOND_IN_NANOSECONDS,
     PROTON_CHARGE_COULOMBS,
@@ -26,6 +27,7 @@ from imap_l3_processing.swapi.constants import (
     SWAPI_BIN_PERIOD_S,
     SWAPI_K_FACTOR,
     SWAPI_LIVETIME_CENTER_OFFSET_S,
+    SWAPI_SWEEP_BIN_COUNT,
 )
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_l3_processing.swapi.l3a.science.solar_wind.params import SolarWindParams
@@ -179,17 +181,40 @@ def chunk_l2_data(data: SwapiL2Data, chunk_size: int) -> Iterable[SwapiL2Data]:
         )
 
 
-def chunk_epoch(chunk: SwapiL2Data) -> float:
-    return chunk.sci_start_time[0] + THIRTY_SECONDS_IN_NANOSECONDS
+def solar_wind_chunk_epoch(chunk: SwapiL2Data) -> float:
+    """Center of a one-minute (five-sweep) chunk [ns since J2000 TT]."""
+    return int(chunk.sci_start_time[0]) + THIRTY_SECONDS_IN_NANOSECONDS
 
 
-def measurement_times(chunk: SwapiL2Data, bin_slice: slice) -> ndarray:
-    bins = np.arange(bin_slice.start, bin_slice.stop)
+def pickup_ion_chunk_epoch(chunk: SwapiL2Data) -> int:
+    """Center of a ten-minute (fifty-sweep) PUI chunk [ns since J2000 TT].
+
+    `sci_start_time` marks when a sweep starts and the chunk runs one sweep past
+    its last start, so the center is half the ten minutes after the first start
+    -- matching the +/- 5 minute `epoch_delta` the chunk is reported with.
+    """
+    return int(chunk.sci_start_time[0]) + FIVE_MINUTES_IN_NANOSECONDS
+
+
+def measurement_times(sweep_start_times_tt2000_ns: ndarray) -> ndarray:
+    """
+    Central measurement time of each ESA step within each sweep times.
+
+    Parameters
+    ----------
+    sweep_start_times_tt2000_ns : (N,) ndarray of ints [ns]
+        The start TT2000 time of each sweep.
+
+    Returns
+    -------
+    (N, 72) array of the measurement times for each ESA step within each sweep.
+    """
+    bins = np.arange(SWAPI_SWEEP_BIN_COUNT)
     seconds_into_sweep = bins * SWAPI_BIN_PERIOD_S + SWAPI_LIVETIME_CENTER_OFFSET_S
     return (
-        chunk.sci_start_time[:, np.newaxis]
+        np.asarray(sweep_start_times_tt2000_ns)[:, np.newaxis]
         + seconds_into_sweep * ONE_SECOND_IN_NANOSECONDS
-    ).flatten()
+    )
 
 
 def optimal_density_scale(unit_ideal_rates: ndarray, observed_rates: ndarray) -> float:

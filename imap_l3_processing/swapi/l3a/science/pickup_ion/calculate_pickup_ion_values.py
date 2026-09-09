@@ -1,24 +1,21 @@
 from __future__ import annotations
+from functools import partial
 
 from dataclasses import dataclass
 
-import lmfit
-import numdifftools as ndt
 import numpy as np
-from imap_processing.swapi.l2 import swapi_l2
-from lmfit import Parameters
-from numpy import ndarray
-from scipy.linalg import inv
-from uncertainties import ufloat
+import scipy.optimize
+from numpy.typing import NDArray
+from uncertainties import UFloat, ufloat
 
 from imap_l3_processing.constants import (
     METERS_PER_KILOMETER,
-    ONE_AU_IN_KM,
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
 )
 from imap_l3_processing.swapi.constants import (
     SWAPI_BACKGROUND_RATE,
+    SWAPI_COARSE_SWEEP_BINS,
     SWAPI_L2_K_FACTOR,
 )
 from imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_coincidence_rate import (
@@ -33,113 +30,233 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.density_of_neutral_helium_l
 )
 from imap_l3_processing.swapi.l3a.science.pickup_ion.goodness_of_fit import (
     MAX_CUTOFF_SPEED_RATIO,
-    MAX_IONIZATION_RATE,
-    MIN_CUTOFF_SPEED_RATIO,
-    MIN_IONIZATION_RATE,
     is_good_fit,
 )
-from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import (
-    FittingParameters,
-    VasyliunasSiscoeDistribution,
+from imap_l3_processing.swapi.l3a.science.pickup_ion.moments import (
+    calculate_helium_pui_density,
+    calculate_helium_pui_temperature,
+)
+from imap_l3_processing.swapi.l3a.science.solar_wind.uncertainties import (
+    compute_hc3_parameter_covariance,
 )
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 from imap_l3_processing.swapi.species import Species
 
-
-_COARSE_SWEEP_LEN = 62
 _PICKUP_ION_SPECIES = Species.HELIUM_PLUS
+_INITIAL_IONIZATION_RATE_PER_S = 1e-7
+_LOG_IONIZATION_RATE_INDEX = 0
+_LOG_CUTOFF_SPEED_INDEX = 1
+_SWEEPS_PER_CHUNK = 50
+_COARSE_BIN_COUNT = SWAPI_COARSE_SWEEP_BINS.stop - SWAPI_COARSE_SWEEP_BINS.start
+
+
+@dataclass(frozen=True)
+class PickupIonFitInputData:
+    time_as_tt2000: int
+    """Center of the chunk [ns since J2000 TT]."""
+
+    esa_energies: NDArray
+    """Sweep-averaged coarse ESA energies, shape (62,) [eV/e]."""
+
+    coincidence_count_rates: NDArray
+    """Coarse-sweep coincidence count rates, shape (50, 62) [counts/s]."""
+
+    solar_wind_velocity_rtn_sun: NDArray
+    """Chunk-mean solar wind bulk velocity (Sun frame, RTN coords), shape (3,) [km/s]."""
+
+    bulk_sw_per_bin_swapi_kms: NDArray
+    """Rotated chunk-mean solar wind bulk velocity (SC frame, SWAPI coords),
+    shape (50, 62, 3) [km/s]."""
+
+    distance: float
+    """IMAP's heliocentric distance [km]."""
+
+    inflow_angle: float
+    """IMAP's position angle to the neutral helium inflow vector [deg]."""
+
+    def __post_init__(self):
+        expected_shapes = {
+            "esa_energies": (_COARSE_BIN_COUNT,),
+            "coincidence_count_rates": (_SWEEPS_PER_CHUNK, _COARSE_BIN_COUNT),
+            "solar_wind_velocity_rtn_sun": (3,),
+            "bulk_sw_per_bin_swapi_kms": (_SWEEPS_PER_CHUNK, _COARSE_BIN_COUNT, 3),
+        }
+        for field_name, expected_shape in expected_shapes.items():
+            actual_shape = np.shape(getattr(self, field_name))
+            if actual_shape != expected_shape:
+                raise ValueError(
+                    f"{field_name} has shape {actual_shape}, expected {expected_shape}"
+                )
 
 
 @dataclass
 class PickupIonFitResult:
-    fitting_params: FittingParameters
-    chunk_response: ChunkCollapsedResponse
-    vasyliunas_siscoe_distribution: VasyliunasSiscoeDistribution
+    ionization_rate: UFloat
+    """Fitted He+ pickup ion ionization rate [1/s]"""
+
+    cutoff_speed: UFloat
+    """Fitted He+ pickup ion cutoff speed [km/s]"""
+
+    density: UFloat
+    """Inferred He+ pickup ion density [cm^-3]"""
+
+    temperature: UFloat
+    """Inferred He+ pickup ion temperature [K]"""
+
+    flags: SwapiL3Flags
+    """Flags associated with the fit."""
 
 
 def calculate_pickup_ion_values(
+    fit_input: PickupIonFitInputData,
+    *,
     swapi_response: SwapiResponse,
-    voltages: np.ndarray,
-    count_rates: np.ndarray,
-    sw_velocity_rtn_kms: ndarray,
-    bulk_sw_per_bin_swapi_kms: ndarray,
     density_of_neutral_helium_lookup_table: DensityOfNeutralHeliumLookupTable,
-    vasyliunas_siscoe_distribution: VasyliunasSiscoeDistribution,
-    time_as_tt2000: int,
 ) -> PickupIonFitResult:
-    voltages = np.asarray(voltages, dtype=float).reshape(-1, _COARSE_SWEEP_LEN)
-    count_rates = np.asarray(count_rates, dtype=float).reshape(-1, _COARSE_SWEEP_LEN)
-    bulk_sw_per_bin_swapi_kms = np.asarray(
-        bulk_sw_per_bin_swapi_kms, dtype=float
-    ).reshape(-1, _COARSE_SWEEP_LEN, 3)
+    """
+    Fit the Vasyliunas-Siscoe helium PUI model to one 10-minute chunk.
 
-    voltages_per_step = np.mean(voltages, axis=0)
-    energies_per_step = np.abs(voltages_per_step) * SWAPI_L2_K_FACTOR
+    Parameters
+    ----------
+    fit_input : PickupIonFitInputData
+        The chunk's L2 science data and the per-chunk geometry it is fit
+        against.
+    swapi_response : SwapiResponse
+        The instrument response model.
+    density_of_neutral_helium_lookup_table : DensityOfNeutralHeliumLookupTable
+        The neutral helium density table for the model.
+    """
+    solar_wind_speed_inertial_frame = float(np.linalg.norm(fit_input.solar_wind_velocity_rtn_sun))
+    distance = fit_input.distance
+    inflow_angle = fit_input.inflow_angle
 
-    sw_velocity_kms = float(np.linalg.norm(sw_velocity_rtn_kms))
-
+    # === calculate fitting energy range ===
     lower_energy_cutoff, upper_energy_cutoff = calculate_pickup_ion_fit_energy_range(
-        sw_velocity_kms
+        solar_wind_speed_inertial_frame
     )
+    # === prepare forward model ===
 
-    # fit and goodness-of-fit eval share the same lower cutoff, they differ only in upper cutoff
-    modeled_esa_step_mask = energies_per_step > lower_energy_cutoff
-    modeled_energies = energies_per_step[modeled_esa_step_mask]
-    modeled_count_rates = count_rates[:, modeled_esa_step_mask]
+    # fit and goodness-of-fit eval share the same lower cutoff, they differ only in upper cutoff 
+    modeled_esa_step_mask = fit_input.esa_energies > lower_energy_cutoff
+    modeled_energies = fit_input.esa_energies[modeled_esa_step_mask]
+    modeled_count_rates = fit_input.coincidence_count_rates[:, modeled_esa_step_mask]
 
-    # collapsed response over the modeled ESA steps
     modeled_response = build_chunk_collapsed_response(
         swapi_response=swapi_response,
-        voltages_v=voltages_per_step[modeled_esa_step_mask],
-        bulk_sw_per_bin_kms=bulk_sw_per_bin_swapi_kms[:, modeled_esa_step_mask, :],
-        time_as_tt2000=time_as_tt2000,
+        voltages_v=modeled_energies / SWAPI_L2_K_FACTOR,
+        bulk_sw_per_bin_kms=fit_input.bulk_sw_per_bin_swapi_kms[:, modeled_esa_step_mask, :],
+        time_as_tt2000=fit_input.time_as_tt2000,
         species=_PICKUP_ION_SPECIES,
-        cutoff_speed_max_kms=sw_velocity_kms * MAX_CUTOFF_SPEED_RATIO,
+        cutoff_speed_max_kms=solar_wind_speed_inertial_frame * MAX_CUTOFF_SPEED_RATIO * 1.1,
     )
 
-    # collapsed response over subset used for fitting
+    # subset used for fitting
     fitting_esa_step_mask = modeled_energies < upper_energy_cutoff
-    fit_window_response = ChunkCollapsedResponse(
+    fitting_count_rates = modeled_count_rates[:, fitting_esa_step_mask]
+    fitting_window_response = ChunkCollapsedResponse(
         speed_in_sw_frame=modeled_response.speed_in_sw_frame,
         bin_weights=modeled_response.bin_weights[:, fitting_esa_step_mask],
     )
 
-    fitting_params = _fit_pickup_ion_parameters(
-        chunk_response=fit_window_response,
-        vasyliunas_siscoe_distribution=vasyliunas_siscoe_distribution,
-        observed_count_rates=modeled_count_rates[:, fitting_esa_step_mask],
-        sw_speed_kms=sw_velocity_kms,
+    model = lambda ionization_rate, cutoff_speed, response: calculate_coincidence_rate(
+        response,
+        ionization_rate=ionization_rate,
+        cutoff_speed=cutoff_speed,
+        distance=distance,
+        inflow_angle=inflow_angle,
+        solar_wind_speed_inertial_frame=solar_wind_speed_inertial_frame,
+        density_of_neutral_helium_lookup_table=density_of_neutral_helium_lookup_table,
+    )
+    fitting_window_model = partial(model, response=fitting_window_response)
+
+    # === fit model ===
+
+    initial_log_parameters = np.array(
+        [
+            np.log(_INITIAL_IONIZATION_RATE_PER_S),
+            np.log(solar_wind_speed_inertial_frame),
+        ]
     )
 
-    if not (int(fitting_params.flags) & int(SwapiL3Flags.BAD_FIT)):
-        nominal_fitting_params = FittingParameters(
-            ionization_rate=fitting_params.ionization_rate.nominal_value,
-            cutoff_speed=fitting_params.cutoff_speed.nominal_value,
-        )
-        modeled_rates = calculate_coincidence_rate(
-            modeled_response, vasyliunas_siscoe_distribution, nominal_fitting_params
-        )
-        if not is_good_fit(
-            esa_energies=modeled_energies,
-            model_rates=modeled_rates,
-            observed_rates=modeled_count_rates,
-            cutoff_speed_kms=nominal_fitting_params.cutoff_speed,
-            sw_speed_kms=sw_velocity_kms,
-            ionization_rate=nominal_fitting_params.ionization_rate,
-            background_rate=SWAPI_BACKGROUND_RATE,
-        ):
-            nan_param = ufloat(np.nan, np.nan)
-            fitting_params = FittingParameters(
-                nan_param,
-                nan_param,
-                fitting_params.flags | SwapiL3Flags.BAD_FIT,
+    def residuals(log_parameters: np.ndarray) -> np.ndarray:
+        modeled_rates = (
+            model(
+                ionization_rate=float(np.exp(log_parameters[_LOG_IONIZATION_RATE_INDEX])),
+                cutoff_speed=float(np.exp(log_parameters[_LOG_CUTOFF_SPEED_INDEX])),
+                response=fitting_window_response,
             )
+            + SWAPI_BACKGROUND_RATE
+        )
+
+        return modeled_rates.mean(axis=0) - fitting_count_rates.mean(axis=0)
+
+    result: scipy.optimize.OptimizeResult = scipy.optimize.least_squares(
+        residuals,
+        initial_log_parameters,
+        method="lm",
+    )
+
+    # === output formatting ===
+
+    fitted_parameters = np.exp(result.x)
+    log_parameter_covariance = compute_hc3_parameter_covariance(result.jac, result.fun)
+
+    fitted_ionization_rate = float(fitted_parameters[_LOG_IONIZATION_RATE_INDEX])
+    fitted_cutoff_speed = float(fitted_parameters[_LOG_CUTOFF_SPEED_INDEX])
+
+    # handle cases where we set BAD_FIT flag and report fill values
+    if (
+        not result.success
+        or not np.all(np.isfinite(log_parameter_covariance))
+        or not is_good_fit(
+            esa_energies=modeled_energies,
+            model_rates=fitting_window_model(
+                ionization_rate=fitted_ionization_rate,
+                cutoff_speed=fitted_cutoff_speed,
+            ),
+            observed_rates=modeled_count_rates,
+            cutoff_speed_kms=fitted_cutoff_speed,
+            sw_speed_kms=solar_wind_speed_inertial_frame,
+            ionization_rate=fitted_ionization_rate,
+        )
+    ):
+        nan_parameter = ufloat(np.nan, np.nan)
+        return PickupIonFitResult(
+            ionization_rate=nan_parameter,
+            cutoff_speed=nan_parameter,
+            density=nan_parameter,
+            temperature=nan_parameter,
+            flags=SwapiL3Flags.BAD_FIT,
+        )
+
+    # sigma(x) = x * sigma(ln x)
+    parameter_sigmas = fitted_parameters * np.sqrt(np.diag(log_parameter_covariance))
+    fitted_ionization_rate_error = float(parameter_sigmas[_LOG_IONIZATION_RATE_INDEX])
+    fitted_cutoff_speed_error = float(parameter_sigmas[_LOG_CUTOFF_SPEED_INDEX])
 
     return PickupIonFitResult(
-        fitting_params=fitting_params,
-        chunk_response=fit_window_response,
-        vasyliunas_siscoe_distribution=vasyliunas_siscoe_distribution,
+        ionization_rate=ufloat(fitted_ionization_rate, fitted_ionization_rate_error),
+        cutoff_speed=ufloat(fitted_cutoff_speed, fitted_cutoff_speed_error),
+        density=calculate_helium_pui_density(
+            modeled_response.speed_in_sw_frame,
+            ionization_rate=ufloat(fitted_ionization_rate, fitted_ionization_rate_error),
+            cutoff_speed=ufloat(fitted_cutoff_speed, fitted_cutoff_speed_error),
+            distance=distance,
+            inflow_angle=inflow_angle,
+            solar_wind_speed_inertial_frame=solar_wind_speed_inertial_frame,
+            density_of_neutral_helium_lookup_table=density_of_neutral_helium_lookup_table,
+        ),
+        temperature=calculate_helium_pui_temperature(
+            modeled_response.speed_in_sw_frame,
+            ionization_rate=ufloat(fitted_ionization_rate, fitted_ionization_rate_error),
+            cutoff_speed=ufloat(fitted_cutoff_speed, fitted_cutoff_speed_error),
+            distance=distance,
+            inflow_angle=inflow_angle,
+            solar_wind_speed_inertial_frame=solar_wind_speed_inertial_frame,
+            density_of_neutral_helium_lookup_table=density_of_neutral_helium_lookup_table,
+        ),
+        flags=SwapiL3Flags.NONE,
     )
 
 
@@ -168,110 +285,3 @@ def calculate_pickup_ion_fit_energy_range(
     upper_edge = nominal_pui_he_cutoff
 
     return float(lower_edge), float(upper_edge)
-
-
-def _fit_pickup_ion_parameters(
-    chunk_response: ChunkCollapsedResponse,
-    vasyliunas_siscoe_distribution: VasyliunasSiscoeDistribution,
-    observed_count_rates: np.ndarray,
-    sw_speed_kms: float,
-) -> FittingParameters:
-    """Run the Nelder-Mead PUI parameter fit.
-
-    `observed_count_rates` is shape (n_sweeps, n_steps). `chunk_response` and
-    `vasyliunas_siscoe_distribution` carry the precomputed geometry; the
-    residual constructs a `FittingParameters` from each iteration's lmfit values.
-    """
-    params = Parameters()
-    params.add(
-        "ionization_rate",
-        value=1e-7,
-        min=MIN_IONIZATION_RATE,
-        max=MAX_IONIZATION_RATE,
-    )
-    params.add(
-        "cutoff_speed",
-        value=sw_speed_kms,
-        min=sw_speed_kms * MIN_CUTOFF_SPEED_RATIO,
-        max=sw_speed_kms * MAX_CUTOFF_SPEED_RATIO,
-    )
-
-    def map_to_internal(value, param):
-        return np.arcsin(2 * (value - param.min) / (param.max - param.min) - 1)
-
-    def simplex_vertex(ionization_rate, cutoff_speed):
-        return [
-            map_to_internal(ionization_rate, params["ionization_rate"]),
-            map_to_internal(cutoff_speed, params["cutoff_speed"]),
-        ]
-
-    initial_simplex = np.array(
-        [
-            simplex_vertex(1e-7, sw_speed_kms),
-            simplex_vertex(2.1e-7, sw_speed_kms),
-            simplex_vertex(1e-7, sw_speed_kms * MAX_CUTOFF_SPEED_RATIO),
-        ]
-    )
-
-    minimizer = lmfit.Minimizer(
-        _calculate_poisson_negative_log_likelihood,
-        params,
-        fcn_args=(observed_count_rates, chunk_response, vasyliunas_siscoe_distribution),
-        scale_covar=False,
-        options=dict(initial_simplex=initial_simplex),
-    )
-    result = minimizer.minimize(method="nelder")
-
-    nominal_values = result.params.valuesdict()
-
-    flags = SwapiL3Flags.NONE
-    hessian_fn = ndt.Hessian(minimizer.penalty)
-    try:
-        hessian_value = hessian_fn(result.x)
-        cov_internal = inv(hessian_value)
-        cov_external = minimizer._int2ext_cov_x(cov_internal, result.x)
-        standard_errors = np.sqrt(np.diag(cov_external))  # NaN if not positive definite
-    except Exception:
-        standard_errors = np.full(len(result.var_names), np.nan)
-
-    if not np.all(np.isfinite(standard_errors)):
-        flags |= SwapiL3Flags.BAD_FIT
-
-    if flags & SwapiL3Flags.BAD_FIT:
-        nan_param = ufloat(np.nan, np.nan)
-        return FittingParameters(nan_param, nan_param, flags)
-
-    param_vals = {
-        name: ufloat(nominal_values[name], std_err)
-        for name, std_err in zip(result.var_names, standard_errors)
-    }
-
-    return FittingParameters(
-        param_vals["ionization_rate"],
-        param_vals["cutoff_speed"],
-        flags,
-    )
-
-
-def _calculate_poisson_negative_log_likelihood(
-    params: Parameters,
-    observed_count_rates: np.ndarray,  # (n_sweeps, n_steps)
-    chunk_response: ChunkCollapsedResponse,
-    vasyliunas_siscoe_distribution: VasyliunasSiscoeDistribution,
-) -> float:
-    parvals = params.valuesdict()
-    fitting_params = FittingParameters(
-        ionization_rate=parvals["ionization_rate"],
-        cutoff_speed=parvals["cutoff_speed"],
-    )
-
-    modeled_rates = (
-        calculate_coincidence_rate(
-            chunk_response, vasyliunas_siscoe_distribution, fitting_params
-        )
-        + SWAPI_BACKGROUND_RATE
-    )
-    modeled_counts = modeled_rates * swapi_l2.SWAPI_LIVETIME
-    observed_counts = observed_count_rates * swapi_l2.SWAPI_LIVETIME
-    return float(np.sum(modeled_counts - observed_counts * np.log(modeled_counts)))
-

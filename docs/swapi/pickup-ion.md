@@ -2,7 +2,9 @@
 
 ## Introduction
 
-After [fitting the proton distribution](./proton-sw.md) to the ten five-sweep chunks in a ten-minute chunk, the pickup ion (PUI) parameters are evaluated from the 50 sweeps by fitting a forward model. Since the count rates are quite low, Poisson maximum likelihood estimation is used to avoid a biased fit.
+After [fitting the proton distribution](./proton-sw.md) to the ten five-sweep chunks in a ten-minute chunk, the pickup ion (PUI) parameters are evaluated from the 50 sweeps by fitting a forward model.
+The mean square difference between the model and observed rates, after averaging both over the 50 sweeps, is minimized.
+Because statistics from individual sweeps are poor but the effects of the spacecraft spin do not cancel out on average, the model is evaluated based on the actual measurement times, then averaged over sweeps.
 See the below figure for an example of the data used for the fit together with the fitted PUI forward model.
 
 ![real example](figures/pui_flight_xarray_comparison.svg)
@@ -64,7 +66,7 @@ For each sweep $i \in \{1, \dots, 50\}$ and step $j \in \{1, \dots, 62\}$, the P
 - Measured coincidence rate $C_{ij}$;
 - Chunk-mean proton solar wind bulk velocity vector rotated from RTN to instrument coordinates $\mathbf{v}_{\text{sw},ij}$.
 
-For PUIs, only the coarse steps are used. Furthermore, the energy range is limited as follows (where $`E_\text{p}`$ is the proton kinetic energy corresponding to the provided proton solar wind bulk speed):
+For PUIs, only the coarse steps are used. Furthermore, the energy range is limited as follows (where $`E_\text{p}`$ is the proton kinetic energy corresponding to the provided proton solar wind bulk speed in the Sun's reference frame):
 - Upper limit: the approximate $`\mathrm{He^+}`$ pickup ion cutoff, $`16 E_\text{p}`$ (accounts for the mass per charge being 4x higher and the cutoff speed being twice the solar wind speed, or four times the energy per charge, in the spacecraft frame).
 - Lower limit: the geometric mean of the nominal alpha peak, $`2 E_\text{p}`$ (assuming the alpha solar wind shares the proton bulk speed), and the nominal PUI cutoff.
 
@@ -151,12 +153,12 @@ W_{ijk} = \Delta v' \cdot {v'_k}^2 \cdot H(v'_k, V_j; \mathbf{v}_\text{sw,ij}).
 ```
 is precomputed on a uniform grid $v'_k \in [v'_\text{min}, v'_\text{max}]$ of 512 points with spacing $\Delta v'$, defined by
 ```math
-v'_\text{max} = 1.5 v_\text{sw},
+v'_\text{max} = 1.1 \times 1.5 \, v_\text{sw},
 ```
 ```math
 v'_\text{min} = 10^{-3} v'_\text{max}.
 ```
-The upper boundary is the maximum cutoff speed allowed by the fitting bounds, and the lower boundary is a small fraction of it to avoid singularities (${v'}^2$ integration weight suppresses the low-$v'$ contribution, so extending to zero is not necessary).
+The upper boundary is the largest cutoff speed the good-fit criteria accept ($1.5 \, v_\text{sw}$), plus 10% so the optimizer sees the model change with the cutoff speed just past the upper limit. The lower boundary is a small fraction of the upper boundary to avoid singularities (${v'}^2$ integration weight suppresses the low-$v'$ contribution, so extending to zero is not necessary).
 
 Using $W_{ijk}$, the model coincidence rate is given by
 ```math
@@ -190,34 +192,30 @@ Below, the optimized 1D integral is validated by comparing it to a reference 3D 
 
 ## Optimization Strategy
 
-The PUI parameters to be determined are $\mathbf{x} = (\beta_E, v_b)$.
-To enable the application of physical constraints on the parameters, the constrained optimization problem in $\mathbf{x}$ is posed as an unconstrained problem in $\tilde{x}$, given by
-```math
-\tilde{\mathbf{x}} = \arcsin\!\left( \dfrac{2 (\mathbf{x} - \mathbf{x}_\text{min})}{\mathbf{x}_\text{max} - \mathbf{x}_\text{min}} - 1 \right),
-```
-with bounds defined in the table below.
-| Parameter | $`x_\text{min}`$ | $`x_\text{max}`$ | Initial |
-|---|---|---|---|
-| $\beta_E$ | $0.6 \times 10^{-9}$ s⁻¹ | $8 \times 10^{-7}$ s⁻¹ | $10^{-7}$ s⁻¹ |
-| $v_b$ | $0.5 \, v_\text{sw}$ | $1.5 \, v_\text{sw}$ | $v_\text{sw}$ |
+The free parameters are $\mathbf{x} = (\ln(\beta_E / \text{s}^{-1}), \ln(v_b/[\text{km}/\text{s}]))$.
+They are parameterized in log space to ensure that they remain positive, but no other constraints are imposed.
+The initial values are given by the table below.
 
-The Nelder-Mead method is used for optimization, with a heuristic three-vertex simplex specified explicitly.
+| Parameter | Initial |
+|---|---|
+| $\beta_E$ | $10^{-7}\;\text{s}^{-1}$  |
+| $v_b$ | $v_\text{sw}$ (Sun frame) |
 
-The optimal parameters are estimated by maximizing the Poisson likelihood—yielding optimal parameters $`\hat{\mathbf{x}}`$—through minimization of
-```math
-\hat{\mathbf{x}} = \arg\min_{\mathbf{x}} \sum_{i,j} C^\text{(model)}_{ij}(\mathbf{x}) - C_{ij} \ln{C^\text{(model)}_{ij}(\mathbf{x})}.
-```
-
-The covariance matrix of $`\hat{\tilde{\mathbf{x}}}`$ is estimated using the inverse of the Hessian of the negative log likelihood function,
-```math
-\Sigma_{\tilde{\mathbf{x}}} = \bigl[ \nabla^2 \mathcal{L}(\hat{\tilde{\mathbf{x}}}) \bigr]^{-1},
-```
-and then the covariance matrix for the PUI parameters $`\mathbf{x}`$ is given by
+The model $C^\text{(model)}_{ij}(\mathbf{x})$ is evaluated for each measurement time (sweep $i$, step $j$) within the ten-minute chunk.
+The optimal parameters are found by minimizing:
 
 ```math
-\Sigma_{\mathbf{x}} = \text{J} \, \Sigma_{\tilde{\mathbf{x}}} \, \text{J}^\top,
+\hat{\mathbf{x}} = \arg\min_{\mathbf{x}} \sum_j
+\left(
+  \sum_i C^\text{(model)}_{ij}(\mathbf{x}) - \sum_i C_{ij}
+\right)^2,
 ```
-where $J = \partial \mathbf{x}/\partial \tilde{\mathbf{x}}$.
+
+> **Note**: Inverse variance weighting is intentionally unused to avoid giving extra weight to other populations beyond the cutoff.
+> The drawback of this approach is that it does not account for Poisson noise.
+> To mitigate this problem, minimization takes place after averaging across sweeps to minimize the influence of Poisson noise on the fit.
+
+To estimate the uncertainty, the [HC3 method](./parameter-uncertainty.md) is used with a finite-difference approximation to the Jacobian.
 
 ## Failure Cases
 

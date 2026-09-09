@@ -1,6 +1,8 @@
 import numpy as np
 from numpy.typing import NDArray
 
+from imap_l3_processing.swapi.constants import SWAPI_BACKGROUND_RATE
+
 MAX_CUTOFF_SPEED_KMS = 550.0  # v_cutoff <= 550 km/s
 MAX_MEAN_RELATIVE_ERROR = 0.12  # Delta_rel <= 0.12
 MAX_PAST_PEAK_RATIO = 0.4  # R_past_peak <= 0.4
@@ -18,7 +20,6 @@ def is_good_fit(
     cutoff_speed_kms: float,
     sw_speed_kms: float,
     ionization_rate: float,
-    background_rate: float,
 ) -> bool:
     """
     Evaluate whether a PUI fit is a good fit.
@@ -44,8 +45,6 @@ def is_good_fit(
         cutoff speed as a ratio of the bulk speed.
     ionization_rate : scalar float
         The model ionization rate at 1 AU in s^-1.
-    background_rate: scalar float
-        The model background rate.
     """
     if esa_energies.ndim != 1:
         raise ValueError(esa_energies.shape)
@@ -68,8 +67,8 @@ def is_good_fit(
     in_range = ~past_range
 
     mean_absolute_percent_error = (
-        np.abs(chunk_mean_model_rates + background_rate - chunk_mean_observed_rates)
-        / (chunk_mean_model_rates + background_rate)
+        np.abs(chunk_mean_model_rates + SWAPI_BACKGROUND_RATE - chunk_mean_observed_rates)
+        / (chunk_mean_model_rates + SWAPI_BACKGROUND_RATE)
     )[in_range].mean()
 
     past_cutoff_ratio = (

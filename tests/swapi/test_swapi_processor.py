@@ -169,7 +169,7 @@ class TestSwapiProcessor(TestCase):
         )
         self.assertIs(pui_fitter_kwargs["hydrogen_inflow_vector"], mock_hydrogen_inflow_vector)
         self.assertIs(pui_fitter_kwargs["helium_inflow_vector"], mock_helium_inflow_vector)
-        self.assertIs(pui_fitter_kwargs["proton_results"], proton_runner_result)
+        self.assertIs(pui_fitter_kwargs["proton_sw_results"], proton_runner_result)
 
         mock_manager.add_global_attribute.assert_has_calls([call("Data_version", outgoing_version),
                                                             call("Generation_date",

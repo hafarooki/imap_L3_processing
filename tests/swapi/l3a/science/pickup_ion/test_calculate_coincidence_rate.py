@@ -26,10 +26,6 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.collapsed_response_grid imp
 from imap_l3_processing.swapi.l3a.science.pickup_ion.density_of_neutral_helium_lookup_table import (
     DensityOfNeutralHeliumLookupTable,
 )
-from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import (
-    FittingParameters,
-    VasyliunasSiscoeDistribution,
-)
 from imap_l3_processing.swapi.species import Species
 from tests.swapi._helpers import NOMINAL_TEST_EPOCH_TT2000, load_swapi_response
 from tests.test_helpers import get_test_data_path, get_test_instrument_team_data_path
@@ -57,21 +53,7 @@ class CalculateCoincidenceRateAgainstReferenceTest(unittest.TestCase):
         voltage_v = reference.iloc[:, 0].to_numpy()
         reference_rate_hz = reference.iloc[:, 1].to_numpy()
 
-        fitting_params = FittingParameters(
-            ionization_rate=_IONIZATION_RATE_HZ,
-            cutoff_speed=_CUTOFF_SPEED_KMS,
-        )
         lut = DensityOfNeutralHeliumLookupTable.from_file(_DENSITY_LUT_PATH)
-        min_speed_kms = max(
-            1.0, _CUTOFF_SPEED_KMS * lut.get_minimum_distance() / _HELIO_DIST_AU
-        )
-        vasyliunas_siscoe_distribution = VasyliunasSiscoeDistribution(
-            ephemeris_time=0.0,
-            solar_wind_speed_inertial_frame=_SW_SPEED_INERTIAL_KMS,
-            density_of_neutral_helium_lookup_table=lut,
-            distance_km=_HELIO_DIST_AU * ONE_AU_IN_KM,
-            psi=_INFLOW_PSI_DEG,
-        )
 
         # Single (sweep, step) bulk-SW vector in IMAP_SWAPI. SWAPI v̂ convention:
         # (−cos θ sin φ, −cos θ cos φ, −sin θ).
@@ -99,7 +81,13 @@ class CalculateCoincidenceRateAgainstReferenceTest(unittest.TestCase):
         )
 
         production_rate_hz = calculate_coincidence_rate(
-            chunk_response, vasyliunas_siscoe_distribution, fitting_params
+            chunk_response,
+            ionization_rate=_IONIZATION_RATE_HZ,
+            cutoff_speed=_CUTOFF_SPEED_KMS,
+            distance=_HELIO_DIST_AU * ONE_AU_IN_KM,
+            inflow_angle=_INFLOW_PSI_DEG,
+            solar_wind_speed_inertial_frame=_SW_SPEED_INERTIAL_KMS,
+            density_of_neutral_helium_lookup_table=lut,
         )[0]
 
         # rtol covers the deep-falloff collapse difference (production reads a

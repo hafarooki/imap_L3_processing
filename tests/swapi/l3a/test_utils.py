@@ -21,7 +21,7 @@ from imap_l3_processing.swapi.constants import (
     SWAPI_K_FACTOR,
     SWAPI_LIVETIME_CENTER_OFFSET_S,
     SWAPI_LIVETIME_S,
-    SWAPI_SCIENCE_BINS,
+    SWAPI_SWEEP_BIN_COUNT,
 )
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
 from imap_l3_processing.swapi.l3a.utils import (
@@ -33,6 +33,7 @@ from imap_l3_processing.swapi.l3a.utils import (
     get_spacecraft_velocity_rtn,
     get_swapi_geometry,
     measurement_times,
+    pickup_ion_chunk_epoch,
     read_l2_swapi_data,
     read_mag_rtn_data,
     velocity_to_angles_in_instrument_frame,
@@ -112,21 +113,20 @@ class TestMeasurementTimes(TestCase):
     """Tests for `measurement_times`, which timestamps each ESA step at the center of its livetime."""
 
     def test_each_bin_is_offset_from_its_sweep_start_by_the_livetime_center(self):
-        """Each science bin's timestamp is its sweep start plus the bin index times the bin period plus the fixed livetime-center offset, flattened sweep-major."""
+        """Every bin of the sweep is timestamped, one row per sweep, at its sweep start plus the bin index times the bin period plus the fixed livetime-center offset."""
         sweep_period_ns = 12 * ONE_SECOND_IN_NANOSECONDS
         sci_start_time = np.array([1_000, 1_000 + sweep_period_ns], dtype=np.int64)
-        data = SwapiL2Data(sci_start_time, None, None, None)
 
-        times = measurement_times(data, SWAPI_SCIENCE_BINS)
+        times = measurement_times(sci_start_time)
 
         def expected(sweep_start, bin_index):
             seconds_into_sweep = bin_index * SWAPI_BIN_PERIOD_S + SWAPI_LIVETIME_CENTER_OFFSET_S
             return sweep_start + seconds_into_sweep * ONE_SECOND_IN_NANOSECONDS
 
-        self.assertEqual(times.shape, (2 * 71,))
-        np.testing.assert_allclose(times[0], expected(1_000, 1))
-        np.testing.assert_allclose(times[70], expected(1_000, 71))
-        np.testing.assert_allclose(times[71], expected(1_000 + sweep_period_ns, 1))
+        self.assertEqual(times.shape, (2, SWAPI_SWEEP_BIN_COUNT))
+        np.testing.assert_allclose(times[0, 0], expected(1_000, 0))
+        np.testing.assert_allclose(times[0, 71], expected(1_000, 71))
+        np.testing.assert_allclose(times[1, 0], expected(1_000 + sweep_period_ns, 0))
 
     def test_offset_is_the_livetime_center_not_its_start(self):
         """The per-bin offset lands half a livetime past the end of the ramp-up, i.e. at the center of the livetime window rather than its start."""
@@ -432,4 +432,50 @@ class TestEsaVoltageToAlphaSpeed(TestCase):
         """A negative ESA voltage yields the same alpha speed as its positive counterpart, since the conversion depends on magnitude."""
         np.testing.assert_allclose(
             esa_voltage_to_alpha_speed(-1000.0), esa_voltage_to_alpha_speed(1000.0)
+        )
+
+
+class TestPuiChunkEpoch(TestCase):
+    def test_ten_minute_chunk_is_centered_five_minutes_in(self):
+        """A PUI chunk's fifty 12 s sweeps span ten minutes from the first sweep
+        start, so its center is 5 minutes in — matching the +/- 5 minute
+        `epoch_delta` the chunk is reported with."""
+        first_start = 800_000_000_000_000_000
+        sweep_starts = (
+            first_start
+            + np.arange(50, dtype=np.int64) * int(12 * ONE_SECOND_IN_NANOSECONDS)
+        )
+        empty_sweeps = np.zeros((50, SWAPI_SWEEP_BIN_COUNT))
+        chunk = SwapiL2Data(
+            sci_start_time=sweep_starts,
+            energy=empty_sweeps,
+            coincidence_count_rate=empty_sweeps,
+            coincidence_count_rate_uncertainty=empty_sweeps,
+        )
+
+        self.assertEqual(
+            pickup_ion_chunk_epoch(chunk), first_start + 5 * 60 * ONE_SECOND_IN_NANOSECONDS
+        )
+
+    def test_center_is_half_a_sweep_past_the_midpoint_of_the_sweep_starts(self):
+        """The chunk runs one whole sweep past its last sweep start, so its
+        center sits half a sweep beyond the midpoint of the start times — the
+        half sweep that separates a sweep's start from its own center."""
+        first_start = 800_000_000_000_000_000
+        sweep_starts = (
+            first_start
+            + np.arange(50, dtype=np.int64) * int(12 * ONE_SECOND_IN_NANOSECONDS)
+        )
+        empty_sweeps = np.zeros((50, SWAPI_SWEEP_BIN_COUNT))
+        chunk = SwapiL2Data(
+            sci_start_time=sweep_starts,
+            energy=empty_sweeps,
+            coincidence_count_rate=empty_sweeps,
+            coincidence_count_rate_uncertainty=empty_sweeps,
+        )
+        midpoint_of_starts = int((sweep_starts[0] + sweep_starts[-1]) // 2)
+
+        self.assertEqual(
+            pickup_ion_chunk_epoch(chunk) - midpoint_of_starts,
+            6 * ONE_SECOND_IN_NANOSECONDS,
         )

@@ -128,7 +128,7 @@ class SwapiProcessor(Processor):
             density_of_neutral_helium_lookup_table=dependencies.density_of_neutral_helium_calibration_table,
             hydrogen_inflow_vector=dependencies.hydrogen_inflow_vector,
             helium_inflow_vector=dependencies.helium_inflow_vector,
-            proton_results=proton_results,
+            proton_sw_results=proton_results,
         )
         result = runner.run(pui_chunks, fitter)
 

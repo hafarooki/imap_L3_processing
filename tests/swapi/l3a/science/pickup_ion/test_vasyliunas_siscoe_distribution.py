@@ -10,16 +10,13 @@ from imap_l3_processing.swapi.constants import SWAPI_PUI_COOLING_INDEX
 from imap_l3_processing.swapi.l3a.science.pickup_ion.density_of_neutral_helium_lookup_table import (
     DensityOfNeutralHeliumLookupTable,
 )
-from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import (
-    FittingParameters,
-    VasyliunasSiscoeDistribution,
-)
+from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import vasyliunas_siscoe_vdf
 from tests.test_helpers import NumpyArrayMatcher
 
 _VASYLIUNAS_SISCOE_MODULE = "imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution"
 
 
-class VasyliunasSiscoeDistributionFTest(unittest.TestCase):
+class VasyliunasSiscoeVdfTest(unittest.TestCase):
     def setUp(self) -> None:
         density_lut_path = (
             Path(imap_l3_processing.__file__).parent.parent
@@ -36,25 +33,27 @@ class VasyliunasSiscoeDistributionFTest(unittest.TestCase):
     def test_evaluates_filled_shell_vdf_with_heaviside_cutoff(self, mock_density):
         mock_density.return_value = 1
 
-        fitting_parameters = FittingParameters(
+        fitting_parameters = dict(
             ionization_rate=0.47,
             cutoff_speed=500,
         )
-        ephemeris_time = 1_234_567.1
         solar_wind_speed_inertial_frame = 456
         distance_km = 0.99 * ONE_AU_IN_KM
         psi = 13
 
-        vasyliunas_siscoe_distribution = VasyliunasSiscoeDistribution(
-            ephemeris_time,
-            solar_wind_speed_inertial_frame,
-            self.density_of_neutral_helium_lookup_table,
-            distance_km,
-            psi,
+        dependencies = dict(
+            solar_wind_speed_inertial_frame=solar_wind_speed_inertial_frame,
+            density_of_neutral_helium_lookup_table=self.density_of_neutral_helium_lookup_table,
+            distance=distance_km,
+            inflow_angle=psi,
         )
         speed_grid = np.array([485.45, 200, 585.45, 755.45])
 
-        result = vasyliunas_siscoe_distribution.f(speed_grid, fitting_parameters)
+        result = vasyliunas_siscoe_vdf(
+            speed_in_sw_frame=speed_grid,
+            **(fitting_parameters | dependencies),
+            apply_cutoff=True
+        )
 
         expected_term_1 = SWAPI_PUI_COOLING_INDEX / (4 * np.pi)
         expected_term_2 = (0.47 * ONE_AU_IN_KM**2) / (
@@ -90,24 +89,31 @@ class VasyliunasSiscoeDistributionFTest(unittest.TestCase):
         grid-corrected partial cell instead of a hard grid step."""
         mock_density.return_value = 1
 
-        fitting_parameters = FittingParameters(
+        fitting_parameters = dict(
             ionization_rate=0.47,
             cutoff_speed=500,
         )
+        solar_wind_speed_inertial_frame = 456
         distance_km = 0.99 * ONE_AU_IN_KM
-        vasyliunas_siscoe_distribution = VasyliunasSiscoeDistribution(
-            1_234_567.1, 456, self.density_of_neutral_helium_lookup_table, distance_km, 13
+
+        dependencies = dict(
+            solar_wind_speed_inertial_frame=solar_wind_speed_inertial_frame,
+            density_of_neutral_helium_lookup_table=self.density_of_neutral_helium_lookup_table,
+            distance=distance_km,
+            inflow_angle=13,
         )
         speed_grid = np.array([485.45, 200, 585.45, 755.45])
 
-        result = vasyliunas_siscoe_distribution.f(
-            speed_grid, fitting_parameters, apply_cutoff=False
+        result = vasyliunas_siscoe_vdf(
+            speed_in_sw_frame=speed_grid,
+            **(fitting_parameters | dependencies),
+            apply_cutoff=False
         )
 
         expected = (
             SWAPI_PUI_COOLING_INDEX / (4 * np.pi)
             * (0.47 * ONE_AU_IN_KM**2)
-            / (distance_km * 456 * 500**3)
+            / (distance_km * solar_wind_speed_inertial_frame * 500**3)
             * (speed_grid / 500) ** (SWAPI_PUI_COOLING_INDEX - 3)
             * 1e15
         )
