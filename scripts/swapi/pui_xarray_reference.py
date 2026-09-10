@@ -70,6 +70,7 @@ import pint
 import pint_xarray  # noqa: F401
 import xarray as xr
 
+from imap_l3_processing.constants import HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 from tests.test_helpers import get_test_instrument_team_data_path, get_test_data_path
 
 OUTPUT_PATH = get_test_data_path("swapi/pui_count_rate_reference.csv")
@@ -81,7 +82,7 @@ Q = ureg.Quantity
 
 K_FACTOR = Q(1.89, "eV/V/e")  # E_beam = K · |V|; eV carries the elementary charge
 ONE_AU = Q(1.0, "au")
-HE_PLUS_MASS_PER_CHARGE = Q(4.0, "m_p/e")  # He+ nucleus, q = +1 e
+HE_PLUS_MASS_PER_CHARGE = Q(HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E, "m_p/e")  # He+ nucleus, q = +1 e
 HELIUM_EFFICIENCY_RATIO = 1.05
 
 """## Load response files"""

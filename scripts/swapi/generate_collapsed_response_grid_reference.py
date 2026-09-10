@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from imap_l3_processing.constants import (
     CENTIMETERS_PER_METER,
+    HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E,
     METERS_PER_KILOMETER,
 )
 from imap_l3_processing.swapi.l3a.science.pickup_ion.collapsed_response_grid import (
@@ -42,7 +43,7 @@ _OUTPUT_PATH = (
 
 _N_POINTS = 256
 _ESA_VOLTAGE = 5000.0
-_MASS_PER_CHARGE = 4.0
+_MASS_PER_CHARGE = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 _BULK_SPEED = 450.0
 _BULK_AZIMUTH_DEG = 5.0
 _BULK_ELEVATION_DEG = -10.0

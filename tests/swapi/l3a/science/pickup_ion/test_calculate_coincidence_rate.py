@@ -16,7 +16,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from imap_l3_processing.constants import ONE_AU_IN_KM
+from imap_l3_processing.constants import HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E, ONE_AU_IN_KM
 from imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_coincidence_rate import (
     calculate_coincidence_rate,
 )
@@ -50,7 +50,7 @@ _BACKGROUND_RATE_HZ = 0.0
 _HELIO_DIST_AU = 1.0
 _SW_SPEED_INERTIAL_KMS = 450.0
 _INFLOW_PSI_DEG = 75.0
-_HELIUM_MASS_PER_CHARGE_M_P_PER_E = 4.0
+_HELIUM_MASS_PER_CHARGE_M_P_PER_E = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 _HELIUM_EFFICIENCY_RATIO = 1.05
 
 
