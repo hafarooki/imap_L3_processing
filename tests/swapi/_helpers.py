@@ -1,6 +1,5 @@
 from datetime import datetime
-from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
 import numpy as np
 from spacepy import pycdf
@@ -36,21 +35,13 @@ SWAPI_EFFICIENCY_TABLE_PATH = get_test_data_path(
 
 def load_swapi_response(
     warm_cache_voltages: Optional[np.ndarray] = None,
-    efficiency_table_path: Optional[Union[str, Path]] = None,
 ) -> SwapiResponse:
-    """Build a `SwapiResponse` from the CSV files..
-
-    `efficiency_table_path` overrides the shipped test efficiency table, for
-    callers that need the per-species relative efficiencies to match a
-    synthetic fixture; `get_response_grid` applies them to the effective area.
-    """
+    """Build a `SwapiResponse` from the CSV files."""
     response = SwapiResponse.from_files(
         azimuthal_transmission_path=SWAPI_AZIMUTHAL_TRANSMISSION_PATH,
         central_effective_area_path=SWAPI_CENTRAL_EFFECTIVE_AREA_PATH,
         passband_fit_coefficients_path=SWAPI_PASSBAND_FIT_COEFFICIENTS_PATH,
-        efficiency_table_path=efficiency_table_path
-        if efficiency_table_path is not None
-        else SWAPI_EFFICIENCY_TABLE_PATH,
+        efficiency_table_path=SWAPI_EFFICIENCY_TABLE_PATH,
     )
     if warm_cache_voltages is not None:
         response.warm_cache(warm_cache_voltages)
