@@ -23,9 +23,7 @@ def calculate_coincidence_rate(
     )
     apply_partial_heaviside_at_cutoff(f_pui, speed_in_sw_frame, fitting_params.cutoff_speed)
 
-    rates = np.tensordot(bin_weights, f_pui, axes=([2], [0]))
-    rates += fitting_params.background_count_rate
-    return rates
+    return np.tensordot(bin_weights, f_pui, axes=([2], [0]))
 
 
 def apply_partial_heaviside_at_cutoff(

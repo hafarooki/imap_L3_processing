@@ -22,3 +22,9 @@ SWAPI_BIN_PERIOD_S = 12 / 72  # duration of one ESA step in the 12 s, 72-bin swe
 # Counts accumulate over the 0.145 s livetime that starts after the voltage ramp-up;
 # sample geometry at the center of that window rather than the bin's start time.
 SWAPI_LIVETIME_CENTER_OFFSET_S = (SWAPI_BIN_PERIOD_S - SWAPI_LIVETIME_S) + SWAPI_LIVETIME_S / 2
+
+# baseline instrument background is approximately 0.1 Hz
+SWAPI_BACKGROUND_RATE = 0.1
+
+# assumes adiabatic cooling
+SWAPI_PUI_COOLING_INDEX = 1.5

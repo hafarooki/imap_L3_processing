@@ -101,10 +101,8 @@ class MonteCarloFitPickupIonTest(unittest.TestCase):
             sci_start_time = h5["sci_start_time_tt2000_ns"][...].astype(np.int64)
             sw_velocity_rtn = np.array(h5.attrs["bulk_sw_rtn_kms"], dtype=float)
 
-            cooling_index_truth = float(h5.attrs["cooling_index"])
             cutoff_speed_truth_kms = float(h5.attrs["cutoff_speed_kms"])
             ionization_rate_truth_hz = float(h5.attrs["ionization_rate_hz"])
-            background_rate_truth_hz = float(h5.attrs["background_rate_hz"])
             helium_efficiency_ratio = float(h5.attrs["helium_efficiency_ratio"])
 
         n_sweeps = expected_rate_ascending.shape[0]
@@ -191,40 +189,30 @@ class MonteCarloFitPickupIonTest(unittest.TestCase):
 
         result = runner.run(chunks, fitter)
 
-        cooling_index = result["cooling_index"]
         ionization_rate = result["ionization_rate"]
         cutoff_speed = result["cutoff_speed"]
-        background_rate = result["background_rate"]
 
         nominal = np.array(
             [
-                [u.nominal_value for u in cooling_index],
                 [u.nominal_value for u in ionization_rate],
                 [u.nominal_value for u in cutoff_speed],
-                [u.nominal_value for u in background_rate],
             ]
-        ).T  # (n_samples, 4)
+        ).T  # (n_samples, 2)
         sigma = np.array(
             [
-                [u.std_dev for u in cooling_index],
                 [u.std_dev for u in ionization_rate],
                 [u.std_dev for u in cutoff_speed],
-                [u.std_dev for u in background_rate],
             ]
         ).T
 
         param_names = (
-            "cooling_index",
             "ionization_rate",
             "cutoff_speed",
-            "background_count_rate",
         )
         truth = np.array(
             [
-                cooling_index_truth,
                 ionization_rate_truth_hz,
                 cutoff_speed_truth_kms,
-                background_rate_truth_hz,
             ]
         )
 

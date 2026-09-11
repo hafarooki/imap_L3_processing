@@ -17,7 +17,10 @@ from imap_l3_processing.constants import (
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
 )
-from imap_l3_processing.swapi.constants import SWAPI_L2_K_FACTOR
+from imap_l3_processing.swapi.constants import (
+    SWAPI_BACKGROUND_RATE,
+    SWAPI_L2_K_FACTOR,
+)
 from imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_coincidence_rate import (
     calculate_coincidence_rate,
 )
@@ -142,7 +145,6 @@ def _fit_pickup_ion_parameters(
     residual constructs a `FittingParameters` from each iteration's lmfit values.
     """
     params = Parameters()
-    params.add("cooling_index", value=1.5, min=1.0, max=5.0)
     params.add("ionization_rate", value=1e-7, min=0.6e-9, max=8.0e-7)
     params.add(
         "cutoff_speed",
@@ -150,26 +152,21 @@ def _fit_pickup_ion_parameters(
         min=sw_speed_kms * 0.8,
         max=sw_speed_kms * 1.2,
     )
-    params.add("background_count_rate", value=0.1, min=0, max=10.0)
 
     def map_to_internal(value, param):
         return np.arcsin(2 * (value - param.min) / (param.max - param.min) - 1)
 
-    def simplex_vertex(cooling_index, ionization_rate, cutoff_speed, background):
+    def simplex_vertex(ionization_rate, cutoff_speed):
         return [
-            map_to_internal(cooling_index, params["cooling_index"]),
             map_to_internal(ionization_rate, params["ionization_rate"]),
             map_to_internal(cutoff_speed, params["cutoff_speed"]),
-            map_to_internal(background, params["background_count_rate"]),
         ]
 
     initial_simplex = np.array(
         [
-            simplex_vertex(1.5, 1e-7, sw_speed_kms, 0.1),
-            simplex_vertex(5.0, 1e-7, sw_speed_kms, 0.1),
-            simplex_vertex(1.5, 2.1e-7, sw_speed_kms, 0.1),
-            simplex_vertex(1.5, 1e-7, sw_speed_kms * 1.2, 0.1),
-            simplex_vertex(1.5, 1e-7, sw_speed_kms, 0.2),
+            simplex_vertex(1e-7, sw_speed_kms),
+            simplex_vertex(2.1e-7, sw_speed_kms),
+            simplex_vertex(1e-7, sw_speed_kms * 1.2),
         ]
     )
 
@@ -198,13 +195,14 @@ def _fit_pickup_ion_parameters(
         flags |= SwapiL3Flags.BAD_FIT
 
     best_fit_params = FittingParameters(
-        cooling_index=nominal_values["cooling_index"],
         ionization_rate=nominal_values["ionization_rate"],
         cutoff_speed=nominal_values["cutoff_speed"],
-        background_count_rate=nominal_values["background_count_rate"],
     )
-    best_fit_rates = calculate_coincidence_rate(
-        chunk_response, vasyliunas_siscoe_distribution, best_fit_params
+    best_fit_rates = (
+        calculate_coincidence_rate(
+            chunk_response, vasyliunas_siscoe_distribution, best_fit_params
+        )
+        + SWAPI_BACKGROUND_RATE
     )
     
     # R^2 on the sweep-averaged spectrum.
@@ -226,22 +224,16 @@ def _fit_pickup_ion_parameters(
 
     if flags & SwapiL3Flags.BAD_FIT:
         nan_param = ufloat(np.nan, np.nan)
-        return FittingParameters(
-            nan_param, nan_param, nan_param, nan_param, flags,
-        )
+        return FittingParameters(nan_param, nan_param, flags)
 
     param_vals = {
         name: ufloat(nominal_values[name], std_err)
         for name, std_err in zip(result.var_names, standard_errors)
     }
 
-    _set_background_to_fill_if_too_high(param_vals)
-
     return FittingParameters(
-        param_vals["cooling_index"],
         param_vals["ionization_rate"],
         param_vals["cutoff_speed"],
-        param_vals["background_count_rate"],
         flags,
     )
 
@@ -254,21 +246,17 @@ def _calculate_poisson_negative_log_likelihood(
 ) -> float:
     parvals = params.valuesdict()
     fitting_params = FittingParameters(
-        cooling_index=parvals["cooling_index"],
         ionization_rate=parvals["ionization_rate"],
         cutoff_speed=parvals["cutoff_speed"],
-        background_count_rate=parvals["background_count_rate"],
     )
 
-    modeled_rates = calculate_coincidence_rate(
-        chunk_response, vasyliunas_siscoe_distribution, fitting_params
+    modeled_rates = (
+        calculate_coincidence_rate(
+            chunk_response, vasyliunas_siscoe_distribution, fitting_params
+        )
+        + SWAPI_BACKGROUND_RATE
     )
     modeled_counts = modeled_rates * swapi_l2.SWAPI_LIVETIME
     observed_counts = observed_count_rates * swapi_l2.SWAPI_LIVETIME
     return float(np.sum(modeled_counts - observed_counts * np.log(modeled_counts)))
 
-
-def _set_background_to_fill_if_too_high(param_vals):
-    background = param_vals["background_count_rate"]
-    if background.nominal_value > 1.0:
-        param_vals["background_count_rate"] = ufloat(np.nan, np.nan)

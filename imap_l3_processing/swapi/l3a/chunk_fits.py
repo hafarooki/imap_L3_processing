@@ -343,10 +343,8 @@ class PuiChunkFitter(ChunkFitter):
 
         return dict(
             epoch=epoch,
-            cooling_index=fit_params.cooling_index,
             ionization_rate=fit_params.ionization_rate,
             cutoff_speed=fit_params.cutoff_speed,
-            background_rate=fit_params.background_count_rate,
             density=density,
             temperature=temperature,
             quality_flags=int(quality_flag) | int(fit_params.flags),
@@ -554,10 +552,8 @@ def _pui_fill_result(epoch, proton_sw_quality_flag, reason=None) -> dict:
     nan = ufloat(np.nan, np.nan)
     return dict(
         epoch=epoch,
-        cooling_index=nan,
         ionization_rate=nan,
         cutoff_speed=nan,
-        background_rate=nan,
         density=nan,
         temperature=nan,
         quality_flags=int(proton_sw_quality_flag),

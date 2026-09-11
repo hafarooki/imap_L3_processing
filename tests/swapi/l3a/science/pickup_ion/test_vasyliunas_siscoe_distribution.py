@@ -6,6 +6,7 @@ import numpy as np
 
 import imap_l3_processing
 from imap_l3_processing.constants import ONE_AU_IN_KM
+from imap_l3_processing.swapi.constants import SWAPI_PUI_COOLING_INDEX
 from imap_l3_processing.swapi.l3a.science.pickup_ion.density_of_neutral_helium_lookup_table import (
     DensityOfNeutralHeliumLookupTable,
 )
@@ -36,10 +37,8 @@ class VasyliunasSiscoeDistributionFTest(unittest.TestCase):
         mock_density.return_value = 1
 
         fitting_parameters = FittingParameters(
-            cooling_index=0.1,
             ionization_rate=0.47,
             cutoff_speed=500,
-            background_count_rate=23,
         )
         ephemeris_time = 1_234_567.1
         solar_wind_speed_inertial_frame = 456
@@ -57,11 +56,11 @@ class VasyliunasSiscoeDistributionFTest(unittest.TestCase):
 
         result = vasyliunas_siscoe_distribution.f(speed_grid, fitting_parameters)
 
-        expected_term_1 = 0.1 / (4 * np.pi)
+        expected_term_1 = SWAPI_PUI_COOLING_INDEX / (4 * np.pi)
         expected_term_2 = (0.47 * ONE_AU_IN_KM**2) / (
             distance_km * solar_wind_speed_inertial_frame * 500**3
         )
-        expected_term_3 = (speed_grid / 500) ** (0.1 - 3)
+        expected_term_3 = (speed_grid / 500) ** (SWAPI_PUI_COOLING_INDEX - 3)
         expected_term_4 = 1 * 1e15  # cm^-3 → km^-3
         expected_term_5 = np.array([1, 1, 0, 0])
 
@@ -77,7 +76,7 @@ class VasyliunasSiscoeDistributionFTest(unittest.TestCase):
         mock_density.assert_called_with(
             psi,
             NumpyArrayMatcher(
-                distance_km / ONE_AU_IN_KM * (speed_grid / 500) ** 0.1,
+                distance_km / ONE_AU_IN_KM * (speed_grid / 500) ** SWAPI_PUI_COOLING_INDEX,
             ),
         )
 
@@ -92,10 +91,8 @@ class VasyliunasSiscoeDistributionFTest(unittest.TestCase):
         mock_density.return_value = 1
 
         fitting_parameters = FittingParameters(
-            cooling_index=0.1,
             ionization_rate=0.47,
             cutoff_speed=500,
-            background_count_rate=23,
         )
         distance_km = 0.99 * ONE_AU_IN_KM
         vasyliunas_siscoe_distribution = VasyliunasSiscoeDistribution(
@@ -108,10 +105,10 @@ class VasyliunasSiscoeDistributionFTest(unittest.TestCase):
         )
 
         expected = (
-            0.1 / (4 * np.pi)
+            SWAPI_PUI_COOLING_INDEX / (4 * np.pi)
             * (0.47 * ONE_AU_IN_KM**2)
             / (distance_km * 456 * 500**3)
-            * (speed_grid / 500) ** (0.1 - 3)
+            * (speed_grid / 500) ** (SWAPI_PUI_COOLING_INDEX - 3)
             * 1e15
         )
         np.testing.assert_allclose(result, expected, rtol=1e-12)

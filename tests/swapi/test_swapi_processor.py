@@ -88,10 +88,8 @@ class TestSwapiProcessor(TestCase):
 
         pui_runner_result = dict(
             epoch=np.array([initial_epoch + FIVE_MINUTES_IN_NANOSECONDS]),
-            cooling_index=np.array([1]),
             ionization_rate=np.array([2]),
             cutoff_speed=np.array([3]),
-            background_rate=np.array([4]),
             density=np.array([5]),
             temperature=np.array([6]),
             quality_flags=np.array([SwapiL3Flags.NONE]),
