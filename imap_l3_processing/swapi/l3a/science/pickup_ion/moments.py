@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 import uncertainties
-from numpy.typing import NDArray
 from uncertainties import UFloat
 
 from imap_l3_processing.constants import (
@@ -11,11 +10,11 @@ from imap_l3_processing.constants import (
     HE_PUI_PARTICLE_MASS_KG,
     METERS_PER_KILOMETER,
 )
-from imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_coincidence_rate import (
-    apply_partial_heaviside_at_cutoff,
-)
 from imap_l3_processing.swapi.l3a.science.pickup_ion.density_of_neutral_helium_lookup_table import (
     DensityOfNeutralHeliumLookupTable,
+)
+from imap_l3_processing.swapi.l3a.science.pickup_ion.uniform_speed_grid import (
+    UniformSpeedGrid,
 )
 from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import (
     vasyliunas_siscoe_vdf,
@@ -23,7 +22,7 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribut
 
 
 def calculate_helium_pui_density(
-    speed_in_sw_frame: NDArray,
+    speed_grid: UniformSpeedGrid,
     *,
     ionization_rate: UFloat,
     cutoff_speed: UFloat,
@@ -37,12 +36,12 @@ def calculate_helium_pui_density(
 
     Uncertainty on the fit parameters is propagated through the integral.
     """
-    integration_weights = _moment_integration_weights(speed_in_sw_frame)
+    integration_weights = speed_grid.spherical_shell_integration_weights
 
     @uncertainties.wrap
     def calculate(ionization_rate, cutoff_speed):
-        f_pui = _evaluate_vdf_with_cutoff(
-            speed_in_sw_frame,
+        f_pui = vasyliunas_siscoe_vdf(
+            speed_grid,
             ionization_rate=ionization_rate,
             cutoff_speed=cutoff_speed,
             distance=distance,
@@ -59,7 +58,7 @@ def calculate_helium_pui_density(
 
 
 def calculate_helium_pui_temperature(
-    speed_in_sw_frame: NDArray,
+    speed_grid: UniformSpeedGrid,
     *,
     ionization_rate: UFloat,
     cutoff_speed: UFloat,
@@ -73,12 +72,12 @@ def calculate_helium_pui_temperature(
 
     Uncertainty on the fit parameters is propagated through the moments.
     """
-    integration_weights = _moment_integration_weights(speed_in_sw_frame)
+    integration_weights = speed_grid.spherical_shell_integration_weights
 
     @uncertainties.wrap
     def calculate(ionization_rate, cutoff_speed):
-        f_pui = _evaluate_vdf_with_cutoff(
-            speed_in_sw_frame,
+        f_pui = vasyliunas_siscoe_vdf(
+            speed_grid,
             ionization_rate=ionization_rate,
             cutoff_speed=cutoff_speed,
             distance=distance,
@@ -88,7 +87,7 @@ def calculate_helium_pui_temperature(
         )
         weighted = integration_weights * f_pui
         denominator = float(np.sum(weighted))
-        numerator = float(np.sum(speed_in_sw_frame * speed_in_sw_frame * weighted))
+        numerator = float(np.sum(speed_grid.centers**2 * weighted))
         return (
             HE_PUI_PARTICLE_MASS_KG
             / (3 * BOLTZMANN_CONSTANT_JOULES_PER_KELVIN)
@@ -98,24 +97,3 @@ def calculate_helium_pui_temperature(
         )
 
     return calculate(ionization_rate, cutoff_speed)
-
-
-def _evaluate_vdf_with_cutoff(
-    speed_in_sw_frame: NDArray, *, cutoff_speed: float, **vdf_kwargs
-) -> NDArray:
-    f_pui = np.asarray(
-        vasyliunas_siscoe_vdf(
-            speed_in_sw_frame,
-            cutoff_speed=cutoff_speed,
-            apply_cutoff=False,
-            **vdf_kwargs,
-        ),
-        dtype=float,
-    ).copy()
-    apply_partial_heaviside_at_cutoff(f_pui, speed_in_sw_frame, cutoff_speed)
-    return f_pui
-
-
-def _moment_integration_weights(speed_in_sw_frame: NDArray) -> NDArray:
-    delta_v_prime = speed_in_sw_frame[1] - speed_in_sw_frame[0]
-    return speed_in_sw_frame**2 * delta_v_prime

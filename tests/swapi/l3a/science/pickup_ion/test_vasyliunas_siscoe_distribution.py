@@ -10,10 +10,21 @@ from imap_l3_processing.swapi.constants import SWAPI_PUI_COOLING_INDEX
 from imap_l3_processing.swapi.l3a.science.pickup_ion.density_of_neutral_helium_lookup_table import (
     DensityOfNeutralHeliumLookupTable,
 )
-from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import vasyliunas_siscoe_vdf
+from imap_l3_processing.swapi.l3a.science.pickup_ion.uniform_speed_grid import (
+    UniformSpeedGrid,
+)
+from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import \
+    vasyliunas_siscoe_vdf
 from tests.test_helpers import NumpyArrayMatcher
 
 _VASYLIUNAS_SISCOE_MODULE = "imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution"
+
+_IONIZATION_RATE_HZ = 0.47
+_SOLAR_WIND_SPEED_INERTIAL_KMS = 456.0
+_DISTANCE_KM = 0.99 * ONE_AU_IN_KM
+_INFLOW_ANGLE_DEG = 13.0
+
+_SPEED_GRID = UniformSpeedGrid(600.0)
 
 
 class VasyliunasSiscoeVdfTest(unittest.TestCase):
@@ -29,96 +40,91 @@ class VasyliunasSiscoeVdfTest(unittest.TestCase):
             DensityOfNeutralHeliumLookupTable.from_file(density_lut_path)
         )
 
-    @patch(f"{_VASYLIUNAS_SISCOE_MODULE}.DensityOfNeutralHeliumLookupTable.density")
-    def test_evaluates_filled_shell_vdf_with_heaviside_cutoff(self, mock_density):
-        mock_density.return_value = 1
-
-        fitting_parameters = dict(
-            ionization_rate=0.47,
-            cutoff_speed=500,
-        )
-        solar_wind_speed_inertial_frame = 456
-        distance_km = 0.99 * ONE_AU_IN_KM
-        psi = 13
-
-        dependencies = dict(
-            solar_wind_speed_inertial_frame=solar_wind_speed_inertial_frame,
+    def _evaluate(self, cutoff_speed: float) -> np.ndarray:
+        return vasyliunas_siscoe_vdf(
+            _SPEED_GRID,
+            ionization_rate=_IONIZATION_RATE_HZ,
+            cutoff_speed=cutoff_speed,
+            distance=_DISTANCE_KM,
+            inflow_angle=_INFLOW_ANGLE_DEG,
+            solar_wind_speed_inertial_frame=_SOLAR_WIND_SPEED_INERTIAL_KMS,
             density_of_neutral_helium_lookup_table=self.density_of_neutral_helium_lookup_table,
-            distance=distance_km,
-            inflow_angle=psi,
-        )
-        speed_grid = np.array([485.45, 200, 585.45, 755.45])
-
-        result = vasyliunas_siscoe_vdf(
-            speed_in_sw_frame=speed_grid,
-            **(fitting_parameters | dependencies),
-            apply_cutoff=True
         )
 
-        expected_term_1 = SWAPI_PUI_COOLING_INDEX / (4 * np.pi)
-        expected_term_2 = (0.47 * ONE_AU_IN_KM**2) / (
-            distance_km * solar_wind_speed_inertial_frame * 500**3
+    @staticmethod
+    def _expected_uncut_filled_shell(cutoff_speed: float) -> np.ndarray:
+        # closed form of the filled shell, with the mocked unit neutral
+        # helium density converted from cm^-3 to km^-3.
+        return (
+            SWAPI_PUI_COOLING_INDEX / (4 * np.pi)
+            * (_IONIZATION_RATE_HZ * ONE_AU_IN_KM**2)
+            / (_DISTANCE_KM * _SOLAR_WIND_SPEED_INERTIAL_KMS * cutoff_speed**3)
+            * (_SPEED_GRID.centers / cutoff_speed) ** (SWAPI_PUI_COOLING_INDEX - 3)
+            * 1e15
         )
-        expected_term_3 = (speed_grid / 500) ** (SWAPI_PUI_COOLING_INDEX - 3)
-        expected_term_4 = 1 * 1e15  # cm^-3 → km^-3
-        expected_term_5 = np.array([1, 1, 0, 0])
 
-        expected = (
-            expected_term_1
-            * expected_term_2
-            * expected_term_3
-            * expected_term_4
-            * expected_term_5
+    @patch(f"{_VASYLIUNAS_SISCOE_MODULE}.DensityOfNeutralHeliumLookupTable.density")
+    def test_scales_the_cutoff_cell_by_the_fraction_below_it_and_zeros_the_cells_above(
+        self, mock_density
+    ):
+        mock_density.return_value = 1
+        cutoff_index = 300
+        fraction_below_cutoff = 0.3
+        cutoff_speed = float(
+            _SPEED_GRID.centers[cutoff_index]
+            + (fraction_below_cutoff - 0.5) * _SPEED_GRID.spacing
         )
-        np.testing.assert_array_equal(result, expected)
+
+        result = self._evaluate(cutoff_speed)
+
+        expected = self._expected_uncut_filled_shell(cutoff_speed)
+        expected[cutoff_index] *= fraction_below_cutoff
+        expected[cutoff_index + 1:] = 0.0
+        np.testing.assert_allclose(result, expected, rtol=1e-12)
 
         mock_density.assert_called_with(
-            psi,
+            _INFLOW_ANGLE_DEG,
             NumpyArrayMatcher(
-                distance_km / ONE_AU_IN_KM * (speed_grid / 500) ** SWAPI_PUI_COOLING_INDEX,
+                _DISTANCE_KM
+                / ONE_AU_IN_KM
+                * (_SPEED_GRID.centers / cutoff_speed) ** SWAPI_PUI_COOLING_INDEX,
             ),
         )
 
     @patch(f"{_VASYLIUNAS_SISCOE_MODULE}.DensityOfNeutralHeliumLookupTable.density")
-    def test_apply_cutoff_false_omits_heaviside_so_speeds_above_cutoff_stay_nonzero(
+    def test_treats_a_cutoff_on_the_last_node_as_a_half_cell(self, mock_density):
+        mock_density.return_value = 1
+        cutoff_speed = float(_SPEED_GRID.centers[-1])
+
+        result = self._evaluate(cutoff_speed)
+
+        expected = self._expected_uncut_filled_shell(cutoff_speed)
+        expected[-1] *= 0.5
+        np.testing.assert_allclose(result, expected, rtol=1e-12)
+
+    @patch(f"{_VASYLIUNAS_SISCOE_MODULE}.DensityOfNeutralHeliumLookupTable.density")
+    def test_returns_the_uncut_filled_shell_when_the_cutoff_is_above_the_grid(
         self, mock_density
     ):
-        """With apply_cutoff=False the w<1 Heaviside is dropped, so the
-        returned distribution is the full product even for speeds above the
-        cutoff — used by the forward model so the cutoff can be applied as a
-        grid-corrected partial cell instead of a hard grid step."""
         mock_density.return_value = 1
+        cutoff_speed = float(_SPEED_GRID.centers[-1] + _SPEED_GRID.spacing)
 
-        fitting_parameters = dict(
-            ionization_rate=0.47,
-            cutoff_speed=500,
-        )
-        solar_wind_speed_inertial_frame = 456
-        distance_km = 0.99 * ONE_AU_IN_KM
+        result = self._evaluate(cutoff_speed)
 
-        dependencies = dict(
-            solar_wind_speed_inertial_frame=solar_wind_speed_inertial_frame,
-            density_of_neutral_helium_lookup_table=self.density_of_neutral_helium_lookup_table,
-            distance=distance_km,
-            inflow_angle=13,
-        )
-        speed_grid = np.array([485.45, 200, 585.45, 755.45])
-
-        result = vasyliunas_siscoe_vdf(
-            speed_in_sw_frame=speed_grid,
-            **(fitting_parameters | dependencies),
-            apply_cutoff=False
+        np.testing.assert_allclose(
+            result, self._expected_uncut_filled_shell(cutoff_speed), rtol=1e-12
         )
 
-        expected = (
-            SWAPI_PUI_COOLING_INDEX / (4 * np.pi)
-            * (0.47 * ONE_AU_IN_KM**2)
-            / (distance_km * solar_wind_speed_inertial_frame * 500**3)
-            * (speed_grid / 500) ** (SWAPI_PUI_COOLING_INDEX - 3)
-            * 1e15
-        )
-        np.testing.assert_allclose(result, expected, rtol=1e-12)
-        self.assertTrue(np.all(result > 0))
+    @patch(f"{_VASYLIUNAS_SISCOE_MODULE}.DensityOfNeutralHeliumLookupTable.density")
+    def test_returns_zeros_when_the_cutoff_is_below_the_grid(self, mock_density):
+        mock_density.return_value = 1
+        # half way from zero up to the first cell's lower edge, so no
+        # part of any cell lies below the cutoff.
+        cutoff_speed = float(_SPEED_GRID.centers[0] - _SPEED_GRID.spacing / 2) / 2
+
+        result = self._evaluate(cutoff_speed)
+
+        np.testing.assert_array_equal(result, np.zeros(_SPEED_GRID.size))
 
 
 if __name__ == "__main__":

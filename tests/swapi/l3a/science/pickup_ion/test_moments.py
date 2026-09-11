@@ -21,19 +21,21 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.moments import (
     calculate_helium_pui_density,
     calculate_helium_pui_temperature,
 )
+from imap_l3_processing.swapi.l3a.science.pickup_ion.uniform_speed_grid import (
+    UniformSpeedGrid,
+)
 from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import (
-    vasyliunas_siscoe_vdf,
+    _filled_shell_vdf_without_cutoff,
 )
 
-_CHUNK_GRID_POINTS = 256
 _SOLAR_WIND_SPEED_KMS = 500.0
 _DISTANCE_KM = ONE_AU_IN_KM
 _INFLOW_ANGLE_DEG = 75.0
 _IONIZATION_RATE_HZ = 1e-7
 
 
-def _speed_grid() -> np.ndarray:
-    return np.linspace(1, _SOLAR_WIND_SPEED_KMS * 1.2, _CHUNK_GRID_POINTS)
+def _speed_grid() -> UniformSpeedGrid:
+    return UniformSpeedGrid(_SOLAR_WIND_SPEED_KMS * 1.2)
 
 
 def _quad_discontinuity_points(
@@ -91,15 +93,16 @@ def _reference_vdf(
     cutoff_speed: float,
     lut: DensityOfNeutralHeliumLookupTable,
 ) -> float:
-    return vasyliunas_siscoe_vdf(
-        speed_in_sw_frame,
-        ionization_rate=_IONIZATION_RATE_HZ,
-        cutoff_speed=cutoff_speed,
-        distance=_DISTANCE_KM,
-        inflow_angle=_INFLOW_ANGLE_DEG,
-        solar_wind_speed_inertial_frame=_SOLAR_WIND_SPEED_KMS,
-        density_of_neutral_helium_lookup_table=lut,
-        apply_cutoff=True,
+    return float(
+        _filled_shell_vdf_without_cutoff(
+            np.atleast_1d(float(speed_in_sw_frame)),
+            ionization_rate=_IONIZATION_RATE_HZ,
+            cutoff_speed=cutoff_speed,
+            distance=_DISTANCE_KM,
+            inflow_angle=_INFLOW_ANGLE_DEG,
+            solar_wind_speed_inertial_frame=_SOLAR_WIND_SPEED_KMS,
+            density_of_neutral_helium_lookup_table=lut,
+        )[0]
     )
 
 

@@ -135,28 +135,32 @@ def calculate_pickup_ion_values(
     lower_energy_cutoff, upper_energy_cutoff = calculate_pickup_ion_fit_energy_range(
         solar_wind_speed_inertial_frame
     )
+    # fit and goodness-of-fit eval share the same lower cutoff, they differ only in upper cutoff 
+    
+    # full range used for both
+    shared_esa_step_mask = fit_input.esa_energies > lower_energy_cutoff
+    shared_energies = fit_input.esa_energies[shared_esa_step_mask]
+    shared_count_rates = fit_input.coincidence_count_rates[:, shared_esa_step_mask]
+
+
+    # subset used for fitting
+    fitting_esa_step_mask = shared_energies < upper_energy_cutoff
+    fitting_count_rates = shared_count_rates[:, fitting_esa_step_mask]
+
+
     # === prepare forward model ===
 
-    # fit and goodness-of-fit eval share the same lower cutoff, they differ only in upper cutoff 
-    modeled_esa_step_mask = fit_input.esa_energies > lower_energy_cutoff
-    modeled_energies = fit_input.esa_energies[modeled_esa_step_mask]
-    modeled_count_rates = fit_input.coincidence_count_rates[:, modeled_esa_step_mask]
-
-    modeled_response = build_chunk_collapsed_response(
+    shared_response = build_chunk_collapsed_response(
         swapi_response=swapi_response,
-        voltages_v=modeled_energies / SWAPI_L2_K_FACTOR,
-        bulk_sw_per_bin_kms=fit_input.bulk_sw_per_bin_swapi_kms[:, modeled_esa_step_mask, :],
+        voltages_v=shared_energies / SWAPI_L2_K_FACTOR,
+        bulk_sw_per_bin_kms=fit_input.bulk_sw_per_bin_swapi_kms[:, shared_esa_step_mask, :],
         time_as_tt2000=fit_input.time_as_tt2000,
         species=_PICKUP_ION_SPECIES,
         cutoff_speed_max_kms=solar_wind_speed_inertial_frame * MAX_CUTOFF_SPEED_RATIO * 1.1,
     )
-
-    # subset used for fitting
-    fitting_esa_step_mask = modeled_energies < upper_energy_cutoff
-    fitting_count_rates = modeled_count_rates[:, fitting_esa_step_mask]
-    fitting_window_response = ChunkCollapsedResponse(
-        speed_in_sw_frame=modeled_response.speed_in_sw_frame,
-        bin_weights=modeled_response.bin_weights[:, fitting_esa_step_mask],
+    fitting_response = ChunkCollapsedResponse(
+        speed_grid=shared_response.speed_grid,
+        bin_weights=shared_response.bin_weights[:, fitting_esa_step_mask],
     )
 
     model = lambda ionization_rate, cutoff_speed, response: calculate_coincidence_rate(
@@ -167,8 +171,9 @@ def calculate_pickup_ion_values(
         inflow_angle=inflow_angle,
         solar_wind_speed_inertial_frame=solar_wind_speed_inertial_frame,
         density_of_neutral_helium_lookup_table=density_of_neutral_helium_lookup_table,
-    )
-    fitting_window_model = partial(model, response=fitting_window_response)
+    ) 
+    shared_window_model = partial(model, response=shared_response)
+    fitting_window_model = partial(model, response=fitting_response)
 
     # === fit model ===
 
@@ -181,10 +186,9 @@ def calculate_pickup_ion_values(
 
     def residuals(log_parameters: np.ndarray) -> np.ndarray:
         modeled_rates = (
-            model(
+            fitting_window_model(
                 ionization_rate=float(np.exp(log_parameters[_LOG_IONIZATION_RATE_INDEX])),
                 cutoff_speed=float(np.exp(log_parameters[_LOG_CUTOFF_SPEED_INDEX])),
-                response=fitting_window_response,
             )
             + SWAPI_BACKGROUND_RATE
         )
@@ -210,12 +214,12 @@ def calculate_pickup_ion_values(
         not result.success
         or not np.all(np.isfinite(log_parameter_covariance))
         or not is_good_fit(
-            esa_energies=modeled_energies,
-            model_rates=fitting_window_model(
+            esa_energies=shared_energies,
+            model_rates=shared_window_model(
                 ionization_rate=fitted_ionization_rate,
                 cutoff_speed=fitted_cutoff_speed,
             ),
-            observed_rates=modeled_count_rates,
+            observed_rates=shared_count_rates,
             cutoff_speed_kms=fitted_cutoff_speed,
             sw_speed_kms=solar_wind_speed_inertial_frame,
             ionization_rate=fitted_ionization_rate,
@@ -239,7 +243,7 @@ def calculate_pickup_ion_values(
         ionization_rate=ufloat(fitted_ionization_rate, fitted_ionization_rate_error),
         cutoff_speed=ufloat(fitted_cutoff_speed, fitted_cutoff_speed_error),
         density=calculate_helium_pui_density(
-            modeled_response.speed_in_sw_frame,
+            shared_response.speed_grid,
             ionization_rate=ufloat(fitted_ionization_rate, fitted_ionization_rate_error),
             cutoff_speed=ufloat(fitted_cutoff_speed, fitted_cutoff_speed_error),
             distance=distance,
@@ -248,7 +252,7 @@ def calculate_pickup_ion_values(
             density_of_neutral_helium_lookup_table=density_of_neutral_helium_lookup_table,
         ),
         temperature=calculate_helium_pui_temperature(
-            modeled_response.speed_in_sw_frame,
+            shared_response.speed_grid,
             ionization_rate=ufloat(fitted_ionization_rate, fitted_ionization_rate_error),
             cutoff_speed=ufloat(fitted_cutoff_speed, fitted_cutoff_speed_error),
             distance=distance,
