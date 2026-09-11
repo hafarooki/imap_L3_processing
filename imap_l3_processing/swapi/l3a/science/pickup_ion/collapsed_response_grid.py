@@ -30,7 +30,7 @@ class CollapsedResponseGrid(NamedTuple):
 
 _ELEVATION_RESOLUTION = 32
 _SPEED_RATIO_RESOLUTION = 32
-_CHUNK_GRID_POINTS = 256
+_CHUNK_GRID_POINTS = 512
 
 
 def build_chunk_collapsed_response(

@@ -31,6 +31,13 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.collapsed_response_grid imp
 from imap_l3_processing.swapi.l3a.science.pickup_ion.density_of_neutral_helium_lookup_table import (
     DensityOfNeutralHeliumLookupTable,
 )
+from imap_l3_processing.swapi.l3a.science.pickup_ion.goodness_of_fit import (
+    MAX_CUTOFF_SPEED_RATIO,
+    MAX_IONIZATION_RATE,
+    MIN_CUTOFF_SPEED_RATIO,
+    MIN_IONIZATION_RATE,
+    is_good_fit,
+)
 from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import (
     FittingParameters,
     VasyliunasSiscoeDistribution,
@@ -76,31 +83,62 @@ def calculate_pickup_ion_values(
         sw_velocity_kms
     )
 
-    bin_mask = (energies_per_step > lower_energy_cutoff) & (
-        energies_per_step < upper_energy_cutoff
-    )
-    extracted_voltages = voltages_per_step[bin_mask]
-    extracted_count_rates = count_rates[:, bin_mask]
-    extracted_bulk_sw_per_bin_swapi_kms = bulk_sw_per_bin_swapi_kms[:, bin_mask]
+    # fit and goodness-of-fit eval share the same lower cutoff, they differ only in upper cutoff
+    modeled_esa_step_mask = energies_per_step > lower_energy_cutoff
+    modeled_energies = energies_per_step[modeled_esa_step_mask]
+    modeled_count_rates = count_rates[:, modeled_esa_step_mask]
 
-    chunk_response = build_chunk_collapsed_response(
+    # collapsed response over the modeled ESA steps
+    modeled_response = build_chunk_collapsed_response(
         swapi_response=swapi_response,
-        voltages_v=extracted_voltages,
-        bulk_sw_per_bin_kms=extracted_bulk_sw_per_bin_swapi_kms,
+        voltages_v=voltages_per_step[modeled_esa_step_mask],
+        bulk_sw_per_bin_kms=bulk_sw_per_bin_swapi_kms[:, modeled_esa_step_mask, :],
         time_as_tt2000=time_as_tt2000,
         species=_PICKUP_ION_SPECIES,
-        cutoff_speed_max_kms=sw_velocity_kms * 1.2,
+        cutoff_speed_max_kms=sw_velocity_kms * MAX_CUTOFF_SPEED_RATIO,
+    )
+
+    # collapsed response over subset used for fitting
+    fitting_esa_step_mask = modeled_energies < upper_energy_cutoff
+    fit_window_response = ChunkCollapsedResponse(
+        speed_in_sw_frame=modeled_response.speed_in_sw_frame,
+        bin_weights=modeled_response.bin_weights[:, fitting_esa_step_mask],
     )
 
     fitting_params = _fit_pickup_ion_parameters(
-        chunk_response=chunk_response,
+        chunk_response=fit_window_response,
         vasyliunas_siscoe_distribution=vasyliunas_siscoe_distribution,
-        observed_count_rates=extracted_count_rates,
+        observed_count_rates=modeled_count_rates[:, fitting_esa_step_mask],
         sw_speed_kms=sw_velocity_kms,
     )
+
+    if not (int(fitting_params.flags) & int(SwapiL3Flags.BAD_FIT)):
+        nominal_fitting_params = FittingParameters(
+            ionization_rate=fitting_params.ionization_rate.nominal_value,
+            cutoff_speed=fitting_params.cutoff_speed.nominal_value,
+        )
+        modeled_rates = calculate_coincidence_rate(
+            modeled_response, vasyliunas_siscoe_distribution, nominal_fitting_params
+        )
+        if not is_good_fit(
+            esa_energies=modeled_energies,
+            model_rates=modeled_rates,
+            observed_rates=modeled_count_rates,
+            cutoff_speed_kms=nominal_fitting_params.cutoff_speed,
+            sw_speed_kms=sw_velocity_kms,
+            ionization_rate=nominal_fitting_params.ionization_rate,
+            background_rate=SWAPI_BACKGROUND_RATE,
+        ):
+            nan_param = ufloat(np.nan, np.nan)
+            fitting_params = FittingParameters(
+                nan_param,
+                nan_param,
+                fitting_params.flags | SwapiL3Flags.BAD_FIT,
+            )
+
     return PickupIonFitResult(
         fitting_params=fitting_params,
-        chunk_response=chunk_response,
+        chunk_response=fit_window_response,
         vasyliunas_siscoe_distribution=vasyliunas_siscoe_distribution,
     )
 
@@ -145,12 +183,17 @@ def _fit_pickup_ion_parameters(
     residual constructs a `FittingParameters` from each iteration's lmfit values.
     """
     params = Parameters()
-    params.add("ionization_rate", value=1e-7, min=0.6e-9, max=8.0e-7)
+    params.add(
+        "ionization_rate",
+        value=1e-7,
+        min=MIN_IONIZATION_RATE,
+        max=MAX_IONIZATION_RATE,
+    )
     params.add(
         "cutoff_speed",
         value=sw_speed_kms,
-        min=sw_speed_kms * 0.8,
-        max=sw_speed_kms * 1.2,
+        min=sw_speed_kms * MIN_CUTOFF_SPEED_RATIO,
+        max=sw_speed_kms * MAX_CUTOFF_SPEED_RATIO,
     )
 
     def map_to_internal(value, param):
@@ -166,7 +209,7 @@ def _fit_pickup_ion_parameters(
         [
             simplex_vertex(1e-7, sw_speed_kms),
             simplex_vertex(2.1e-7, sw_speed_kms),
-            simplex_vertex(1e-7, sw_speed_kms * 1.2),
+            simplex_vertex(1e-7, sw_speed_kms * MAX_CUTOFF_SPEED_RATIO),
         ]
     )
 
@@ -193,34 +236,6 @@ def _fit_pickup_ion_parameters(
 
     if not np.all(np.isfinite(standard_errors)):
         flags |= SwapiL3Flags.BAD_FIT
-
-    best_fit_params = FittingParameters(
-        ionization_rate=nominal_values["ionization_rate"],
-        cutoff_speed=nominal_values["cutoff_speed"],
-    )
-    best_fit_rates = (
-        calculate_coincidence_rate(
-            chunk_response, vasyliunas_siscoe_distribution, best_fit_params
-        )
-        + SWAPI_BACKGROUND_RATE
-    )
-    
-    # R^2 on the sweep-averaged spectrum.
-    observed_sweep_average = np.nanmean(observed_count_rates, axis=0)
-    best_fit_sweep_average = np.nanmean(best_fit_rates, axis=0)
-    total_sum_of_squares = float(
-        np.nansum((observed_sweep_average - np.nanmean(observed_sweep_average)) ** 2)
-    )
-    
-    if total_sum_of_squares == 0:
-        flags |= SwapiL3Flags.BAD_FIT
-    else:
-        residual_sum_of_squares = float(
-            np.nansum((observed_sweep_average - best_fit_sweep_average) ** 2)
-        )
-        r_squared = 1.0 - residual_sum_of_squares / total_sum_of_squares
-        if r_squared < 0.9:
-            flags |= SwapiL3Flags.BAD_FIT
 
     if flags & SwapiL3Flags.BAD_FIT:
         nan_param = ufloat(np.nan, np.nan)

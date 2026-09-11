@@ -149,15 +149,14 @@ The integration weight tensor $W_{ijk}$
 ```math
 W_{ijk} = \Delta v' \cdot {v'_k}^2 \cdot H(v'_k, V_j; \mathbf{v}_\text{sw,ij}).
 ```
-is precomputed on a uniform grid $v'_k \in [v'_\text{min}, v'_\text{max}]$ with spacing $\Delta v'$, defined by
+is precomputed on a uniform grid $v'_k \in [v'_\text{min}, v'_\text{max}]$ of 512 points with spacing $\Delta v'$, defined by
 ```math
-v'_\text{min} = \max\!\left(1\ \text{km/s},\; 0.8\,v_\text{sw}\,\frac{r_\text{min}}{r}\right),
+v'_\text{max} = 1.5 v_\text{sw},
 ```
 ```math
-v'_\text{max} = 1.2 v_\text{sw},
+v'_\text{min} = 10^{-3} v'_\text{max}.
 ```
-where $r_\text{min}$ is the minimum $r$ in the $n(r, \psi)$ lookup table.
-The boundaries are chosen based on the minimum and maximum cutoff speed in the fitting bounds.
+The upper boundary is the maximum cutoff speed allowed by the fitting bounds, and the lower boundary is a small fraction of it to avoid singularities (${v'}^2$ integration weight suppresses the low-$v'$ contribution, so extending to zero is not necessary).
 
 Using $W_{ijk}$, the model coincidence rate is given by
 ```math
@@ -200,7 +199,7 @@ with bounds defined in the table below.
 | Parameter | $`x_\text{min}`$ | $`x_\text{max}`$ | Initial |
 |---|---|---|---|
 | $\beta_E$ | $0.6 \times 10^{-9}$ s⁻¹ | $8 \times 10^{-7}$ s⁻¹ | $10^{-7}$ s⁻¹ |
-| $v_b$ | $0.8 \, v_\text{sw}$ | $1.2 \, v_\text{sw}$ | $v_\text{sw}$ |
+| $v_b$ | $0.5 \, v_\text{sw}$ | $1.5 \, v_\text{sw}$ | $v_\text{sw}$ |
 
 The Nelder-Mead method is used for optimization, with a heuristic three-vertex simplex specified explicitly.
 
@@ -222,7 +221,40 @@ where $J = \partial \mathbf{x}/\partial \tilde{\mathbf{x}}$.
 
 ## Failure Cases
 
-If the uncertainty estimation fails (suggesting that the solution is not a minimum), or the coefficient of determination $R^2$ is less than 0.9 for the sweep-averaged coincidence rates in the fitting window, then the `BAD_FIT` flag is set and fill values are reported. 
+The fit-quality evaluation uses a model-derived upper energy boundary, $E_{1/4}$.
+This is the highest energy at which the modeled PUI rate, summed over sweeps and excluding background, is at least 25% of its peak:
+```math
+C_{\max}^{\mathrm{(PUI)}} \equiv \max_j \sum_i C^\text{(PUI)}_{ij},
+\qquad
+E_{1/4} \equiv \max \left\{ E_j \;:\; \sum_i C^\text{(PUI)}_{ij} \ge \tfrac{1}{4} C_{\max}^{\mathrm{(PUI)}} \right\},
+```
+where $`C^\text{(PUI)}_{ij} \equiv C^\text{(model)}_{ij} - C_\text{bg}`$ is the modeled PUI rate with the background removed.
+Both maxima include all coarse energy steps above the lower fitting boundary, without the nominal $`16 E_\text{p}`$ upper limit. Thus, $E_{1/4}$ may lie beyond the nominal cutoff.
+
+Instead of requiring the fit to be good beyond the cutoff, it is only required that the fit is accurate up till the cutoff.
+A separate metric requires that although the fit may not be good for points beyond the cutoff, the cutoff must be sufficiently sharp.
+The motivation for this approach is that the isotropic model used is only expected to be accurate up till the cutoff.
+After the cutoff, other populations are often visible, and anisotropy has a greater effect.
+
+For the points between the lower fitting boundary and $E_{1/4}$, the mean relative error $\Delta_\text{rel}$ is defined as:
+```math
+\Delta_\text{rel} \equiv \frac{1}{N_j} \sum_j \frac{\lvert \sum_i C_{ij}^\text{(model)} - \sum_i C_{ij} \rvert}{\sum_i C_{ij}^\text{(model)}},
+```
+where the sum runs over the $N_j$ ESA steps included in the goodness-of-fit range. The model rate is used in the denominator because the observed rate can be zero.
+
+To measure the sharpness of the cutoff, the past-peak ratio $`R_\text{past peak}`$ compares the mean observed rate above $E_{1/4}$ to the peak model rate:
+```math
+R_\text{past peak} \equiv \frac{1}{N_\text{past}} \sum_{j \,:\; E_j > E_{1/4}} \frac{\sum_i C_{ij}}{C_{\max}^{\mathrm{(PUI)}}},
+```
+where the sum runs over the $`N_\text{past}`$ ESA steps above $E_{1/4}$.
+
+If the criteria below are not met, then the `BAD_FIT` flag is set and fill values are reported.
+1. $v_b \le 550 \; \text{km/s}$ (to ensure that cutoff is actually in the instrument's energy range)
+2. $R_\text{past peak} \le 0.4$ (to ensure the cutoff is sufficiently sharp)
+3. $\Delta_\text{rel} \le 0.12$ (to ensure the model matches the shape of the distribution sufficiently well)
+4. $0.5 \, v_\text{sw} \le v_b \le 1.5 \, v_\text{sw}$ (to ensure the cutoff speed is reasonably close to the solar wind speed)
+5. $0.6 \times 10^{-9} \; \text{s}^{-1} \le \beta_E \le 8 \times 10^{-7} \; \text{s}^{-1}$ (to ensure the ionization rate is physically reasonable)
+6. The fit and uncertainty estimation must not fail
 
 ## Numerical Test
 
