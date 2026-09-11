@@ -13,7 +13,7 @@ See the below figure for an example of the data used for the fit together with t
 
 ## Distribution Function
 
-The PUI model is a generalized filled-shell distribution for PUIs at position $(r, \psi)$ in the solar inertial frame ([Rankin et al. 2025](https://doi.org/10.1007/s11214-025-01229-8)):
+The PUI model is a filled-shell distribution for PUIs at position $(r, \psi)$ in the solar inertial frame ([Rankin et al. 2025](https://doi.org/10.1007/s11214-025-01229-8)):
 ```math
 f_\text{PUI}\!\left( r, \psi, w \right)
     = \frac{\alpha_{\text{PUI}}}{4\pi}

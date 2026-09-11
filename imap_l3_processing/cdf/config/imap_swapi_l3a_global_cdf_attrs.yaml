@@ -43,7 +43,7 @@ imap_swapi_l3a_pui-he:
     - *instrument_description
     - >
       The PUI parameters are obtained after obtaining the proton parameters by
-      fitting a generalized filled-shell distribution to the coincidence count
+      fitting a filled-shell distribution to the coincidence count
       rates corresponding to the He+ PUI range using forward modeling, accounting
       for the 3D instrument response and spacecraft spin. The PUI distribution is
       assumed isotropic in the proton solar wind comoving frame.

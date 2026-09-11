@@ -6,7 +6,7 @@ r"""simple_pui_demo.ipynb
 
 ### Distribution Function
 
-The generalized filled-shell distribution model for PUIs for pickup ions at position $(r, \psi)$ in the solar inertial frame is given by
+The filled-shell distribution model for PUIs for pickup ions at position $(r, \psi)$ in the solar inertial frame is given by
 $$
 f_\text{PUI}\!\left( r, \psi, w_k \right)
     = \frac{\alpha_{\text{PUI},k}}{4\pi}
