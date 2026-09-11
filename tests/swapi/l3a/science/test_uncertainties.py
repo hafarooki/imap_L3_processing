@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from uncertainties import covariance_matrix
 
-from imap_l3_processing.swapi.l3a.science.solar_wind.uncertainties import (
+from imap_l3_processing.swapi.l3a.science.uncertainties import (
     compute_hc3_parameter_covariance,
     make_correlated_velocity,
 )

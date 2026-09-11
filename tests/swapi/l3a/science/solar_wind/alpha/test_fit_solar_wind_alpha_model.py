@@ -510,7 +510,7 @@ class TestAlphaSolarWindFitResultAccessors(unittest.TestCase):
         # would require reconstructing the same covariance the alpha
         # pipeline produces; building the UFloat triple directly is enough
         # to exercise the accessors.
-        from imap_l3_processing.swapi.l3a.science.solar_wind.uncertainties import (
+        from imap_l3_processing.swapi.l3a.science.uncertainties import (
             make_correlated_velocity,
         )
 

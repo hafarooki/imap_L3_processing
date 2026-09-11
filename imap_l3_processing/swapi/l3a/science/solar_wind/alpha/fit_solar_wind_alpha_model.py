@@ -25,7 +25,7 @@ from imap_l3_processing.swapi.l3a.science.solar_wind.params import (
 from imap_l3_processing.swapi.l3a.science.solar_wind.proton.fit_solar_wind_proton_model import (
     ProtonSolarWindFitResult,
 )
-from imap_l3_processing.swapi.l3a.science.solar_wind.uncertainties import (
+from imap_l3_processing.swapi.l3a.science.uncertainties import (
     compute_hc3_parameter_covariance,
     make_correlated_velocity,
     r_squared,

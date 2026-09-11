@@ -36,7 +36,7 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.moments import (
     calculate_helium_pui_density,
     calculate_helium_pui_temperature,
 )
-from imap_l3_processing.swapi.l3a.science.solar_wind.uncertainties import (
+from imap_l3_processing.swapi.l3a.science.uncertainties import (
     compute_hc3_parameter_covariance,
 )
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
