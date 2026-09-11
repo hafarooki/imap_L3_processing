@@ -43,10 +43,8 @@ def _density_lookup_table():
 
 def _good_nominal(**overrides):
     base = {
-        "cooling_index": 1.5,
         "ionization_rate": 1e-7,
         "cutoff_speed": 450.0,
-        "background_count_rate": 0.1,
     }
     base.update(overrides)
     return base
@@ -57,7 +55,7 @@ def _run_calculate_with_mocked_fit(
     nominal,
     observed_per_step,
     modeled_per_step,
-    cov_external_diag=(1.0, 1.0, 1.0, 1.0),
+    cov_external_diag=(1.0, 1.0),
 ):
     """Drive `calculate_pickup_ion_values` through the post-fit branches.
 
@@ -81,12 +79,10 @@ def _run_calculate_with_mocked_fit(
 
     fake_result = MagicMock()
     fake_result.var_names = [
-        "cooling_index",
         "ionization_rate",
         "cutoff_speed",
-        "background_count_rate",
     ]
-    fake_result.x = np.zeros(4)
+    fake_result.x = np.zeros(2)
     fake_result.params.valuesdict.return_value = nominal
     fake_minimizer = MagicMock()
     fake_minimizer.minimize.return_value = fake_result
@@ -95,7 +91,7 @@ def _run_calculate_with_mocked_fit(
     with patch(f"{_MODULE_PATH}.build_chunk_collapsed_response") as mock_build, patch(
         f"{_MODULE_PATH}.lmfit.Minimizer", return_value=fake_minimizer
     ), patch(
-        f"{_MODULE_PATH}.ndt.Hessian", return_value=lambda _: np.eye(4)
+        f"{_MODULE_PATH}.ndt.Hessian", return_value=lambda _: np.eye(2)
     ), patch(
         f"{_MODULE_PATH}.calculate_coincidence_rate", return_value=modeled_rates
     ), patch(
@@ -117,10 +113,8 @@ def _run_calculate_with_mocked_fit(
 
 def _assert_all_nan_params(tc, fitting_params):
     for value in (
-        fitting_params.cooling_index,
         fitting_params.ionization_rate,
         fitting_params.cutoff_speed,
-        fitting_params.background_count_rate,
     ):
         tc.assertTrue(np.isnan(value.nominal_value))
         tc.assertTrue(np.isnan(value.std_dev))
@@ -170,56 +164,16 @@ class CalculatePickupIonValuesFillTest(unittest.TestCase):
             nominal=_good_nominal(),
             observed_per_step=observed_per_step,
             modeled_per_step=observed_per_step,
-            cov_external_diag=(-1.0, -1.0, -1.0, -1.0),
+            cov_external_diag=(-1.0, -1.0),
         )
 
         self.assertEqual(int(result.fitting_params.flags), int(SwapiL3Flags.BAD_FIT))
         _assert_all_nan_params(self, result.fitting_params)
 
-    def test_background_above_one_hz_fills_background_only(self):
-        """When the fitted background exceeds 1 Hz the flat term is absorbing
-        real signal; the background is reported as NaN ± NaN, the other three
-        parameters are unchanged, and the fit flag stays NONE."""
-        observed_per_step = np.linspace(1.0, 10.0, _N_COARSE_BINS)
-
-        result = _run_calculate_with_mocked_fit(
-            nominal=_good_nominal(background_count_rate=1.5),
-            observed_per_step=observed_per_step,
-            modeled_per_step=observed_per_step,
-        )
-        fitting_params = result.fitting_params
-
-        self.assertEqual(int(fitting_params.flags), int(SwapiL3Flags.NONE))
-        self.assertTrue(np.isnan(fitting_params.background_count_rate.nominal_value))
-        self.assertTrue(np.isnan(fitting_params.background_count_rate.std_dev))
-        for value in (
-            fitting_params.cooling_index,
-            fitting_params.ionization_rate,
-            fitting_params.cutoff_speed,
-        ):
-            self.assertTrue(np.isfinite(value.nominal_value))
-            self.assertTrue(np.isfinite(value.std_dev))
-
-    def test_background_at_one_hz_is_not_filled(self):
-        """The background guard uses a strict inequality (`> 1.0`); a fit
-        sitting exactly at 1 Hz is retained."""
-        observed_per_step = np.linspace(1.0, 10.0, _N_COARSE_BINS)
-
-        result = _run_calculate_with_mocked_fit(
-            nominal=_good_nominal(background_count_rate=1.0),
-            observed_per_step=observed_per_step,
-            modeled_per_step=observed_per_step,
-        )
-        fitting_params = result.fitting_params
-
-        self.assertEqual(int(fitting_params.flags), int(SwapiL3Flags.NONE))
-        self.assertEqual(fitting_params.background_count_rate.nominal_value, 1.0)
-        self.assertTrue(np.isfinite(fitting_params.background_count_rate.std_dev))
-
     def test_clean_fit_returns_all_finite_params_with_no_flag(self):
-        """A perfect fit (R² = 1) with a background ≤ 1 Hz returns all four
-        parameters with finite nominal and σ̂ and the fit flag is NONE — the
-        baseline against which the fill-value branches above are deviations."""
+        """A perfect fit (R² = 1) returns all three parameters with finite
+        nominal and σ̂ and the fit flag is NONE — the baseline against which
+        the fill-value branches above are deviations."""
         observed_per_step = np.linspace(1.0, 10.0, _N_COARSE_BINS)
 
         result = _run_calculate_with_mocked_fit(
@@ -231,10 +185,8 @@ class CalculatePickupIonValuesFillTest(unittest.TestCase):
 
         self.assertEqual(int(fitting_params.flags), int(SwapiL3Flags.NONE))
         for value in (
-            fitting_params.cooling_index,
             fitting_params.ionization_rate,
             fitting_params.cutoff_speed,
-            fitting_params.background_count_rate,
         ):
             self.assertTrue(np.isfinite(value.nominal_value))
             self.assertTrue(np.isfinite(value.std_dev))

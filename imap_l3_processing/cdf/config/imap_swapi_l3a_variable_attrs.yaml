@@ -34,41 +34,6 @@ epoch_delta:
   SCALETYP: linear
   LABLAXIS: Epoch delta
   DEPEND_0: epoch
-pui_cooling_index:
-  NAME: pui_cooling_index
-  DATA_TYPE: CDF_REAL4
-  FIELDNAM: PUI Cooling Index
-  CATDESC: Pickup ion cooling index
-  DEPEND_0: epoch
-  VAR_TYPE: data
-  RECORD_VARYING: RV
-  DISPLAY_TYPE: time_series
-  VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
-  FORMAT: F19.3
-  LABLAXIS: Cool Idx
-  UNITS: ' '
-  VALIDMIN: 0
-  VALIDMAX: 5
-  FILLVAL: -1.000000e+31
-  SCALETYP: linear
-  SCALEMIN: 0
-  SCALEMAX: 5
-  DELTA_PLUS_VAR: pui_cooling_index_uncert
-  DELTA_MINUS_VAR: pui_cooling_index_uncert
-pui_cooling_index_uncert:
-  NAME: pui_cooling_index_uncert
-  DATA_TYPE: CDF_REAL4
-  FIELDNAM: PUI Cooling Index Uncertainty
-  CATDESC: 1-sigma standard error
-  LABLAXIS: Cool Idx Err
-  DEPEND_0: epoch
-  VAR_TYPE: support_data
-  RECORD_VARYING: RV
-  FORMAT: F19.3
-  UNITS: ' '
-  VALIDMIN: 0
-  VALIDMAX: 5
-  FILLVAL: -1.000000e+31
 pui_ionization_rate:
   NAME: pui_ionization_rate
   DATA_TYPE: CDF_REAL4
@@ -138,41 +103,6 @@ pui_cutoff_speed_uncert:
   UNITS: km/s
   VALIDMIN: 0
   VALIDMAX: 10000
-  FILLVAL: -1.000000e+31
-pui_background_count_rate:
-  NAME: pui_background_count_rate
-  DATA_TYPE: CDF_REAL4
-  FIELDNAM: PUI Background Count Rate
-  CATDESC: Pickup ion background count rate
-  DEPEND_0: epoch
-  VAR_TYPE: data
-  RECORD_VARYING: RV
-  DISPLAY_TYPE: time_series
-  VARIABLE_PURPOSE: PRIMARY_VAR,SUMMARY
-  FORMAT: E19.3
-  LABLAXIS: Bg Rate
-  UNITS: "#/s"
-  VALIDMIN: 0
-  VALIDMAX: 9223372036854775807
-  FILLVAL: -1.000000e+31
-  SCALETYP: linear
-  SCALEMIN: 0
-  SCALEMAX: 0.2
-  DELTA_PLUS_VAR: pui_background_count_rate_uncert
-  DELTA_MINUS_VAR: pui_background_count_rate_uncert
-pui_background_count_rate_uncert:
-  NAME: pui_background_count_rate_uncert
-  DATA_TYPE: CDF_REAL4
-  FIELDNAM: PUI Background Count Rate Uncertainty
-  CATDESC: 1-sigma standard error
-  LABLAXIS: Bg Rate Err
-  DEPEND_0: epoch
-  VAR_TYPE: support_data
-  RECORD_VARYING: RV
-  FORMAT: E19.3
-  UNITS: "#/s"
-  VALIDMIN: 0
-  VALIDMAX: 1.0
   FILLVAL: -1.000000e+31
 pui_density:
   NAME: pui_density

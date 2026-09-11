@@ -7,6 +7,7 @@ import spiceypy
 from numpy import ndarray
 
 from imap_l3_processing.constants import ONE_AU_IN_KM, CENTIMETERS_PER_METER, METERS_PER_KILOMETER
+from imap_l3_processing.swapi.constants import SWAPI_PUI_COOLING_INDEX
 from imap_l3_processing.swapi.l3a.science.pickup_ion.utils import convert_velocity_relative_to_imap
 from imap_l3_processing.swapi.l3a.science.pickup_ion.density_of_neutral_helium_lookup_table import \
     DensityOfNeutralHeliumLookupTable
@@ -17,10 +18,8 @@ from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 
 @dataclass
 class FittingParameters:
-    cooling_index: float
     ionization_rate: float
     cutoff_speed: float
-    background_count_rate: float
     flags: int = SwapiL3Flags.NONE
 
 
@@ -37,20 +36,20 @@ class VasyliunasSiscoeDistribution:
         radius_in_au = self.distance_km / ONE_AU_IN_KM
         neutral_helium_density_per_cm3 = (
             self.density_of_neutral_helium_lookup_table.density(
-                self.psi, radius_in_au * w**fitting_params.cooling_index
+                self.psi, radius_in_au * w**SWAPI_PUI_COOLING_INDEX
             )
         )
         neutral_helium_density_per_km3 = (
             neutral_helium_density_per_cm3
             * (CENTIMETERS_PER_METER * METERS_PER_KILOMETER) ** 3
         )
-        term1 = fitting_params.cooling_index / (4 * np.pi)
+        term1 = SWAPI_PUI_COOLING_INDEX / (4 * np.pi)
         term2 = (fitting_params.ionization_rate * ONE_AU_IN_KM**2) / (
             self.distance_km
             * self.solar_wind_speed_inertial_frame
             * fitting_params.cutoff_speed**3
         )
-        term3 = w ** (fitting_params.cooling_index - 3)
+        term3 = w ** (SWAPI_PUI_COOLING_INDEX - 3)
         term4 = neutral_helium_density_per_km3
         distribution = term1 * term2 * term3 * term4
         if apply_cutoff:
