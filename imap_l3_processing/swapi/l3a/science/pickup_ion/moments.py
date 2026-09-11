@@ -36,8 +36,6 @@ def calculate_helium_pui_density(
 
     Uncertainty on the fit parameters is propagated through the integral.
     """
-    integration_weights = speed_grid.spherical_shell_integration_weights
-
     @uncertainties.wrap
     def calculate(ionization_rate, cutoff_speed):
         f_pui = vasyliunas_siscoe_vdf(
@@ -49,7 +47,7 @@ def calculate_helium_pui_density(
             solar_wind_speed_inertial_frame=solar_wind_speed_inertial_frame,
             density_of_neutral_helium_lookup_table=density_of_neutral_helium_lookup_table,
         )
-        integral = float(np.sum(integration_weights * f_pui))
+        integral = float(np.sum(speed_grid.spherical_shell_integration_weights * f_pui))
         return (
             4 * np.pi * integral / (CENTIMETERS_PER_METER * METERS_PER_KILOMETER) ** 3
         )
