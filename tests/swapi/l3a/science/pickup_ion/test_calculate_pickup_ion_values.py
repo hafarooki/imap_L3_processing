@@ -109,7 +109,7 @@ class CalculatePickupIonValuesGoodnessOfFitTest(unittest.TestCase):
         )
 
     def test_rejected_fit_fills_all_params_with_bad_fit(self):
-        """When the the goodness-of-fit check fials, fill values are reported
+        """When the the goodness-of-fit check fails, fill values are reported
             and BAD_FIT is set."""
         fitting_params, _ = self._run_calculate_with_mocked_fit(fit_is_good=False)
 
