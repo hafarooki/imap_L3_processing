@@ -4,7 +4,10 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 from astropy import constants, units
 
-from imap_l3_processing.constants import ONE_AU_IN_KM
+from imap_l3_processing.swapi.constants import (
+    SWAPI_BACKGROUND_RATE,
+    SWAPI_L2_K_FACTOR,
+)
 from imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_pickup_ion_values import (
     calculate_pickup_ion_fit_energy_range,
     calculate_pickup_ion_values,
@@ -15,181 +18,105 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribut
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from tests.swapi._helpers import NOMINAL_TEST_EPOCH_TT2000
 
-_MODULE_PATH = (
-    "imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_pickup_ion_values"
-)
-_N_SWEEPS = 5
-_N_COARSE_BINS = 62
-_SW_VELOCITY_RTN_KMS = np.array([400.0, 0.0, 0.0])
-_VOLTAGE_PER_STEP = np.linspace(100.0, 8000.0, _N_COARSE_BINS)
 
-
-_ENERGY_RANGE_ADMITTING_EVERY_BIN = (0.0, 1.0e9)
-
-
-def _vasyliunas_siscoe_distribution():
-    """A Vasyliunas-Siscoe distribution with a finite distance so the
-    `min_speed_kms` calculation runs."""
-    distribution = MagicMock(spec=VasyliunasSiscoeDistribution)
-    distribution.distance_km = ONE_AU_IN_KM
-    return distribution
-
-
-def _density_lookup_table():
-    table = MagicMock()
-    table.get_minimum_distance.return_value = 1.0
-    return table
-
-
-def _good_nominal(**overrides):
-    base = {
-        "ionization_rate": 1e-7,
-        "cutoff_speed": 450.0,
-    }
-    base.update(overrides)
-    return base
-
-
-def _run_calculate_with_mocked_fit(
-    *,
-    nominal,
-    observed_per_step,
-    modeled_per_step,
-    cov_external_diag=(1.0, 1.0),
-):
-    """Drive `calculate_pickup_ion_values` through the post-fit branches.
-
-    `observed_per_step` and `modeled_per_step` are tiled across `_N_SWEEPS`
-    sweeps; differences between them set the residual sum of squares that
-    feeds the R² guard. `cov_external_diag` becomes the diagonal of the
-    mocked external-coordinate covariance — passing negative entries yields
-    NaN σ̂ and exercises the non-positive-definite Hessian branch."""
-    voltages = np.tile(_VOLTAGE_PER_STEP, (_N_SWEEPS, 1))
-    observed_per_step = np.broadcast_to(
-        np.asarray(observed_per_step, dtype=float), (_N_COARSE_BINS,)
-    )
-    modeled_per_step = np.broadcast_to(
-        np.asarray(modeled_per_step, dtype=float), (_N_COARSE_BINS,)
-    )
-    count_rates = np.tile(observed_per_step, (_N_SWEEPS, 1))
-    modeled_rates = np.tile(modeled_per_step, (_N_SWEEPS, 1))
-    bulk_sw_per_bin_swapi_kms = np.tile(
-        _SW_VELOCITY_RTN_KMS, (_N_SWEEPS, _N_COARSE_BINS, 1)
+class CalculatePickupIonValuesGoodnessOfFitTest(unittest.TestCase):
+    _MODULE_PATH = (
+        "imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_pickup_ion_values"
     )
 
-    fake_result = MagicMock()
-    fake_result.var_names = [
-        "ionization_rate",
-        "cutoff_speed",
-    ]
-    fake_result.x = np.zeros(2)
-    fake_result.params.valuesdict.return_value = nominal
-    fake_minimizer = MagicMock()
-    fake_minimizer.minimize.return_value = fake_result
-    fake_minimizer._int2ext_cov_x.return_value = np.diag(cov_external_diag)
+    _N_SWEEPS = 50
+    _N_COARSE_BINS = 62
 
-    with patch(f"{_MODULE_PATH}.build_chunk_collapsed_response") as mock_build, patch(
-        f"{_MODULE_PATH}.lmfit.Minimizer", return_value=fake_minimizer
-    ), patch(
-        f"{_MODULE_PATH}.ndt.Hessian", return_value=lambda _: np.eye(2)
-    ), patch(
-        f"{_MODULE_PATH}.calculate_coincidence_rate", return_value=modeled_rates
-    ), patch(
-        f"{_MODULE_PATH}.calculate_pickup_ion_fit_energy_range",
-        return_value=_ENERGY_RANGE_ADMITTING_EVERY_BIN,
-    ):
-        mock_build.return_value = MagicMock()
-        return calculate_pickup_ion_values(
-            swapi_response=MagicMock(),
-            voltages=voltages,
-            count_rates=count_rates,
-            sw_velocity_rtn_kms=_SW_VELOCITY_RTN_KMS,
-            bulk_sw_per_bin_swapi_kms=bulk_sw_per_bin_swapi_kms,
-            density_of_neutral_helium_lookup_table=_density_lookup_table(),
-            vasyliunas_siscoe_distribution=_vasyliunas_siscoe_distribution(),
-            time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+    _SW_VELOCITY_RTN_KMS = np.array([400.0, 0.0, 0.0])
+    _FITTED_IONIZATION_RATE = 1e-7
+    _FITTED_CUTOFF_SPEED_KMS = 450.0
+
+    _VOLTAGE_PER_STEP = np.geomspace(100.0, 10000.0, _N_COARSE_BINS)
+    _ESA_ENERGIES = _VOLTAGE_PER_STEP * SWAPI_L2_K_FACTOR
+    _OBSERVED_RATES = np.full((_N_SWEEPS, _N_COARSE_BINS), 2.0)
+
+    # narrower than the full sweep, 
+    _FIT_ENERGY_RANGE = (5000.0, 18000.0)
+
+    # response and goodness of fit built on steps above lower cutoff
+    _MODELED_STEPS = _ESA_ENERGIES > _FIT_ENERGY_RANGE[0]
+    _MODEL_RATES = np.full((_N_SWEEPS, int(_MODELED_STEPS.sum())), 3.0)
+
+    def _run_calculate_with_mocked_fit(self, fit_is_good=True):
+        fake_result = MagicMock()
+        fake_result.var_names = ["ionization_rate", "cutoff_speed"]
+        fake_result.x = np.zeros(2)
+        fake_result.params.valuesdict.return_value = {
+            "ionization_rate": self._FITTED_IONIZATION_RATE,
+            "cutoff_speed": self._FITTED_CUTOFF_SPEED_KMS,
+        }
+        fake_minimizer = MagicMock()
+        fake_minimizer.minimize.return_value = fake_result
+        fake_minimizer._int2ext_cov_x.return_value = np.eye(2)
+
+        with patch(f"{self._MODULE_PATH}.build_chunk_collapsed_response"), patch(
+            f"{self._MODULE_PATH}.lmfit.Minimizer", return_value=fake_minimizer
+        ), patch(
+            f"{self._MODULE_PATH}.ndt.Hessian", return_value=lambda _: np.eye(2)
+        ), patch(
+            f"{self._MODULE_PATH}.calculate_coincidence_rate",
+            return_value=self._MODEL_RATES,
+        ), patch(
+            f"{self._MODULE_PATH}.calculate_pickup_ion_fit_energy_range",
+            return_value=self._FIT_ENERGY_RANGE,
+        ), patch(
+            f"{self._MODULE_PATH}.is_good_fit", return_value=fit_is_good
+        ) as mock_is_good_fit:
+            fit_result = calculate_pickup_ion_values(
+                swapi_response=MagicMock(),
+                voltages=np.tile(self._VOLTAGE_PER_STEP, (self._N_SWEEPS, 1)),
+                count_rates=self._OBSERVED_RATES,
+                sw_velocity_rtn_kms=self._SW_VELOCITY_RTN_KMS,
+                bulk_sw_per_bin_swapi_kms=np.tile(
+                    self._SW_VELOCITY_RTN_KMS,
+                    (self._N_SWEEPS, self._N_COARSE_BINS, 1),
+                ),
+                density_of_neutral_helium_lookup_table=MagicMock(),
+                vasyliunas_siscoe_distribution=MagicMock(
+                    spec=VasyliunasSiscoeDistribution
+                ),
+                time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+            )
+
+        return fit_result.fitting_params, mock_is_good_fit
+
+    def test_is_good_fit_is_passed_correct_inputs(self):
+        """Ensure is_good_fit is given the right inputs:
+            - background-free model rates
+            - the instrument background as a separate scalar
+            - every step above the lower fitting cutoff, not just the steps
+              inside the narrower fit window"""
+        _, mock_is_good_fit = self._run_calculate_with_mocked_fit()
+
+        kwargs = mock_is_good_fit.call_args.kwargs
+        np.testing.assert_array_equal(kwargs["model_rates"], self._MODEL_RATES)
+        np.testing.assert_array_equal(
+            kwargs["observed_rates"], self._OBSERVED_RATES[:, self._MODELED_STEPS]
+        )
+        np.testing.assert_allclose(
+            kwargs["esa_energies"], self._ESA_ENERGIES[self._MODELED_STEPS]
+        )
+        self.assertEqual(kwargs["background_rate"], SWAPI_BACKGROUND_RATE)
+        self.assertEqual(kwargs["ionization_rate"], self._FITTED_IONIZATION_RATE)
+        self.assertEqual(kwargs["cutoff_speed_kms"], self._FITTED_CUTOFF_SPEED_KMS)
+        self.assertEqual(
+            kwargs["sw_speed_kms"], np.linalg.norm(self._SW_VELOCITY_RTN_KMS)
         )
 
+    def test_rejected_fit_fills_all_params_with_bad_fit(self):
+        """When the the goodness-of-fit check fials, fill values are reported
+            and BAD_FIT is set."""
+        fitting_params, _ = self._run_calculate_with_mocked_fit(fit_is_good=False)
 
-def _assert_all_nan_params(tc, fitting_params):
-    for value in (
-        fitting_params.ionization_rate,
-        fitting_params.cutoff_speed,
-    ):
-        tc.assertTrue(np.isnan(value.nominal_value))
-        tc.assertTrue(np.isnan(value.std_dev))
-
-
-class CalculatePickupIonValuesFillTest(unittest.TestCase):
-    """Tests for the post-fit guards in `calculate_pickup_ion_values`, with the
-    optimizer, Hessian and coincidence-rate seams mocked so each test isolates
-    one guard."""
-
-    def test_zero_variance_observations_fill_all_params_with_bad_fit(self):
-        """When every observed count rate is identical the total sum of
-        squares is zero and R² is undefined; `BAD_FIT` is set and every
-        parameter is reported as NaN ± NaN."""
-        result = _run_calculate_with_mocked_fit(
-            nominal=_good_nominal(),
-            observed_per_step=5.0,
-            modeled_per_step=5.0,
-        )
-
-        self.assertEqual(int(result.fitting_params.flags), int(SwapiL3Flags.BAD_FIT))
-        _assert_all_nan_params(self, result.fitting_params)
-
-    def test_low_r_squared_fills_all_params_with_bad_fit(self):
-        """When the model misses non-constant observations badly enough that
-        R² < 0.9, `BAD_FIT` is set and every parameter is reported as NaN ±
-        NaN — values are not retained."""
-        observed_per_step = np.linspace(1.0, 10.0, _N_COARSE_BINS)
-        modeled_per_step = np.zeros(_N_COARSE_BINS)
-
-        result = _run_calculate_with_mocked_fit(
-            nominal=_good_nominal(),
-            observed_per_step=observed_per_step,
-            modeled_per_step=modeled_per_step,
-        )
-
-        self.assertEqual(int(result.fitting_params.flags), int(SwapiL3Flags.BAD_FIT))
-        _assert_all_nan_params(self, result.fitting_params)
-
-    def test_non_positive_definite_hessian_fills_all_params_with_bad_fit(self):
-        """A non-positive-definite Hessian gives a covariance with negative
-        diagonal entries; `np.sqrt(np.diag(cov))` then yields NaN σ̂. The
-        guard sets `BAD_FIT` and every parameter is NaN ± NaN."""
-        observed_per_step = np.linspace(1.0, 10.0, _N_COARSE_BINS)
-
-        result = _run_calculate_with_mocked_fit(
-            nominal=_good_nominal(),
-            observed_per_step=observed_per_step,
-            modeled_per_step=observed_per_step,
-            cov_external_diag=(-1.0, -1.0),
-        )
-
-        self.assertEqual(int(result.fitting_params.flags), int(SwapiL3Flags.BAD_FIT))
-        _assert_all_nan_params(self, result.fitting_params)
-
-    def test_clean_fit_returns_all_finite_params_with_no_flag(self):
-        """A perfect fit (R² = 1) returns all three parameters with finite
-        nominal and σ̂ and the fit flag is NONE — the baseline against which
-        the fill-value branches above are deviations."""
-        observed_per_step = np.linspace(1.0, 10.0, _N_COARSE_BINS)
-
-        result = _run_calculate_with_mocked_fit(
-            nominal=_good_nominal(),
-            observed_per_step=observed_per_step,
-            modeled_per_step=observed_per_step,
-        )
-        fitting_params = result.fitting_params
-
-        self.assertEqual(int(fitting_params.flags), int(SwapiL3Flags.NONE))
-        for value in (
-            fitting_params.ionization_rate,
-            fitting_params.cutoff_speed,
-        ):
-            self.assertTrue(np.isfinite(value.nominal_value))
-            self.assertTrue(np.isfinite(value.std_dev))
+        self.assertEqual(int(fitting_params.flags), int(SwapiL3Flags.BAD_FIT))
+        for value in (fitting_params.ionization_rate, fitting_params.cutoff_speed):
+            self.assertTrue(np.isnan(value.nominal_value))
+            self.assertTrue(np.isnan(value.std_dev))
 
 
 class CalculatePickupIonFitEnergyRangeTest(unittest.TestCase):
