@@ -6,13 +6,8 @@ from imap_processing.spice.geometry import SpiceFrame, get_rotation_matrix
 from imap_processing.spice.time import ttj2000ns_to_et
 from numpy import ndarray
 
-from imap_l3_processing.constants import (
-    PROTON_CHARGE_COULOMBS,
-    METERS_PER_KILOMETER,
-)
 from imap_l3_processing.swapi.constants import SWAPI_COARSE_SWEEP_BINS
 from imap_l3_processing.swapi.l3a.models import SwapiL2Data
-from imap_l3_processing.swapi.l3a.science.pickup_ion.inflow_vector import InflowVector
 from imap_l3_processing.swapi.l3a.utils import measurement_times
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 

@@ -11,7 +11,6 @@ from imap_l3_processing.constants import (
     ALPHA_PARTICLE_MASS_KG,
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind.alpha import (
     fit_solar_wind_alpha_model as alpha_module,
@@ -38,7 +37,8 @@ from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from imap_l3_processing.swapi.response.deadtime import deadtime_factor
 from imap_l3_processing.swapi.constants import SWAPI_K_FACTOR
 from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
-from tests.swapi._helpers import load_swapi_response
+from imap_l3_processing.swapi.species import Species
+from tests.swapi._helpers import NOMINAL_TEST_EPOCH_TT2000, load_swapi_response
 
 
 # ----- module-level fixture constants --------------------------------------
@@ -132,19 +132,17 @@ def _build_proton_and_alpha_contexts(
         count_rate=count_rate,
         esa_voltage=voltage,
         swapi_response=response,
-        central_effective_area_scale=proton_effective_area_scale,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     alpha_ctx = build_solar_wind_fit_context(
         count_rate=count_rate,
         esa_voltage=voltage,
         swapi_response=response,
-        central_effective_area_scale=alpha_effective_area_scale,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.ALPHA,
         rotation_matrices=rotation_matrices,
-        mass_kg=ALPHA_PARTICLE_MASS_KG,
-        mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     )
     return proton_ctx, alpha_ctx
 
@@ -220,10 +218,9 @@ def _synthesize_proton_plus_alpha_count_rate(
         count_rate=np.zeros(voltage.shape),
         esa_voltage=voltage,
         swapi_response=response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     proton_true, _ = model_solar_wind_ideal_coincidence_rates(proton_params, proton_ctx)
     if alpha_density > 0.0:
@@ -231,10 +228,9 @@ def _synthesize_proton_plus_alpha_count_rate(
             count_rate=np.zeros(voltage.shape),
             esa_voltage=voltage,
             swapi_response=response,
-            central_effective_area_scale=1.0,
+            time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+            species=Species.ALPHA,
             rotation_matrices=rotation_matrices,
-            mass_kg=ALPHA_PARTICLE_MASS_KG,
-            mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
         )
         alpha_true, _ = model_solar_wind_ideal_coincidence_rates(alpha_params, alpha_ctx)
         total_true = proton_true + alpha_true
@@ -729,10 +725,9 @@ class TestAlphaEvaluatorAnalyticJacobianMatchesFiniteDifference(
             count_rate=cls.observed_count_rate,
             esa_voltage=cls.voltage,
             swapi_response=cls.response,
-            central_effective_area_scale=1.0,
+            time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+            species=Species.ALPHA,
             rotation_matrices=cls.rotation_matrices,
-            mass_kg=ALPHA_PARTICLE_MASS_KG,
-            mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
         )
         cls.evaluator = _AlphaEvaluator(
             proton_bulk=_TRUE_PROTON_VELOCITY_RTN,
@@ -818,10 +813,9 @@ class TestAlphaEvaluatorCachesEvaluation(
             count_rate=cls.observed_count_rate,
             esa_voltage=cls.voltage,
             swapi_response=cls.response,
-            central_effective_area_scale=1.0,
+            time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+            species=Species.ALPHA,
             rotation_matrices=cls.rotation_matrices,
-            mass_kg=ALPHA_PARTICLE_MASS_KG,
-            mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
         )
         cls.x0 = np.array(
             [

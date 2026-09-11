@@ -1,19 +1,13 @@
-"""Monte Carlo validation that reported σ values for the proton and alpha
-solar-wind moment fitters match the empirical scatter of the fitted point
-estimates under the expected SWAPI noise model
-(Poisson + 1% log-normal + 10 Hz Poisson floor).
+"""Check that reported proton and alpha fit uncertainties match observed errors.
 
-For each species the test runs the production fit entry point N times against
-synthetic count rates with independent noise realizations, then asserts that
-mean(reported σ) is within 10% of std(point estimates) for every value/σ pair
-declared in the L3a CDF. The pairs are discovered by walking the dicts
-returned by `_proton_moments_from_fit` and `_alpha_moments_from_fit` so adding
-new CDF variables requires no test change.
+Monte Carlo trials use a simple model with:
+- Poisson noise,
+- 1% log-normal noise
+- a 10 Hz Poisson floor.
 
-This is an expensive calibration check (~1000 fits per species). It runs via
-`run_periodically` so it executes on a cadence rather than every commit, and
-parallelises the MC trials across forked workers so wall time stays in the
-tens of seconds even at N=1000.
+For each L3a CDF value/sigma pair, the normalized errors,
+(fitted - truth) / sigma, must have mean zero and standard deviation one within
+the test tolerances.
 """
 
 from __future__ import annotations
@@ -27,10 +21,8 @@ from datetime import timedelta
 import numpy as np
 
 from imap_l3_processing.constants import (
-    ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     ALPHA_PARTICLE_MASS_KG,
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.constants import SWAPI_LIVETIME_S
 from imap_l3_processing.swapi.l3a.chunk_fits import (
@@ -53,7 +45,9 @@ from imap_l3_processing.swapi.l3a.science.solar_wind.proton.fit_solar_wind_proto
 )
 from imap_l3_processing.swapi.quality_flags import SwapiL3Flags
 from imap_l3_processing.swapi.response.deadtime import deadtime_factor
+from imap_l3_processing.swapi.species import Species
 from tests.swapi._helpers import (
+    NOMINAL_TEST_EPOCH_TT2000,
     NOMINAL_SWAPI_TO_RTN_ROTATION,
     load_swapi_response,
 )
@@ -125,8 +119,14 @@ _LOGNORMAL_REL_SIGMA = 0.01
 _NOISE_FLOOR_HZ = 10.0
 
 _N_TRIALS = 1000
-_CALIBRATION_TOLERANCE = 0.10
+
+# normalized error should be 1 within 10%
+_NORMALIZED_ERROR_WIDTH_TOLERANCE = 0.10
+# a bit high as a consequence of the 10 Hz noise floor added
+_NORMALIZED_ERROR_BIAS_TOLERANCE = 0.40
 _PERIODIC_FREQUENCY = timedelta(days=7)
+
+_RTN_AXES = ("R", "T", "N")
 
 
 def _build_truth_count_rates(response, *, with_alpha: bool) -> np.ndarray:
@@ -140,10 +140,9 @@ def _build_truth_count_rates(response, *, with_alpha: bool) -> np.ndarray:
         count_rate=np.zeros(_VOLTAGE_AXIS.shape),
         esa_voltage=_VOLTAGE_AXIS,
         swapi_response=response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=_ROTATION_MATRICES,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     proton_rates, _ = model_solar_wind_ideal_coincidence_rates(proton_params, proton_ctx)
     total_rates = proton_rates
@@ -159,10 +158,9 @@ def _build_truth_count_rates(response, *, with_alpha: bool) -> np.ndarray:
             count_rate=np.zeros(_VOLTAGE_AXIS.shape),
             esa_voltage=_VOLTAGE_AXIS,
             swapi_response=response,
-            central_effective_area_scale=1.0,
+            time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+            species=Species.ALPHA,
             rotation_matrices=_ROTATION_MATRICES,
-            mass_kg=ALPHA_PARTICLE_MASS_KG,
-            mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
         )
         alpha_rates, _ = model_solar_wind_ideal_coincidence_rates(alpha_params, alpha_ctx)
         total_rates = proton_rates + alpha_rates
@@ -178,6 +176,41 @@ def _inject_noise(truth_rates: np.ndarray, rng: np.random.Generator) -> np.ndarr
     rates = np.maximum(rates * np.exp(log_factor), 0.0)
     floor_counts = rng.poisson(_NOISE_FLOOR_HZ * SWAPI_LIVETIME_S, size=rates.shape)
     return rates + floor_counts.astype(float) / SWAPI_LIVETIME_S
+
+
+def _velocity_component_truth(base: str, velocity_rtn: np.ndarray) -> dict:
+    return {
+        f"{base}_{axis}": float(velocity_rtn[i]) for i, axis in enumerate(_RTN_AXES)
+    }
+
+
+def _proton_truth_values() -> dict:
+    """Expected value of every proton CDF quantity that declares a σ."""
+    velocity_sun = _TRUE_PROTON_VELOCITY_RTN + _SC_VELOCITY_RTN
+    return {
+        "proton_sw_density": _TRUE_PROTON_DENSITY_CM3,
+        "proton_sw_temperature": _TRUE_PROTON_TEMPERATURE_K,
+        "proton_sw_speed": float(np.linalg.norm(_TRUE_PROTON_VELOCITY_RTN)),
+        "proton_sw_speed_sun": float(np.linalg.norm(velocity_sun)),
+        **_velocity_component_truth(
+            "proton_sw_velocity_rtn", _TRUE_PROTON_VELOCITY_RTN
+        ),
+    }
+
+
+def _alpha_truth_values() -> dict:
+    """Expected value of every alpha CDF quantity that declares a σ. B̂ is
+    parallel to the proton bulk velocity, so the alpha velocity is the proton
+    vector lengthened by the truth differential speed."""
+    velocity_rtn = _TRUE_PROTON_VELOCITY_RTN + _TRUE_DELTA_V_KM_S * _B_HAT_RTN
+    velocity_sun = velocity_rtn + _SC_VELOCITY_RTN
+    return {
+        "alpha_sw_density": _TRUE_ALPHA_DENSITY_CM3,
+        "alpha_sw_temperature": _TRUE_ALPHA_TEMPERATURE_K,
+        "alpha_sw_speed": float(np.linalg.norm(velocity_rtn)),
+        "alpha_sw_speed_sun": float(np.linalg.norm(velocity_sun)),
+        **_velocity_component_truth("alpha_sw_velocity_rtn", velocity_rtn),
+    }
 
 
 def _iter_value_sigma_pairs(record: dict):
@@ -197,7 +230,7 @@ def _iter_value_sigma_pairs(record: dict):
             assert base in record, f"no companion vector for covariance key {key!r}"
             cov = np.asarray(record[key])
             values = np.asarray(record[base])
-            for i, axis in enumerate(("R", "T", "N")):
+            for i, axis in enumerate(_RTN_AXES):
                 yield (
                     f"{base}_{axis}",
                     float(values[i]),
@@ -211,30 +244,41 @@ def _accumulate(accumulator: dict, record: dict) -> None:
 
 
 def _assert_calibration(
-    accumulator: dict, n_good: int, *, species: str
+    accumulator: dict, n_good: int, *, species: Species, truth_values: dict
 ) -> None:
+    label = species.name.lower()
     if n_good < _N_TRIALS * 0.9:
         raise AssertionError(
-            f"{species}: only {n_good}/{_N_TRIALS} trials produced a good fit"
+            f"{label}: only {n_good}/{_N_TRIALS} trials produced a good fit"
         )
     failures = []
     for name, samples in sorted(accumulator.items()):
-        values, reported_sigmas = zip(*samples)
-        emp_std = float(np.std(values, ddof=1))
-        mean_reported = float(np.mean(reported_sigmas))
-        if emp_std == 0.0:
-            failures.append(f"  {name}: empirical std is zero (estimator collapsed)")
+        assert name in truth_values, f"no truth value declared for {name!r}"
+        values, reported_sigmas = (
+            np.asarray(column, dtype=float) for column in zip(*samples)
+        )
+        if not np.all(np.isfinite(reported_sigmas) & (reported_sigmas > 0)):
+            failures.append(f"  {name}: non-positive or non-finite reported σ")
             continue
-        rel_err = abs(mean_reported - emp_std) / emp_std
-        if rel_err >= _CALIBRATION_TOLERANCE:
+        normalized_errors = (values - truth_values[name]) / reported_sigmas
+        width = float(normalized_errors.std(ddof=1))
+        bias = float(normalized_errors.mean())
+        if abs(width - 1.0) >= _NORMALIZED_ERROR_WIDTH_TOLERANCE:
             failures.append(
-                f"  {name}: reported {mean_reported:.4g}, empirical {emp_std:.4g} "
-                f"(rel err {rel_err:.1%})"
+                f"  {name}: normalized-error width {width:.3f}, want "
+                f"1 ± {_NORMALIZED_ERROR_WIDTH_TOLERANCE} "
+                f"(σ {'over' if width < 1.0 else 'under'}-reported by "
+                f"{abs(1.0 / width - 1.0):.1%})"
+            )
+        if abs(bias) >= _NORMALIZED_ERROR_BIAS_TOLERANCE:
+            failures.append(
+                f"  {name}: normalized-error bias {bias:+.3f} σ, want "
+                f"0 ± {_NORMALIZED_ERROR_BIAS_TOLERANCE} σ"
             )
     if failures:
         raise AssertionError(
-            f"{species} σ calibration outside {_CALIBRATION_TOLERANCE:.0%} of "
-            f"empirical std (N={n_good}):\n" + "\n".join(failures)
+            f"{label} σ calibration: normalized errors not standard "
+            f"(N={n_good}):\n" + "\n".join(failures)
         )
 
 
@@ -266,10 +310,9 @@ def _run_trial(trial_seed: int) -> dict | None:
         count_rate=noisy_rates,
         esa_voltage=_VOLTAGE_AXIS,
         swapi_response=state.response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=_ROTATION_MATRICES,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     proton_result = fit_solar_wind_proton_model(proton_ctx)
     if int(proton_result.quality_flag) != int(SwapiL3Flags.NONE):
@@ -288,10 +331,9 @@ def _run_trial(trial_seed: int) -> dict | None:
         count_rate=noisy_rates,
         esa_voltage=_VOLTAGE_AXIS,
         swapi_response=state.response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.ALPHA,
         rotation_matrices=_ROTATION_MATRICES,
-        mass_kg=ALPHA_PARTICLE_MASS_KG,
-        mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     )
     alpha_moments = fit_solar_wind_alpha_model(
         proton_ctx=proton_ctx,
@@ -329,24 +371,34 @@ def _run_mc_in_parallel(n_trials: int) -> tuple[dict, int]:
 
 
 class ProtonUncertaintyCalibration(unittest.TestCase):
-    """Mean(reported σ) for every proton CDF variable matches the empirical
-    std of the MC point estimates within 10% under Poisson + log-normal +
+    """Every proton CDF variable has standard normalized errors — unit width,
+    zero mean — against its truth value under Poisson + log-normal +
     noise-floor noise."""
 
     @run_periodically(_PERIODIC_FREQUENCY)
-    def test_proton_sigma_matches_empirical_std(self):
+    def test_proton_normalized_errors_are_standard(self):
         _initialize_worker_state(with_alpha=False)
         accumulator, n_good = _run_mc_in_parallel(_N_TRIALS)
-        _assert_calibration(accumulator, n_good, species="proton")
+        _assert_calibration(
+            accumulator,
+            n_good,
+            species=Species.PROTON,
+            truth_values=_proton_truth_values(),
+        )
 
 
 class AlphaUncertaintyCalibration(unittest.TestCase):
-    """Mean(reported σ) for every alpha CDF variable matches the empirical
-    std of the MC point estimates within 10% under Poisson + log-normal +
+    """Every alpha CDF variable has standard normalized errors — unit width,
+    zero mean — against its truth value under Poisson + log-normal +
     noise-floor noise."""
 
     @run_periodically(_PERIODIC_FREQUENCY)
-    def test_alpha_sigma_matches_empirical_std(self):
+    def test_alpha_normalized_errors_are_standard(self):
         _initialize_worker_state(with_alpha=True)
         accumulator, n_good = _run_mc_in_parallel(_N_TRIALS)
-        _assert_calibration(accumulator, n_good, species="alpha")
+        _assert_calibration(
+            accumulator,
+            n_good,
+            species=Species.ALPHA,
+            truth_values=_alpha_truth_values(),
+        )

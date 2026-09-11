@@ -23,8 +23,9 @@ from imap_l3_processing.swapi.l3a.science.solar_wind.params import (
 )
 from imap_l3_processing.swapi.constants import SWAPI_K_FACTOR
 from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
-from tests.swapi._helpers import proton_params
-from tests.test_helpers import get_test_instrument_team_data_path
+from imap_l3_processing.swapi.species import Species
+from tests.swapi._helpers import NOMINAL_TEST_EPOCH_TT2000, proton_params
+from tests.test_helpers import get_test_data_path, get_test_instrument_team_data_path
 
 
 # Reference bulk speed for the slow-wind fixture state shared by every test
@@ -98,10 +99,9 @@ def _build_fit_context_for_voltages(
         count_rate=np.full(len(voltages_array), 100.0),
         esa_voltage=voltages_array,
         swapi_response=response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=1.0,
     )
 
 
@@ -112,14 +112,17 @@ class _ForwardModelFixture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.response = SwapiResponse.from_files(
-            get_test_instrument_team_data_path(
+            azimuthal_transmission_path=get_test_instrument_team_data_path(
                 "swapi/imap_swapi_azimuthal-transmission_20260425_v001.csv"
             ),
-            get_test_instrument_team_data_path(
+            central_effective_area_path=get_test_instrument_team_data_path(
                 "swapi/imap_swapi_central-effective-area_20260425_v001.csv"
             ),
-            get_test_instrument_team_data_path(
+            passband_fit_coefficients_path=get_test_instrument_team_data_path(
                 "swapi/imap_swapi_passband-fit-coefficients_20260425_v001.csv"
+            ),
+            efficiency_table_path=get_test_data_path(
+                "swapi/imap_swapi_efficiency-lut-test_20241020_v001.dat"
             ),
         )
 

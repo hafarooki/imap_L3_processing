@@ -14,11 +14,13 @@ from imap_l3_processing.swapi.response.azimuthal_transmission import (
     AzimuthalTransmissionGrid,
     validate_azimuthal_transmission_values,
 )
+from imap_l3_processing.swapi.response.efficiency_calibration_table import EfficiencyCalibrationTable
 from imap_l3_processing.swapi.response.passband_grid import (
     PassbandGrid,
     build_passband_grid,
 )
 from imap_l3_processing.swapi.constants import SWAPI_K_FACTOR
+from imap_l3_processing.swapi.species import Species
 
 
 class ResponseGrid(NamedTuple):
@@ -38,20 +40,27 @@ class SwapiResponse:
         central_effective_area_at_voltage: Callable,
         passband_fit_coefficients: pd.DataFrame,
         passband_esa_voltage_limits: dict,
+        efficiency_table: EfficiencyCalibrationTable,
     ):
-        self._azimuthal_transmission = azimuthal_transmission
+        self._azimuthal_transmission_grid = AzimuthalTransmissionGrid(
+                values=np.asarray(azimuthal_transmission, dtype=float),
+                spacing=float(self.AZIMUTHAL_TRANSMISSION_SPACING_DEG),
+            )
         self._central_effective_area_at_voltage = central_effective_area_at_voltage
         self._passband_fit_coefficients = passband_fit_coefficients
         self._passband_esa_voltage_limits = passband_esa_voltage_limits
         self._passband_grid_cache: dict = {}
         self._response_grid_cache: dict = {}
+        self._efficiency_table = efficiency_table
 
     @classmethod
     def from_files(
         cls,
+        *,
         azimuthal_transmission_path: Path,
         central_effective_area_path: Path,
         passband_fit_coefficients_path: Path,
+        efficiency_table_path: Path,
     ) -> "SwapiResponse":
         transmission_df = pd.read_csv(azimuthal_transmission_path)
         area_df = pd.read_csv(central_effective_area_path)
@@ -91,6 +100,7 @@ class SwapiResponse:
             ),
             passband_fit_coefficients=coeffs_df,
             passband_esa_voltage_limits=esa_limits,
+            efficiency_table=EfficiencyCalibrationTable(efficiency_table_path),
         )
 
     def _get_central_effective_area(self, esa_voltage: float) -> float:
@@ -123,14 +133,16 @@ class SwapiResponse:
 
     def get_response_grid(
         self,
+        time_as_tt2000: int,
         esa_voltage: float,
-        mass_per_charge_m_p_per_e: float,
-        central_effective_area_scale: float = 1.0,
+        species: Species,
     ) -> ResponseGrid:
+        relative_efficiency = self._efficiency_table.relative_efficiency(time_as_tt2000, species)
+
         cache_key = (
             self._cache_key(float(esa_voltage)),
-            self._cache_key(float(mass_per_charge_m_p_per_e)),
-            self._cache_key(float(central_effective_area_scale)),
+            species,
+            self._cache_key(float(relative_efficiency)),
         )
 
         cached = self._response_grid_cache.get(cache_key)
@@ -145,21 +157,12 @@ class SwapiResponse:
             )
         passband_pair = self._passband_grid_cache[passband_cache_key]
 
-        sg_passband = passband_pair["SG"]
-        oa_passband = passband_pair["OA"]
-
         response_grid = ResponseGrid(
-            sg_passband=sg_passband,
-            oa_passband=oa_passband,
-            central_speed=self._central_speed(esa_voltage, mass_per_charge_m_p_per_e),
-            central_effective_area=(
-                self._get_central_effective_area(esa_voltage)
-                * float(central_effective_area_scale)
-            ),
-            azimuthal_transmission=AzimuthalTransmissionGrid(
-                values=np.asarray(self._azimuthal_transmission, dtype=float),
-                spacing=float(self.AZIMUTHAL_TRANSMISSION_SPACING_DEG),
-            ),
+            sg_passband=passband_pair["SG"],
+            oa_passband=passband_pair["OA"],
+            central_speed=self._central_speed(esa_voltage, species.mass_per_charge_m_p_per_e),
+            central_effective_area=self._get_central_effective_area(esa_voltage) * relative_efficiency,
+            azimuthal_transmission=self._azimuthal_transmission_grid,
         )
 
         self._response_grid_cache[cache_key] = response_grid

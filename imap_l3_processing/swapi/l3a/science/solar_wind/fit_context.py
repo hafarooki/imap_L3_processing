@@ -5,6 +5,7 @@ import numpy as np
 from numpy import ndarray
 
 from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
+from imap_l3_processing.swapi.species import Species
 
 
 class SolarWindFitContext(NamedTuple):
@@ -33,10 +34,9 @@ def build_solar_wind_fit_context(
     count_rate: ndarray,
     esa_voltage: ndarray,
     swapi_response: SwapiResponse,
-    central_effective_area_scale: float,
+    time_as_tt2000: int,
+    species: Species,
     rotation_matrices: ndarray,
-    mass_kg: float,
-    mass_per_charge_m_p_per_e: float,
 ) -> SolarWindFitContext:
     flat_voltage = esa_voltage.ravel()
     if not np.all((flat_voltage > 0) & np.isfinite(flat_voltage)):
@@ -49,9 +49,7 @@ def build_solar_wind_fit_context(
 
     response_grids = numba.typed.List(
         [
-            swapi_response.get_response_grid(
-                v, mass_per_charge_m_p_per_e, central_effective_area_scale
-            )
+            swapi_response.get_response_grid(time_as_tt2000, v, species)
             for v in flat_voltage
         ]
     )
@@ -61,5 +59,5 @@ def build_solar_wind_fit_context(
         esa_voltage=esa_voltage,
         response_grids=response_grids,
         rotation_matrices=rotation_matrices,
-        mass_kg=float(mass_kg),
+        mass_kg=species.mass_kg,
     )

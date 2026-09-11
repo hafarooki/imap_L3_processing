@@ -4,10 +4,6 @@ from unittest.mock import patch
 import numpy as np
 import scipy.optimize
 
-from imap_l3_processing.constants import (
-    PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
-)
 from imap_l3_processing.swapi.l3a.science.solar_wind.fit_context import (
     build_solar_wind_fit_context,
 )
@@ -19,7 +15,9 @@ from imap_l3_processing.swapi.l3a.science.solar_wind.params import (
     N_STATE,
     SolarWindParams,
 )
+from imap_l3_processing.swapi.species import Species
 from tests.swapi._helpers import (
+    NOMINAL_TEST_EPOCH_TT2000,
     NOMINAL_SWAPI_TO_RTN_ROTATION,
     REALISTIC_ESA_VOLTAGES,
     load_swapi_response,
@@ -38,10 +36,9 @@ def _build_proton_fit_context(count_rate: np.ndarray):
         count_rate=count_rate,
         esa_voltage=REALISTIC_ESA_VOLTAGES,
         swapi_response=response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
 
 

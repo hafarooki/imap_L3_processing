@@ -199,7 +199,10 @@ class TestSwapiL3ADependencies(unittest.TestCase):
         mock_inflow_vector_from_file.assert_has_calls(
             [call(hydrogen_vector_path), call(helium_vector_path)])
         mock_swapi_response_from_files.assert_called_once_with(
-            azimuthal_transmission_path, central_effective_area_path, passband_fit_coefficients_path)
+            azimuthal_transmission_path=azimuthal_transmission_path,
+            central_effective_area_path=central_effective_area_path,
+            passband_fit_coefficients_path=passband_fit_coefficients_path,
+            efficiency_table_path=efficiency_path)
         mock_read_mag_rtn_data.assert_called_once_with(mag_path)
 
         self.assertEqual(expected_dependencies, actual_dependencies)

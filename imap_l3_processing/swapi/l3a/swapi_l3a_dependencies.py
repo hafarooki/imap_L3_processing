@@ -78,7 +78,10 @@ class SwapiL3ADependencies:
             hydrogen_inflow_vector=InflowVector.from_file(hydrogen_inflow_vector_path),
             helium_inflow_vector=InflowVector.from_file(helium_inflow_vector_path),
             swapi_response=SwapiResponse.from_files(
-                azimuthal_transmission_path, central_effective_area_path, passband_fit_coefficients_path),
+                azimuthal_transmission_path=azimuthal_transmission_path,
+                central_effective_area_path=central_effective_area_path,
+                passband_fit_coefficients_path=passband_fit_coefficients_path,
+                efficiency_table_path=efficiency_calibration_path),
             mag_data=read_mag_rtn_data(mag_path) if mag_path is not None else None,
             mag_is_preliminary=mag_is_preliminary,
         )

@@ -2,13 +2,13 @@
     "test_spectral_fit_against_validation_data": "2026-09-01T16:06:39.113743",
     "test_calculate_pickup_ions_with_minimize": "2026-05-20T10:52:46.704900",
     "test_codice_lo_3d_distributions": "2026-05-28T09:43:22.990231",
-    "test_alpha_sigma_matches_empirical_std": "2026-08-31T16:46:41.011309",
-    "test_proton_sigma_matches_empirical_std": "2026-08-31T16:46:59.276217",
     "test_swe_processor_with_local_data": "2026-09-04T11:25:12.936164",
     "test_ultra_all_sp_maps": "2026-09-01T16:09:11.600546",
     "test_ultra_combined_nsp_maps": "2026-09-04T11:21:50.126485",
     "test_ultra_combined_sp_maps": "2026-09-04T11:23:21.207647",
     "test_glows_l3abcde_from_l2": "2026-09-04T09:28:16.106080",
     "test_l3bcde_automatic_reprocessing": "2026-09-04T10:25:40.483342",
-    "test_l3bcde_first_time_processing": "2026-09-04T11:20:19.798340"
+    "test_l3bcde_first_time_processing": "2026-09-04T11:20:19.798340",
+    "test_proton_normalized_errors_are_standard": "2026-09-11T07:03:45.972349",
+    "test_alpha_normalized_errors_are_standard": "2026-09-11T07:04:12.297063"
 }

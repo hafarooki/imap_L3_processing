@@ -16,7 +16,7 @@ from imap_l3_processing.swapi.response.azimuthal_transmission import (
     validate_azimuthal_transmission_values,
 )
 from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
-from tests.test_helpers import get_test_instrument_team_data_path
+from tests.test_helpers import get_test_instrument_team_data_path, get_test_data_path
 
 _TRANSMISSION_CSV = get_test_instrument_team_data_path(
     "swapi/imap_swapi_azimuthal-transmission_20260425_v001.csv"
@@ -251,12 +251,15 @@ class TestSwapiResponseRejectsInvalidTransmissionCsv(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 SwapiResponse.from_files(
-                    bad_csv_path,
-                    get_test_instrument_team_data_path(
+                    azimuthal_transmission_path=bad_csv_path,
+                    central_effective_area_path=get_test_instrument_team_data_path(
                         "swapi/imap_swapi_central-effective-area_20260425_v001.csv"
                     ),
-                    get_test_instrument_team_data_path(
+                    passband_fit_coefficients_path=get_test_instrument_team_data_path(
                         "swapi/imap_swapi_passband-fit-coefficients_20260425_v001.csv"
+                    ),
+                    efficiency_table_path=get_test_data_path(
+                        "swapi/imap_swapi_efficiency-lut-test_20241020_v001.dat"
                     ),
                 )
 
