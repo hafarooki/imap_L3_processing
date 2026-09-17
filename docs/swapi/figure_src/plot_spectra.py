@@ -12,7 +12,7 @@ Each panel sweeps ESA voltage across the proton peak and overlays the dynamic-
 limit JIT integrator (calculate_integral) against the fixed-limit, high-resolution
 reference integrator (reference_integral_fixed_limits).
 
-Output: docs/swapi/figures/spectra.svg
+Output: docs/swapi/figures/spectra.png
 Usage:  python docs/swapi/figure_src/plot_spectra.py
 """
 
@@ -29,19 +29,21 @@ import numpy as np
 
 from imap_l3_processing.constants import (
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
     EV_TO_KELVIN,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind.forward_model import (
     calculate_integral,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind.params import SolarWindParams
+from imap_l3_processing.swapi.species import Species
 from scripts.swapi.reference_integral import reference_integral_fixed_limits
 from figure_utils import (
     FIGURES_DIR,
+    NOMINAL_EPOCH_TT2000,
     velocity_rtn_from_swapi_angles,
     load_swapi_response,
     peak_esa_voltage_for_proton_bulk_speed,
+    save_figure,
 )
 
 
@@ -118,7 +120,7 @@ def main():
         swapi_response.warm_cache(esa_voltages)
         for i, v in enumerate(esa_voltages):
             response_grid = swapi_response.get_response_grid(
-                float(v), PROTON_MASS_PER_CHARGE_M_P_PER_E, 1.0
+                NOMINAL_EPOCH_TT2000, float(v), Species.PROTON
             )
             rate, _ = calculate_integral(sw, response_grid, rotation_matrix)
             optimized[i] = rate
@@ -184,8 +186,8 @@ def main():
     fig.tight_layout(rect=[0, 0.03, 1, 1])
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    out = FIGURES_DIR / "spectra.svg"
-    fig.savefig(out, bbox_inches="tight")
+    out = FIGURES_DIR / "spectra.png"
+    save_figure(fig, out)
     print(f"Saved {out}")
 
 

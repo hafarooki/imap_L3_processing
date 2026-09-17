@@ -2,7 +2,7 @@
 """
 Plot the SWAPI central effective area and azimuthal transmission calibration curves.
 
-Output: docs/swapi/figures/calibration_curves.svg
+Output: docs/swapi/figures/calibration_curves.png
 Usage:  python docs/swapi/figure_src/plot_calibration_curves.py
 """
 
@@ -18,8 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
-from figure_utils import FIGURES_DIR, load_swapi_response
+from figure_utils import FIGURES_DIR, load_swapi_response, save_figure
 
 _AREA_CSV = (
     Path(__file__).resolve().parents[3]
@@ -36,10 +35,9 @@ def main():
     voltages = area_df["esa_voltage"].to_numpy()
     eff_area = area_df["effective_area"].to_numpy()
 
-    transmission = swapi_response._azimuthal_transmission
-    azimuths = (
-        np.arange(len(transmission)) * SwapiResponse.AZIMUTHAL_TRANSMISSION_SPACING_DEG
-    )
+    transmission_grid = swapi_response._azimuthal_transmission_grid
+    transmission = transmission_grid.values
+    azimuths = np.arange(len(transmission)) * transmission_grid.spacing
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
 
@@ -70,8 +68,8 @@ def main():
 
     fig.tight_layout()
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    out = FIGURES_DIR / "calibration_curves.svg"
-    fig.savefig(out, bbox_inches="tight")
+    out = FIGURES_DIR / "calibration_curves.png"
+    save_figure(fig, out)
     print(f"Saved {out}")
 
 

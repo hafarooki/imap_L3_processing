@@ -18,7 +18,7 @@ Generate the CSV first:
   conda run -n imapL3 python scripts/swapi/sample_wind_solar_wind.py \
       --year 2025 --n 10000 --seed 7
 
-Output: docs/swapi/figures/fit_accuracy.svg
+Output: docs/swapi/figures/fit_accuracy.png
 Usage:  conda run -n imapL3 python docs/swapi/figure_src/plot_fit_accuracy.py
 """
 
@@ -39,16 +39,17 @@ import matplotlib.pyplot as plt
 
 from imap_l3_processing.constants import (
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.constants import SWAPI_LIVETIME_S
 from figure_utils import (
+    NOMINAL_EPOCH_TT2000,
     COARSE_BIN_INDICES_IN_SWEEP,
     COARSE_SWEEP_VOLTAGES_MEAN_V,
     REPO_ROOT,
     compute_per_bin_rotation_matrices,
     load_swapi_response,
     run_parallel_map,
+    save_figure,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind.proton.fit_solar_wind_proton_model import (
     fit_solar_wind_proton_model,
@@ -64,6 +65,7 @@ from imap_l3_processing.swapi.l3a.science.solar_wind.fit_context import (
     build_solar_wind_fit_context,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind.params import SolarWindParams
+from imap_l3_processing.swapi.species import Species
 
 _N_SWEEPS = 5
 _N_BINS = len(COARSE_SWEEP_VOLTAGES_MEAN_V)
@@ -107,8 +109,11 @@ def _initialize_worker_state(ground_truth_params: tuple[np.ndarray, ...]) -> Non
     )
 
     swapi_response = load_swapi_response()
-    all_esa_voltages = np.tile(COARSE_SWEEP_VOLTAGES_MEAN_V, _N_SWEEPS)
-    swapi_response.warm_cache(all_esa_voltages)
+    # Claude: the fit context is indexed as (n_sweeps, n_bins) by
+    # SolarWindFitContext.subset and by the coarse-peak r-squared helper, so
+    # the voltages and count rates have to keep that shape, not be flattened.
+    all_esa_voltages = np.tile(COARSE_SWEEP_VOLTAGES_MEAN_V, (_N_SWEEPS, 1))
+    swapi_response.warm_cache(all_esa_voltages.ravel())
     per_bin_rotation_matrices = compute_per_bin_rotation_matrices(
         _N_SWEEPS, COARSE_BIN_INDICES_IN_SWEEP
     )
@@ -116,10 +121,9 @@ def _initialize_worker_state(ground_truth_params: tuple[np.ndarray, ...]) -> Non
         count_rate=np.ones_like(all_esa_voltages),
         esa_voltage=all_esa_voltages,
         swapi_response=swapi_response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=per_bin_rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     _worker_state = types.SimpleNamespace(
         ground_truth_params=ground_truth_params,
@@ -165,15 +169,17 @@ def _process_one(i):
         .astype(float)
         / SWAPI_LIVETIME_S
     )
+    # Claude: the forward model returns one flat rate per response grid; the fit
+    # Claude: context wants them back on the (n_sweeps, n_bins) grid.
+    count_rates = count_rates.reshape(ws.all_esa_voltages.shape)
 
     fit_ctx = build_solar_wind_fit_context(
         count_rate=count_rates,
         esa_voltage=ws.all_esa_voltages,
         swapi_response=ws.swapi_response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=ws.per_bin_rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     try:
         initial_guess = calculate_initial_guess(fit_ctx)
@@ -315,7 +321,7 @@ def _plot_results(data: pd.DataFrame) -> None:
             marker="o",
             zorder=2,
             label="Initial guess",
-            rasterized=True
+            rasterized=True,
         )
         ax.errorbar(
             truth[good],
@@ -344,7 +350,7 @@ def _plot_results(data: pd.DataFrame) -> None:
                 edgecolors="k",
                 linewidths=0.4,
                 zorder=4,
-                rasterized=True
+                rasterized=True,
             )
             ax.scatter(
                 truth[~good],
@@ -356,7 +362,7 @@ def _plot_results(data: pd.DataFrame) -> None:
                 edgecolors="k",
                 linewidths=0.4,
                 zorder=4,
-                rasterized=True
+                rasterized=True,
             )
 
         ax.set_xlabel(f"True {label}", fontsize=9)
@@ -385,8 +391,8 @@ def _plot_results(data: pd.DataFrame) -> None:
 
     out_dir = REPO_ROOT / "docs" / "swapi" / "figures"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "fit_accuracy.svg"
-    fig.savefig(out_path, bbox_inches="tight", dpi=200)
+    out_path = out_dir / "fit_accuracy.png"
+    save_figure(fig, out_path, dpi=200)
     print(f"Saved {out_path}")
 
 

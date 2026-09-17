@@ -6,6 +6,7 @@ Exposes two helpers for reuse by other scripts:
 - `evaluate_pui_sweep_xarray(...)` evaluates the V-S PUI count rate for one
   sweep at fitted (or truth) parameters.
 """
+
 import os
 import sys
 from dataclasses import dataclass
@@ -80,8 +81,7 @@ def build_pui_xarray_context(
         .pipe(lambda da: da.assign_coords(degree=da["degree"].astype(int)))
     )
     source_speed_ratio = np.sqrt(
-        passband_coefficients["energy_ratio"].values
-        / K_FACTOR.to("eV/V/e").magnitude
+        passband_coefficients["energy_ratio"].values / K_FACTOR.to("eV/V/e").magnitude
     )
     passband_coefficients = (
         passband_coefficients.assign_coords(
@@ -92,11 +92,15 @@ def build_pui_xarray_context(
     )
 
     az_transmission_native = (
-        pd.read_csv(azimuthal_transmission_path)
-        .fillna(0)
-        .set_index("abs_azimuth")
-        .transmission.to_xarray()
-    ).coarsen(abs_azimuth=10, boundary="trim").mean()
+        (
+            pd.read_csv(azimuthal_transmission_path)
+            .fillna(0)
+            .set_index("abs_azimuth")
+            .transmission.to_xarray()
+        )
+        .coarsen(abs_azimuth=10, boundary="trim")
+        .mean()
+    )
 
     density_data = np.loadtxt(density_of_neutral_helium_lut_path)
     psi_axis, r_axis = np.unique(density_data[:, 0]), np.unique(density_data[:, 1])
@@ -116,9 +120,7 @@ def build_pui_xarray_context(
 
     abs_azimuth_axis = az_transmission_native["abs_azimuth"].values
     transmission_values = az_transmission_native.values
-    signed_azimuth_axis = np.concatenate(
-        [-abs_azimuth_axis[:0:-1], abs_azimuth_axis]
-    )
+    signed_azimuth_axis = np.concatenate([-abs_azimuth_axis[:0:-1], abs_azimuth_axis])
     azimuth_deg = xr.DataArray(
         signed_azimuth_axis,
         dims="azimuth_deg",
@@ -152,7 +154,8 @@ def build_pui_xarray_context(
         xr.polyval(log_beam_energy, passband_coefficients, degree_dim="degree")
     ).fillna(0)
     passband_per_region = passband_per_region / passband_per_region.interp(
-        elevation_deg=0.0, speed_ratio=1.0,
+        elevation_deg=0.0,
+        speed_ratio=1.0,
     )
     azimuth_is_sg = np.abs(azimuth_deg) <= 20
     passband_full = xr.where(
@@ -219,9 +222,7 @@ def evaluate_pui_sweep_xarray(
     v_dot_vsw = xr.dot(context.direction, v_sw, dim="cartesian")
     speed_sw = np.sqrt(
         np.maximum(
-            context.speed_grid**2
-            + v_sw_speed**2
-            - 2 * context.speed_grid * v_dot_vsw,
+            context.speed_grid**2 + v_sw_speed**2 - 2 * context.speed_grid * v_dot_vsw,
             Q(0, "km**2/s**2"),
         )
     )
@@ -231,7 +232,9 @@ def evaluate_pui_sweep_xarray(
     term4 = (
         context.density_table.pint.interp(
             psi=(psi % Q(360, "deg")).magnitude,
-            r=(heliocentric_distance * w**cooling_index).pint.to("au").pint.dequantify(),
+            r=(heliocentric_distance * w**cooling_index)
+            .pint.to("au")
+            .pint.dequantify(),
         )
         .drop_vars(["psi", "r"])
         .fillna(0)
@@ -257,10 +260,8 @@ if __name__ == "__main__":
     import spiceypy
 
     from imap_l3_processing.constants import (
-        ALPHA_MASS_PER_CHARGE_M_P_PER_E,
         ALPHA_PARTICLE_MASS_KG,
         PROTON_MASS_KG,
-        PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     from imap_l3_processing.swapi.constants import SWAPI_L2_K_FACTOR
     from imap_l3_processing.swapi.l3a.science.solar_wind.fit_context import (
@@ -271,9 +272,13 @@ if __name__ == "__main__":
     )
     from imap_l3_processing.swapi.l3a.science.solar_wind.params import SolarWindParams
     from imap_l3_processing.swapi.response.deadtime import deadtime_factor
+    from imap_l3_processing.swapi.species import Species
     from imap_l3_processing.utils import SpiceKernelTypes, furnish_spice_metakernel
-    from tests.swapi._helpers import load_swapi_response
-    from tests.test_helpers import get_test_data_path, get_test_instrument_team_data_path
+    from tests.swapi._helpers import NOMINAL_TEST_EPOCH_TT2000, load_swapi_response
+    from tests.test_helpers import (
+        get_test_data_path,
+        get_test_instrument_team_data_path,
+    )
 
     OUTPUT_PATH = get_test_data_path("swapi/pui_count_rate_reference_50sweep.h5")
 
@@ -291,9 +296,7 @@ if __name__ == "__main__":
     # that window so the spin phase advances across the steps.
     TOTAL_COARSE_DURATION_S = SWEEP_DURATION_S * N_ESA_STEPS_PER_SWEEP / 72
     STEP_DURATION_S = TOTAL_COARSE_DURATION_S / N_ESA_STEPS_PER_SWEEP
-    END_TIME_UTC = START_TIME_UTC + timedelta(
-        seconds=SWEEP_DURATION_S * N_SWEEPS + 60
-    )
+    END_TIME_UTC = START_TIME_UTC + timedelta(seconds=SWEEP_DURATION_S * N_SWEEPS + 60)
 
     # Truth values are chosen well inside every fit bound so frozen-value
     # integration tests are not sensitive to LM termination next to a wall:
@@ -397,7 +400,9 @@ if __name__ == "__main__":
             solar_wind_speed_inertial_kms=SW_SPEED_INERTIAL_KMS,
         )
 
-    print("Computing proton + alpha Maxwellian shoulder via production forward model...")
+    print(
+        "Computing proton + alpha Maxwellian shoulder via production forward model..."
+    )
     voltage_repeated = np.broadcast_to(
         pui_context.voltages_v, (N_SWEEPS, N_ESA_STEPS_PER_SWEEP)
     ).ravel()
@@ -420,19 +425,17 @@ if __name__ == "__main__":
         count_rate=np.zeros(voltage_repeated.size),
         esa_voltage=voltage_repeated,
         swapi_response=swapi_response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=rotation_flat,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     alpha_ctx = build_solar_wind_fit_context(
         count_rate=np.zeros(voltage_repeated.size),
         esa_voltage=voltage_repeated,
         swapi_response=swapi_response,
-        central_effective_area_scale=HELIUM_EFFICIENCY_RATIO,
+        time_as_tt2000=NOMINAL_TEST_EPOCH_TT2000,
+        species=Species.ALPHA,
         rotation_matrices=rotation_flat,
-        mass_kg=ALPHA_PARTICLE_MASS_KG,
-        mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     )
     proton_ideal, _ = model_solar_wind_ideal_coincidence_rates(proton_truth, proton_ctx)
     alpha_ideal, _ = model_solar_wind_ideal_coincidence_rates(alpha_truth, alpha_ctx)

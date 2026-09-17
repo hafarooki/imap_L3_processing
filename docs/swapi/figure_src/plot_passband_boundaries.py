@@ -11,7 +11,13 @@ import numpy as np
 
 from imap_l3_processing.swapi.response.passband_grid import PassbandGrid
 from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
-from figure_utils import FIGURES_DIR, load_swapi_response
+from imap_l3_processing.swapi.species import Species
+from figure_utils import (
+    FIGURES_DIR,
+    NOMINAL_EPOCH_TT2000,
+    load_swapi_response,
+    save_figure,
+)
 
 _ELEVATION_DISPLAY_LIMIT_DEG = 15.0
 _ACTIVE_ELEVATION_SAMPLE_COUNT = 300
@@ -30,7 +36,9 @@ def main():
 
     last_image = None
     for column, esa_voltage in enumerate(esa_voltages):
-        response_grid = swapi_response.get_response_grid(esa_voltage, 1.0)
+        response_grid = swapi_response.get_response_grid(
+            NOMINAL_EPOCH_TT2000, esa_voltage, Species.PROTON
+        )
         central_speed = response_grid.central_speed
 
         for row, region in enumerate(["open_aperture", "sunglasses"]):
@@ -51,8 +59,8 @@ def main():
     colorbar.set_label("Passband value")
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = FIGURES_DIR / "passband_boundaries.svg"
-    figure.savefig(output_path, bbox_inches="tight")
+    output_path = FIGURES_DIR / "passband_boundaries.png"
+    save_figure(figure, output_path)
     print(f"Saved {output_path}")
 
 
@@ -85,9 +93,7 @@ def plot_region_panel(
         grid, grid.max_boundary, active_elevations, np.maximum
     )
 
-    image = draw_transmission_heatmap(
-        axis, grid.values, elevations, speed_ratios
-    )
+    image = draw_transmission_heatmap(axis, grid.values, elevations, speed_ratios)
     draw_integration_window_outline(
         axis, active_elevations, lower_speed_ratios, upper_speed_ratios
     )

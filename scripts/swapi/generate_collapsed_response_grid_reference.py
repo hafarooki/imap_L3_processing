@@ -34,15 +34,21 @@ from imap_l3_processing.swapi.response.azimuthal_transmission import (
     interpolate_azimuthal_transmission,
 )
 from imap_l3_processing.swapi.response.passband_grid import interpolate_passband
-from tests.swapi._helpers import load_swapi_response
+from imap_l3_processing.swapi.species import Species
+from tests.swapi._helpers import NOMINAL_TEST_EPOCH_TT2000, load_swapi_response
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _OUTPUT_PATH = (
-    _REPO_ROOT / "tests" / "test_data" / "swapi" / "collapsed_response_grid_reference.csv"
+    _REPO_ROOT
+    / "tests"
+    / "test_data"
+    / "swapi"
+    / "collapsed_response_grid_reference.csv"
 )
 
 _N_POINTS = 256
 _ESA_VOLTAGE = 5000.0
+_SPECIES = Species.HELIUM_PLUS
 _MASS_PER_CHARGE = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 _BULK_SPEED = 450.0
 _BULK_AZIMUTH_DEG = 5.0
@@ -67,17 +73,20 @@ def shell_integral_h(
     central_speed = float(response_grid.central_speed)
 
     # SWAPI convention: hat{v}(θ,φ) = (-cosθ sinφ, -cosθ cosφ, -sinθ).
-    bulk_direction = np.array([
-        -math.cos(bulk_elevation) * math.sin(bulk_azimuth),
-        -math.cos(bulk_elevation) * math.cos(bulk_azimuth),
-        -math.sin(bulk_elevation),
-    ])
+    bulk_direction = np.array(
+        [
+            -math.cos(bulk_elevation) * math.sin(bulk_azimuth),
+            -math.cos(bulk_elevation) * math.cos(bulk_azimuth),
+            -math.sin(bulk_elevation),
+        ]
+    )
     velocity = bulk_speed * bulk_direction
 
     # cos-α band from |v|² = v_sw² + v'² + 2 v_sw v' cos α (law of cosines).
     cos_alpha_bounds = (
         (np.array([_SPEED_RATIO_MIN, _SPEED_RATIO_MAX]) * central_speed) ** 2
-        - bulk_speed**2 - v_prime**2
+        - bulk_speed**2
+        - v_prime**2
     ) / (2.0 * bulk_speed * v_prime)
     if cos_alpha_bounds[0] >= 1.0 or cos_alpha_bounds[1] <= -1.0:
         return 0.0
@@ -85,16 +94,29 @@ def shell_integral_h(
 
     # Right-handed orthonormal frame with bulk_direction as polar axis.
     e_in_xy = np.array([-math.cos(bulk_azimuth), math.sin(bulk_azimuth), 0.0])
-    rotation = np.column_stack([e_in_xy, np.cross(bulk_direction, e_in_xy), bulk_direction])
+    rotation = np.column_stack(
+        [e_in_xy, np.cross(bulk_direction, e_in_xy), bulk_direction]
+    )
 
     def integrate(passband, azimuth_min_deg, azimuth_max_deg):
         return dblquad(
             lambda alpha, beta: _shell_integrand(
-                alpha, beta, velocity, rotation, v_prime, response_grid,
-                passband, azimuth_min_deg, azimuth_max_deg,
+                alpha,
+                beta,
+                velocity,
+                rotation,
+                v_prime,
+                response_grid,
+                passband,
+                azimuth_min_deg,
+                azimuth_max_deg,
             ),
-            0.0, 2.0 * math.pi, alpha_min, alpha_max,
-            epsabs=1e-13, epsrel=1e-3,
+            0.0,
+            2.0 * math.pi,
+            alpha_min,
+            alpha_max,
+            epsabs=1e-13,
+            epsrel=1e-3,
         )[0]
 
     return (
@@ -106,8 +128,15 @@ def shell_integral_h(
 
 @numba.njit
 def _shell_integrand(
-    alpha, beta, velocity, rotation, v_prime, response_grid,
-    passband, azimuth_min_deg, azimuth_max_deg,
+    alpha,
+    beta,
+    velocity,
+    rotation,
+    v_prime,
+    response_grid,
+    passband,
+    azimuth_min_deg,
+    azimuth_max_deg,
 ):
     # `alpha`: polar angle on the shell from bulk-velocity direction;
     #   caller restricts to the α-band where the shell crosses
@@ -119,21 +148,33 @@ def _shell_integrand(
     local_x = sin_alpha * math.cos(beta)
     local_y = sin_alpha * math.sin(beta)
     local_z = math.cos(alpha)
-    shell_x = rotation[0, 0] * local_x + rotation[0, 1] * local_y + rotation[0, 2] * local_z
-    shell_y = rotation[1, 0] * local_x + rotation[1, 1] * local_y + rotation[1, 2] * local_z
-    shell_z = rotation[2, 0] * local_x + rotation[2, 1] * local_y + rotation[2, 2] * local_z
+    shell_x = (
+        rotation[0, 0] * local_x + rotation[0, 1] * local_y + rotation[0, 2] * local_z
+    )
+    shell_y = (
+        rotation[1, 0] * local_x + rotation[1, 1] * local_y + rotation[1, 2] * local_z
+    )
+    shell_z = (
+        rotation[2, 0] * local_x + rotation[2, 1] * local_y + rotation[2, 2] * local_z
+    )
     vx = velocity[0] + v_prime * shell_x
     vy = velocity[1] + v_prime * shell_y
     vz = velocity[2] + v_prime * shell_z
     speed = math.sqrt(vx * vx + vy * vy + vz * vz)
-    azimuth_deg, elevation_deg = velocity_components_to_angles_in_instrument_frame(vx, vy, vz)
+    azimuth_deg, elevation_deg = velocity_components_to_angles_in_instrument_frame(
+        vx, vy, vz
+    )
     if not (azimuth_min_deg <= azimuth_deg <= azimuth_max_deg):
         return 0.0
     effective_area = (
         response_grid.central_effective_area
         * _EFFECTIVE_AREA_CM2_TO_KM2
-        * interpolate_passband(passband, elevation_deg, speed / response_grid.central_speed)
-        * interpolate_azimuthal_transmission(response_grid.azimuthal_transmission, azimuth_deg)
+        * interpolate_passband(
+            passband, elevation_deg, speed / response_grid.central_speed
+        )
+        * interpolate_azimuthal_transmission(
+            response_grid.azimuthal_transmission, azimuth_deg
+        )
     )
     # H is an angular integral (docs convention); dα dβ comes from dblquad, so
     # only the sin α solid-angle factor is multiplied in here.
@@ -160,13 +201,12 @@ def _worker_compute(v_prime):
 
 
 def main():
-    print(f"Loading SWAPI response and warming cache at V={_ESA_VOLTAGE}...", flush=True)
-    swapi_response = load_swapi_response(
-        warm_cache_voltages=np.array([_ESA_VOLTAGE])
+    print(
+        f"Loading SWAPI response and warming cache at V={_ESA_VOLTAGE}...", flush=True
     )
+    swapi_response = load_swapi_response(warm_cache_voltages=np.array([_ESA_VOLTAGE]))
     response_grid = swapi_response.get_response_grid(
-        esa_voltage=_ESA_VOLTAGE,
-        mass_per_charge_m_p_per_e=_MASS_PER_CHARGE,
+        NOMINAL_TEST_EPOCH_TT2000, _ESA_VOLTAGE, _SPECIES
     )
 
     v_prime_min, v_prime_max = solar_wind_frame_speed_range(

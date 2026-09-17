@@ -1,13 +1,17 @@
 """Shared helpers for the SWAPI documentation figures."""
 
+import io
 import multiprocessing
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, TypeVar
 
 import numpy as np
+from PIL import Image
+from spacepy import pycdf
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
@@ -22,15 +26,93 @@ from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
 
 FIGURES_DIR = REPO_ROOT / "docs" / "swapi" / "figures"
 
+
+def require_imap_api_key() -> None:
+    if not os.environ.get("IMAP_API_KEY"):
+        raise SystemExit("IMAP_API_KEY is not set")
+
+
+DEFAULT_PNG_DPI = 100
+DEFAULT_PNG_PALETTE_COLORS = 256
+
+
+def save_figure(
+    figure,
+    output_path: Path,
+    *,
+    dpi: int = DEFAULT_PNG_DPI,
+    palette_colors: int | None = DEFAULT_PNG_PALETTE_COLORS,
+    **savefig_kwargs,
+) -> Path:
+    """Write `figure` to `output_path` as a PNG, byte-identical across runs.
+
+    The figure is rasterized at `dpi` and, unless `palette_colors` is None,
+    reduced to that many indexed colours: the figures are flat-colour line art,
+    which loses nothing visible and stores about three times smaller.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    savefig_kwargs.setdefault("bbox_inches", "tight")
+
+    if output_path.suffix != ".png":
+        raise ValueError(f"Unsupported figure format: {output_path.suffix!r}")
+
+    # Claude: rasterize into memory so the bytes on disk are always written by
+    # Pillow, which keeps no timestamp or renderer-version chunks.
+    savefig_kwargs["dpi"] = dpi
+    buffer = io.BytesIO()
+    figure.savefig(buffer, format="png", **savefig_kwargs)
+    buffer.seek(0)
+    with Image.open(buffer) as rendered:
+        if palette_colors is None:
+            rendered.save(output_path, optimize=True)
+        else:
+            # Claude: quantize() needs RGB, and the flattened figure is opaque.
+            opaque = rendered.convert("RGB")
+            opaque.quantize(colors=palette_colors).save(output_path, optimize=True)
+    return output_path
+
+
 _INSTRUMENT_DATA_DIR = REPO_ROOT / "instrument_team_data" / "swapi"
+_EFFICIENCY_TABLE_PATH = (
+    REPO_ROOT
+    / "tests"
+    / "test_data"
+    / "swapi"
+    / "imap_swapi_efficiency-lut-test_20241020_v001.dat"
+)
 
 
 def load_swapi_response() -> SwapiResponse:
     return SwapiResponse.from_files(
-        _INSTRUMENT_DATA_DIR / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
-        _INSTRUMENT_DATA_DIR / "imap_swapi_central-effective-area_20260425_v001.csv",
-        _INSTRUMENT_DATA_DIR / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
+        azimuthal_transmission_path=_INSTRUMENT_DATA_DIR
+        / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
+        central_effective_area_path=_INSTRUMENT_DATA_DIR
+        / "imap_swapi_central-effective-area_20260425_v001.csv",
+        passband_fit_coefficients_path=_INSTRUMENT_DATA_DIR
+        / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
+        efficiency_table_path=_EFFICIENCY_TABLE_PATH,
     )
+
+
+def find_sweep_start_index(cdf_path: Path, sweep_start_time_utc: str) -> int:
+    """Return the index of the sweep whose `sci_start_time` is `sweep_start_time_utc`.
+
+    Pinning a figure's input block by timestamp instead of by sweep index keeps
+    the figure reproducible across reprocessing: the plot scripts query the L2
+    with `version="latest"`, and a reprocessed file can gain or lose sweeps at
+    either end, which shifts every positional index.
+    """
+    with pycdf.CDF(str(cdf_path)) as cdf:
+        sweep_start_times = [str(t) for t in cdf["sci_start_time"][...]]
+    # Claude: sci_start_time is the sweep start; `epoch` is the sweep centre.
+    matches = [i for i, t in enumerate(sweep_start_times) if t == sweep_start_time_utc]
+    if not matches:
+        raise SystemExit(
+            f"No sweep starting at {sweep_start_time_utc} in {cdf_path.name}. "
+            f"File covers {sweep_start_times[0]} .. {sweep_start_times[-1]}."
+        )
+    return matches[0]
 
 
 SWEEP_DURATION_S = 12.0
@@ -42,14 +124,68 @@ COARSE_BIN_INDICES_IN_SWEEP = np.arange(1, 63)
 
 COARSE_SWEEP_VOLTAGES_MEAN_V = np.array(
     [
-        9895.52, 9088.69, 8348.80, 7667.55, 7042.16, 6469.31, 5941.77, 5457.31,
-        5013.22, 4603.65, 4230.77, 3886.92, 3569.16, 3278.72, 3011.13, 2766.25,
-        2539.54, 2333.83, 2144.24, 1969.31, 1808.74, 1660.86, 1525.75, 1401.82,
-        1287.58, 1182.24, 1085.15, 995.55, 914.31, 839.94, 771.70, 709.46,
-        651.59, 598.47, 549.91, 505.12, 463.89, 425.92, 391.18, 359.35,
-        329.94, 303.02, 278.25, 255.55, 234.77, 215.61, 197.95, 181.82,
-        167.04, 153.46, 140.91, 129.50, 118.91, 109.20, 100.30, 92.11,
-        84.61, 77.73, 71.40, 65.59, 60.23, 55.34,
+        9895.52,
+        9088.69,
+        8348.80,
+        7667.55,
+        7042.16,
+        6469.31,
+        5941.77,
+        5457.31,
+        5013.22,
+        4603.65,
+        4230.77,
+        3886.92,
+        3569.16,
+        3278.72,
+        3011.13,
+        2766.25,
+        2539.54,
+        2333.83,
+        2144.24,
+        1969.31,
+        1808.74,
+        1660.86,
+        1525.75,
+        1401.82,
+        1287.58,
+        1182.24,
+        1085.15,
+        995.55,
+        914.31,
+        839.94,
+        771.70,
+        709.46,
+        651.59,
+        598.47,
+        549.91,
+        505.12,
+        463.89,
+        425.92,
+        391.18,
+        359.35,
+        329.94,
+        303.02,
+        278.25,
+        255.55,
+        234.77,
+        215.61,
+        197.95,
+        181.82,
+        167.04,
+        153.46,
+        140.91,
+        129.50,
+        118.91,
+        109.20,
+        100.30,
+        92.11,
+        84.61,
+        77.73,
+        71.40,
+        65.59,
+        60.23,
+        55.34,
     ]
 )
 
@@ -118,7 +254,11 @@ def run_parallel_map(
     """
     if multiprocessing.get_start_method(allow_none=True) != "fork":
         multiprocessing.set_start_method("fork", force=True)
-    n_workers = os.cpu_count() or 1
+    # Claude: docs/update_figures.py sets FIGURE_WORKER_PROCESSES so that nested
+    # pools share the machine when several figure scripts run side by side.
+    n_workers = int(os.environ.get("FIGURE_WORKER_PROCESSES") or 0) or (
+        os.cpu_count() or 1
+    )
     print(f"Running {n_items} {desc} across {n_workers} processes...")
     start = time.perf_counter()
     results: list[_T | None] = [None] * n_items
@@ -161,3 +301,6 @@ def velocity_rtn_from_swapi_angles(
             -bulk_speed_km_s * np.sin(el),
         ]
     )
+
+
+NOMINAL_EPOCH_TT2000 = pycdf.lib.datetime_to_tt2000(datetime(2026, 1, 1))

@@ -12,7 +12,7 @@ features the moment integrals depend on are visible:
     w) and the neutral-helium density n(r w^alpha) (which is depleted close to
     the Sun, i.e. small w), producing a peaked shell rather than a divergence.
 
-Output: docs/swapi/figures/pui_distribution.svg
+Output: docs/swapi/figures/pui_distribution.png
 Usage:  uv run python docs/swapi/figure_src/plot_pui_distribution.py
 """
 
@@ -28,15 +28,20 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from figure_utils import FIGURES_DIR
+from figure_utils import FIGURES_DIR, save_figure
 
 from imap_l3_processing.constants import ONE_AU_IN_KM
 from imap_l3_processing.swapi.l3a.science.pickup_ion.density_of_neutral_helium_lookup_table import (
     DensityOfNeutralHeliumLookupTable,
 )
+from imap_l3_processing.swapi.l3a.science.pickup_ion import (
+    vasyliunas_siscoe_distribution,
+)
+from imap_l3_processing.swapi.l3a.science.pickup_ion.uniform_speed_grid import (
+    UniformSpeedGrid,
+)
 from imap_l3_processing.swapi.l3a.science.pickup_ion.vasyliunas_siscoe_distribution import (
-    FittingParameters,
-    VasyliunasSiscoeDistribution,
+    vasyliunas_siscoe_vdf,
 )
 
 _CUTOFF_SPEED_KMS = 450.0
@@ -51,35 +56,39 @@ _DENSITY_LUT_PATH = (
 
 
 def main():
-    distribution = VasyliunasSiscoeDistribution(
-        ephemeris_time=0.0,
-        solar_wind_speed_inertial_frame=_SW_SPEED_INERTIAL_KMS,
-        density_of_neutral_helium_lookup_table=DensityOfNeutralHeliumLookupTable.from_file(
-            _DENSITY_LUT_PATH
-        ),
-        distance_km=ONE_AU_IN_KM,
-        psi=_INFLOW_PSI_DEG,
+    density_lookup_table = DensityOfNeutralHeliumLookupTable.from_file(
+        _DENSITY_LUT_PATH
     )
-
-    speed_in_sw_frame = np.linspace(1.0, 1.15 * _CUTOFF_SPEED_KMS, 1000)
+    speed_grid = UniformSpeedGrid(1.15 * _CUTOFF_SPEED_KMS)
 
     figure, axis = plt.subplots(figsize=(8, 4.5), constrained_layout=True)
     for cooling_index in _COOLING_INDICES:
-        params = FittingParameters(
-            cooling_index=cooling_index,
-            ionization_rate=_IONIZATION_RATE_HZ,
-            cutoff_speed=_CUTOFF_SPEED_KMS,
-            background_count_rate=0.0,
-        )
-        with np.errstate(all="ignore"):
-            f_pui = np.asarray(
-                distribution.f(speed_in_sw_frame, params, apply_cutoff=True),
-                dtype=float,
+        # Claude: production fixes the cooling index at the adiabatic 1.5, so the
+        # Claude: module constant is swapped out to draw the rest of the family.
+        original_cooling_index = vasyliunas_siscoe_distribution.SWAPI_PUI_COOLING_INDEX
+        vasyliunas_siscoe_distribution.SWAPI_PUI_COOLING_INDEX = cooling_index
+        try:
+            with np.errstate(all="ignore"):
+                f_pui = np.asarray(
+                    vasyliunas_siscoe_vdf(
+                        speed_grid,
+                        ionization_rate=_IONIZATION_RATE_HZ,
+                        cutoff_speed=_CUTOFF_SPEED_KMS,
+                        distance=ONE_AU_IN_KM,
+                        inflow_angle=_INFLOW_PSI_DEG,
+                        solar_wind_speed_inertial_frame=_SW_SPEED_INERTIAL_KMS,
+                        density_of_neutral_helium_lookup_table=density_lookup_table,
+                    ),
+                    dtype=float,
+                )
+        finally:
+            vasyliunas_siscoe_distribution.SWAPI_PUI_COOLING_INDEX = (
+                original_cooling_index
             )
         f_pui[~np.isfinite(f_pui)] = 0.0
         f_pui[f_pui <= 0.0] = np.nan
         axis.plot(
-            speed_in_sw_frame,
+            speed_grid.centers,
             f_pui,
             label=rf"$\alpha_\mathrm{{PUI}} = {cooling_index}$",
         )
@@ -92,16 +101,18 @@ def main():
         label=r"cutoff speed $v_b$",
     )
     axis.set_yscale("log")
-    axis.set_xlabel(r"Comoving speed $v' = \|\mathbf{v} - \mathbf{v}_\text{sw}\|$ [km/s]")
+    axis.set_xlabel(
+        r"Comoving speed $v' = \|\mathbf{v} - \mathbf{v}_\text{sw}\|$ [km/s]"
+    )
     axis.set_ylabel(r"$f_\text{PUI}(v')$ [s$^3$ km$^{-6}$]")
-    axis.set_xlim(speed_in_sw_frame[0], speed_in_sw_frame[-1])
+    axis.set_xlim(speed_grid.centers[0], speed_grid.centers[-1])
     axis.set_ylim(1e0, 1e4)
     axis.grid(True, alpha=0.3)
     axis.legend(loc="lower left")
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = FIGURES_DIR / "pui_distribution.svg"
-    figure.savefig(output_path, bbox_inches="tight")
+    output_path = FIGURES_DIR / "pui_distribution.png"
+    save_figure(figure, output_path)
     print(f"Saved {output_path}")
 
 

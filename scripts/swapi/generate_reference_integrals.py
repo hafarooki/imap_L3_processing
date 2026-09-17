@@ -37,21 +37,26 @@ from imap_l3_processing.constants import (
     METERS_PER_KILOMETER,
     PROTON_CHARGE_COULOMBS,
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind.params import SolarWindParams
 from imap_l3_processing.swapi.constants import SWAPI_K_FACTOR
 from imap_l3_processing.swapi.response.swapi_response import SwapiResponse
+from imap_l3_processing.swapi.species import Species
 from scripts.swapi.reference_integral import reference_integrals_batch
-from figure_utils import ANCHOR_ROTATION_SWAPI_TO_RTN
+from figure_utils import ANCHOR_ROTATION_SWAPI_TO_RTN, NOMINAL_EPOCH_TT2000
 
 _INSTRUMENT_DATA = _REPO_ROOT / "instrument_team_data" / "swapi"
+_EFFICIENCY_TABLE_PATH = (
+    _REPO_ROOT
+    / "tests"
+    / "test_data"
+    / "swapi"
+    / "imap_swapi_efficiency-lut-test_20241020_v001.dat"
+)
 _WIND_SAMPLES_PATH = (
     _REPO_ROOT / "docs" / "swapi" / "figure_src" / "wind_solar_wind_samples_2025.csv"
 )
-_OUTPUT_PATH = (
-    _REPO_ROOT / "tests" / "test_data" / "swapi" / "reference_integrals.csv"
-)
+_OUTPUT_PATH = _REPO_ROOT / "tests" / "test_data" / "swapi" / "reference_integrals.csv"
 
 
 def _peak_voltage(bulk_speed_km_s: float) -> float:
@@ -75,9 +80,13 @@ def main():
 
     print("Loading calibration data...")
     swapi_response = SwapiResponse.from_files(
-        _INSTRUMENT_DATA / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_central-effective-area_20260425_v001.csv",
-        _INSTRUMENT_DATA / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
+        azimuthal_transmission_path=_INSTRUMENT_DATA
+        / "imap_swapi_azimuthal-transmission_20260425_v001.csv",
+        central_effective_area_path=_INSTRUMENT_DATA
+        / "imap_swapi_central-effective-area_20260425_v001.csv",
+        passband_fit_coefficients_path=_INSTRUMENT_DATA
+        / "imap_swapi_passband-fit-coefficients_20260425_v001.csv",
+        efficiency_table_path=_EFFICIENCY_TABLE_PATH,
     )
 
     print(f"Building grids and SWParams for {n_samples} samples...")
@@ -90,13 +99,11 @@ def main():
         )
         for i in range(n_samples)
     ]
-    rotation_matrices = np.broadcast_to(
-        ANCHOR_ROTATION_SWAPI_TO_RTN, (n_samples, 3, 3)
-    )
+    rotation_matrices = np.broadcast_to(ANCHOR_ROTATION_SWAPI_TO_RTN, (n_samples, 3, 3))
     voltages = [_peak_voltage(float(v)) for v in bulk_speed]
     swapi_response.warm_cache(voltages)
     response_grids = [
-        swapi_response.get_response_grid(v, PROTON_MASS_PER_CHARGE_M_P_PER_E)
+        swapi_response.get_response_grid(NOMINAL_EPOCH_TT2000, v, Species.PROTON)
         for v in voltages
     ]
 

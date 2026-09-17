@@ -38,7 +38,7 @@ The flat portions of the azimuth response are explicitly included in the interpo
 The central effective area CSV gives the baseline proton response $`\mathcal{A}_{0,\text{(lab)}}^{\text{H}^+}(V)`$ as a function of ESA voltage.
 `SwapiResponse` evaluates this curve by linear interpolation in $`|V|`$ and uses the nearest tabulated value outside the CSV range.
 
-> ![](figures/calibration_curves.svg)
+> ![](figures/calibration_curves.png)
 > *Central effective area and azimuthal transmission.* [[src]](figure_src/plot_calibration_curves.py)
 
 $`\mathcal{A}_{0,\text{(lab)}}^{\text{H}^+}(V)`$ describes the central effective area for protons at the beginning of the mission.
@@ -69,7 +69,7 @@ It has also been assumed that $\text{He}^+$ and $\text{He}^{++}$ have the same e
 
 ## Energy-Angle Passbands
 
-> ![SWAPI passband and integration region at three beam energies](figures/passband_boundaries.svg)
+> ![SWAPI passband and integration region at three beam energies](figures/passband_boundaries.png)
 > *Examples of interpolated passbands with integration limits.* [[src]](figure_src/plot_passband_boundaries.py)
 
 The passband coefficient CSV is indexed by `region`, `energy_ratio`, and `elevation`, where `energy_ratio` is $`(E/q)/|V|`$ (particle energy per charge versus ESA voltage magnitude).

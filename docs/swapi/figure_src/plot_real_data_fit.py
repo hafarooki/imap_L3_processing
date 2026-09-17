@@ -12,12 +12,11 @@ The IMAP API key is read from the IMAP_API_KEY environment variable.
 WIND/SWE 2-min ground truth at the chunk epoch is fetched the same way as
 plot_fit_accuracy.py — cached under ~/.cache/imap_l3/wind_swe_2m/.
 
-Output: docs/swapi/figures/real_data_fit.svg
+Output: docs/swapi/figures/real_data_fit.png
 Usage:  conda run -n imapL3 python docs/swapi/figure_src/plot_real_data_fit.py
 """
 
 import json
-import os
 import sys
 import urllib.request
 from datetime import datetime, timedelta
@@ -41,7 +40,6 @@ from imap_l3_processing.constants import (
     BOLTZMANN_CONSTANT_JOULES_PER_KELVIN,
     ONE_SECOND_IN_NANOSECONDS,
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 import scipy.optimize
 
@@ -70,17 +68,24 @@ from imap_l3_processing.swapi.constants import (
     SWAPI_SCIENCE_BINS,
 )
 from imap_l3_processing.utils import SpiceKernelTypes
-from figure_utils import FIGURES_DIR, REPO_ROOT, load_swapi_response
+from imap_l3_processing.swapi.species import Species
+from figure_utils import (
+    require_imap_api_key,
+    FIGURES_DIR,
+    REPO_ROOT,
+    find_sweep_start_index,
+    load_swapi_response,
+    save_figure,
+)
 
 _DOC_PATH = REPO_ROOT / "docs" / "swapi" / "proton-sw.md"
 _TABLE_BEGIN = "<!-- BEGIN: real_data_table"
 _TABLE_END = "<!-- END: real_data_table -->"
 
-# 2026-02-01: 5-sweep block at sweep_start=6853, identified by inspecting the
-# day's fine-sweep voltages — fine bins span 5..334 V and bracket the ~257 V
-# proton peak. 60-second chunk covers 22:50:36 .. 22:51:36 UT.
+# 2026-02-01: 5-sweep block identified by inspecting the day's fine-sweep
+# voltages — fine bins span 5..334 V and bracket the ~257 V proton peak.
 DATE_YYYYMMDD = "20260201"
-SWEEP_START = 6853
+SWEEP_START_TIME_UTC = "2026-02-01T22:49:38.558"
 N_SWEEPS = 5
 
 WIND_YEAR = 2026
@@ -89,15 +94,11 @@ WIND_BASE_URL = "https://spdf.gsfc.nasa.gov/pub/data/wind/swe/ascii/2-min"
 
 
 def main():
-    if not os.environ.get("IMAP_API_KEY"):
-        raise SystemExit(
-            "IMAP_API_KEY environment variable is not set. "
-            "Export it before running this script."
-        )
+    require_imap_api_key()
     cdf_path = _download_l2(DATE_YYYYMMDD)
     _furnish_spice_around(DATE_YYYYMMDD)
 
-    sweep_start = SWEEP_START
+    sweep_start = find_sweep_start_index(cdf_path, SWEEP_START_TIME_UTC)
     epoch_ns, count_rate, esa_voltage = _read_5_sweep_block(
         cdf_path, sweep_start, N_SWEEPS
     )
@@ -120,22 +121,18 @@ def main():
 
     sc_velocity_rtn = get_spacecraft_velocity_rtn(chunk_center_ns)
     science_result["velocity_rtn_sun"] = (
-        np.array(
-            [c.nominal_value for c in science_result["fit_result"].velocity_rtn]
-        )
+        np.array([c.nominal_value for c in science_result["fit_result"].velocity_rtn])
         + sc_velocity_rtn
     )
     coarse_result["velocity_rtn_sun"] = (
-        np.array(
-            [c.nominal_value for c in coarse_result["fit_result"].velocity_rtn]
-        )
+        np.array([c.nominal_value for c in coarse_result["fit_result"].velocity_rtn])
         + sc_velocity_rtn
     )
 
     print("\n--- Fit results ---")
-    print(f"  Science bins (1..71, includes fine):")
+    print("  Science bins (1..71, includes fine):")
     _print_fit(science_result, sc_velocity_rtn)
-    print(f"  Coarse-only bins (1..62):")
+    print("  Coarse-only bins (1..62):")
     _print_fit(coarse_result, sc_velocity_rtn)
 
     print("\n--- Bootstrap σ on the all-bins fit (B=300, warm-LM, xtol=1e-3) ---")
@@ -281,9 +278,13 @@ def _read_5_sweep_block(
 
 
 def _measurement_times_ns(epoch_ns: np.ndarray, bin_slice: slice) -> np.ndarray:
+    # Claude: TODO `epoch` is the sweep centre, not the sweep start, so every
+    # bin time below lands ~6 s late. Build these from `sci_start_time` instead.
     bins = np.arange(bin_slice.start, bin_slice.stop)
     seconds_into_sweep = bins * SWAPI_BIN_PERIOD_S + SWAPI_LIVETIME_CENTER_OFFSET_S
-    return (epoch_ns[:, None] + seconds_into_sweep * ONE_SECOND_IN_NANOSECONDS).flatten()
+    return (
+        epoch_ns[:, None] + seconds_into_sweep * ONE_SECOND_IN_NANOSECONDS
+    ).flatten()
 
 
 # --------------------------------------------------------------------------- #
@@ -306,10 +307,9 @@ def _fit_for_bins(
         count_rate=cr,
         esa_voltage=voltages,
         swapi_response=swapi_response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=int(epoch_ns[0]),
+        species=Species.PROTON,
         rotation_matrices=rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     fit_result = fit_solar_wind_proton_model(ctx)
     return {
@@ -317,6 +317,7 @@ def _fit_for_bins(
         "ctx": ctx,
         "bin_slice": bin_slice,
         "swapi_response": swapi_response,
+        "time_as_tt2000": int(epoch_ns[0]),
     }
 
 
@@ -340,6 +341,7 @@ def _bootstrap_sigmas(
     v = ctx.esa_voltage.ravel()
     rm = ctx.rotation_matrices
     swapi_response_obj = result["swapi_response"]
+    time_as_tt2000 = result["time_as_tt2000"]
 
     rng = np.random.default_rng(seed)
     fits_n, fits_T, fits_vR, fits_vT, fits_vN = [], [], [], [], []
@@ -349,10 +351,9 @@ def _bootstrap_sigmas(
             count_rate=cr[idx],
             esa_voltage=v[idx],
             swapi_response=swapi_response_obj,
-            central_effective_area_scale=1.0,
+            time_as_tt2000=time_as_tt2000,
+            species=Species.PROTON,
             rotation_matrices=rm[idx],
-            mass_kg=PROTON_MASS_KG,
-            mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
         )
 
         cache = {}
@@ -498,9 +499,9 @@ def _build_intro_table(science_result, coarse_result, boot, wind):
 
     header_cells = [
         "Quantity",
-        "SWAPI all bins (HC3 σ)",
-        "SWAPI all bins (boot σ)",
-        "SWAPI coarse only (HC3 σ)",
+        "SWAPI all ESA steps",
+        "bootstrap σ",
+        "coarse steps only",
         wind_header,
     ]
     aligns = ["---", "---:", "---:", "---:", "---:"]
@@ -546,7 +547,11 @@ def _print_fit(result, sc_velocity_rtn: np.ndarray):
 
 
 def _model_rates_with_deadtime(
-    fit_result, voltages_flat: np.ndarray, rotation_matrices: np.ndarray, swapi_response
+    fit_result,
+    voltages_flat: np.ndarray,
+    rotation_matrices: np.ndarray,
+    swapi_response,
+    time_as_tt2000: int,
 ) -> np.ndarray:
     """Forward-model count rates at the supplied voltages using a fit's params."""
     swapi_response.warm_cache(voltages_flat)
@@ -554,16 +559,13 @@ def _model_rates_with_deadtime(
         count_rate=np.ones_like(voltages_flat),
         esa_voltage=voltages_flat,
         swapi_response=swapi_response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=time_as_tt2000,
+        species=Species.PROTON,
         rotation_matrices=rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     sw = SolarWindParams(
         density=fit_result.density.nominal_value,
-        velocity_rtn=np.array(
-            [c.nominal_value for c in fit_result.velocity_rtn]
-        ),
+        velocity_rtn=np.array([c.nominal_value for c in fit_result.velocity_rtn]),
         temperature=fit_result.temperature.nominal_value,
         mass=PROTON_MASS_KG,
     )
@@ -663,11 +665,20 @@ def _make_plot(
 
     science_curve_full = np.full_like(voltages_flat, np.nan)
     coarse_curve_full = np.full_like(voltages_flat, np.nan)
+    time_as_tt2000 = int(epoch_ns[0])
     science_curve_full[valid_flat] = _model_rates_with_deadtime(
-        science_result["fit_result"], voltages_valid, rotation_valid, swapi_response
+        science_result["fit_result"],
+        voltages_valid,
+        rotation_valid,
+        swapi_response,
+        time_as_tt2000,
     )
     coarse_curve_full[valid_flat] = _model_rates_with_deadtime(
-        coarse_result["fit_result"], voltages_valid, rotation_valid, swapi_response
+        coarse_result["fit_result"],
+        voltages_valid,
+        rotation_valid,
+        swapi_response,
+        time_as_tt2000,
     )
 
     science_2d = science_curve_full.reshape(voltages.shape)
@@ -910,8 +921,8 @@ def _make_plot(
 
     fig.tight_layout(rect=(0.0, 0.05, 1.0, 1.0))
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    out = FIGURES_DIR / "real_data_fit.svg"
-    fig.savefig(out, bbox_inches="tight")
+    out = FIGURES_DIR / "real_data_fit.png"
+    save_figure(fig, out)
     print(f"\nSaved {out}")
 
 

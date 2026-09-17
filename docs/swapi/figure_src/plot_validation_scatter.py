@@ -6,7 +6,7 @@ Computes the optimized JIT integrator (`calculate_integral`) for every row in
 log-log axes with the 1:1 line, coloring points by relative-error band
 (within ±1%, 1–5%, and >5%).
 
-Output: docs/swapi/figures/validation_scatter.svg
+Output: docs/swapi/figures/validation_scatter.png
 """
 
 import sys
@@ -24,20 +24,22 @@ import pandas as pd
 
 from imap_l3_processing.constants import (
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind.forward_model import (
     calculate_integral,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind.params import SolarWindParams
+from imap_l3_processing.swapi.species import Species
 
 from figure_utils import (
     ANCHOR_ROTATION_SWAPI_TO_RTN,
     FIGURES_DIR,
+    NOMINAL_EPOCH_TT2000,
     REPO_ROOT,
     load_swapi_response,
     peak_esa_voltage_for_proton_bulk_speed,
     run_parallel_map,
+    save_figure,
 )
 
 _worker_state: types.SimpleNamespace | None = None
@@ -45,7 +47,7 @@ _worker_state: types.SimpleNamespace | None = None
 _REFERENCE_INTEGRALS_PATH = (
     REPO_ROOT / "tests" / "test_data" / "swapi" / "reference_integrals.csv"
 )
-_OUTPUT_PATH = FIGURES_DIR / "validation_scatter.svg"
+_OUTPUT_PATH = FIGURES_DIR / "validation_scatter.png"
 
 
 def _initialize_worker_state(
@@ -72,7 +74,7 @@ def _process_one(i: int) -> float:
         mass=PROTON_MASS_KG,
     )
     response_grid = state.swapi_response.get_response_grid(
-        state.peak_voltages[i], PROTON_MASS_PER_CHARGE_M_P_PER_E
+        NOMINAL_EPOCH_TT2000, state.peak_voltages[i], Species.PROTON
     )
     return calculate_integral(sw, response_grid, state.rotation_matrix)[0]
 
@@ -123,8 +125,13 @@ def _plot_scatter(reference: np.ndarray, optimized: np.ndarray) -> None:
         zorder=4,
     )
     ax.plot(
-        line, line, color="black", linestyle="--", linewidth=0.8,
-        label="1:1", zorder=5,
+        line,
+        line,
+        color="black",
+        linestyle="--",
+        linewidth=0.8,
+        label="1:1",
+        zorder=5,
     )
 
     ax.set_xscale("log")
@@ -142,7 +149,7 @@ def _plot_scatter(reference: np.ndarray, optimized: np.ndarray) -> None:
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(_OUTPUT_PATH, bbox_inches="tight")
+    save_figure(fig, _OUTPUT_PATH)
     print(f"Saved {_OUTPUT_PATH.relative_to(REPO_ROOT)}")
 
 
@@ -170,7 +177,7 @@ def main():
     swapi_response.warm_cache(peak_voltages)
     for unique_voltage in np.unique(peak_voltages):
         swapi_response.get_response_grid(
-            float(unique_voltage), PROTON_MASS_PER_CHARGE_M_P_PER_E
+            NOMINAL_EPOCH_TT2000, float(unique_voltage), Species.PROTON
         )
 
     _initialize_worker_state(rows, peak_voltages, swapi_response)

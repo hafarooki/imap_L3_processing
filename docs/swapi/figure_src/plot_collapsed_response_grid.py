@@ -8,7 +8,7 @@ Fixed condition matches the CSV reference produced by
 scripts/swapi/generate_collapsed_response_grid_reference.py:
 ESA voltage = 5000 V, He+ (m/q ≈ 3.973 m_p/e), bulk = 450 km/s @ (az=5°, el=−10°).
 
-Output: docs/swapi/figures/collapsed_response_grid.svg
+Output: docs/swapi/figures/collapsed_response_grid.png
 Usage:  uv run python docs/swapi/figure_src/plot_collapsed_response_grid.py
 """
 
@@ -28,14 +28,26 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.collapsed_response_grid imp
     build_collapsed_response_grid,
     solar_wind_frame_speed_range,
 )
-from figure_utils import FIGURES_DIR, REPO_ROOT, load_swapi_response
+from figure_utils import (
+    FIGURES_DIR,
+    NOMINAL_EPOCH_TT2000,
+    REPO_ROOT,
+    load_swapi_response,
+    save_figure,
+)
 from imap_l3_processing.constants import HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
+from imap_l3_processing.swapi.species import Species
 
 _REFERENCE_CSV_PATH = (
-    REPO_ROOT / "tests" / "test_data" / "swapi" / "collapsed_response_grid_reference.csv"
+    REPO_ROOT
+    / "tests"
+    / "test_data"
+    / "swapi"
+    / "collapsed_response_grid_reference.csv"
 )
 
 _ESA_VOLTAGE = 5000.0
+_SPECIES = Species.HELIUM_PLUS
 _MASS_PER_CHARGE = HE_PUI_PARTICLE_MASS_PER_CHARGE_M_P_PER_E
 _BULK_SPEED = 450.0
 _BULK_AZIMUTH = 5.0
@@ -54,8 +66,7 @@ def main():
     swapi_response = load_swapi_response()
     swapi_response.warm_cache(np.array([_ESA_VOLTAGE]))
     response_grid = swapi_response.get_response_grid(
-        esa_voltage=_ESA_VOLTAGE,
-        mass_per_charge_m_p_per_e=_MASS_PER_CHARGE,
+        NOMINAL_EPOCH_TT2000, _ESA_VOLTAGE, _SPECIES
     )
 
     print("Computing production collapsed response grid...")
@@ -104,7 +115,7 @@ def main():
     )
     axes[0].set_ylabel(r"$H(v', V)\ [\mathrm{cm}^3/\mathrm{s}]$")
     axes[0].set_title(
-        f"Angular-collapsed response at V={_ESA_VOLTAGE:.0f} V, m/q={_MASS_PER_CHARGE:.0f}, "
+        f"Angular-collapsed response at V={_ESA_VOLTAGE:.0f} V, m/q={_MASS_PER_CHARGE:.3f}, "
         f"bulk={_BULK_SPEED:.0f} km/s @ (az={_BULK_AZIMUTH:.0f}°, el={_BULK_ELEVATION:.0f}°)",
         fontsize=10,
     )
@@ -127,8 +138,8 @@ def main():
 
     figure.tight_layout()
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = FIGURES_DIR / "collapsed_response_grid.svg"
-    figure.savefig(output_path, bbox_inches="tight")
+    output_path = FIGURES_DIR / "collapsed_response_grid.png"
+    save_figure(figure, output_path)
     print(f"Saved {output_path}")
 
 

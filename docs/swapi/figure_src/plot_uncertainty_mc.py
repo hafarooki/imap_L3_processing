@@ -9,7 +9,7 @@ distribution of per-fit estimated sigmas is what the sandwich estimator
 reports. A correctly-calibrated estimator places the histogram of estimated
 sigmas (row 2) at the spread of the histogram of fitted parameters (row 1).
 
-Output: docs/swapi/figures/uncertainty_mc.svg
+Output: docs/swapi/figures/uncertainty_mc.png
 Usage:  conda run -n imapL3 python docs/swapi/figure_src/plot_uncertainty_mc.py
 """
 
@@ -29,16 +29,17 @@ import matplotlib.pyplot as plt
 
 from imap_l3_processing.constants import (
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.constants import SWAPI_LIVETIME_S
 from figure_utils import (
+    NOMINAL_EPOCH_TT2000,
     COARSE_BIN_INDICES_IN_SWEEP,
     COARSE_SWEEP_VOLTAGES_MEAN_V,
     FIGURES_DIR,
     compute_per_bin_rotation_matrices,
     load_swapi_response,
     run_parallel_map,
+    save_figure,
 )
 from imap_l3_processing.swapi.l3a.science.solar_wind.proton.calculate_initial_guess import (
     calculate_initial_guess,
@@ -61,6 +62,7 @@ from imap_l3_processing.swapi.response.deadtime import deadtime_factor
 from imap_l3_processing.swapi.l3a.science.solar_wind.fit_context import (
     build_solar_wind_fit_context,
 )
+from imap_l3_processing.swapi.species import Species
 
 _N_SWEEPS = 5
 _N_BINS = len(COARSE_SWEEP_VOLTAGES_MEAN_V)
@@ -108,10 +110,9 @@ def _initialize_worker_state() -> None:
         count_rate=np.ones_like(all_esa_voltages),
         esa_voltage=all_esa_voltages,
         swapi_response=swapi_response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=per_bin_rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
 
     truth_params = SolarWindParams(
@@ -162,10 +163,9 @@ def _process_one(i):
         count_rate=count_rates,
         esa_voltage=ws.all_esa_voltages,
         swapi_response=ws.swapi_response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=ws.per_bin_rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     sigma_keys = [
         "fit_density_sigma",
@@ -433,8 +433,8 @@ def _plot_results(experiments: list[tuple[str, pd.DataFrame]]) -> None:
     fig.tight_layout(rect=(0.03, 0.0, 1.0, 1.0))
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = FIGURES_DIR / "uncertainty_mc.svg"
-    fig.savefig(out_path, bbox_inches="tight", dpi=200)
+    out_path = FIGURES_DIR / "uncertainty_mc.png"
+    save_figure(fig, out_path, dpi=200)
     print(f"Saved {out_path}")
 
 

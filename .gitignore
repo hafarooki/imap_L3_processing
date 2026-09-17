@@ -20,3 +20,5 @@ imap_l3_processing/glows/l3d/science/data_l3d
 imap_l3_processing/glows/l3d/science/data_l3d_txt
 imap_l3_processing/glows/l3d/science/external_dependencies
 .cursor
+# Claude: per-script logs from docs/update_figures.py
+.figure_logs/

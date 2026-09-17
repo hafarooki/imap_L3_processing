@@ -11,12 +11,11 @@ The L2 CDF, MAG L2 (with L1D fallback), and SPICE kernels are downloaded
 via imap-data-access; the IMAP API key is read from the IMAP_API_KEY
 environment variable.
 
-Output: docs/swapi/figures/alpha_peak_finding.svg
+Output: docs/swapi/figures/alpha_peak_finding.png
 Usage:  python docs/swapi/figure_src/plot_alpha_peak_finding.py
 """
 
 import json
-import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,11 +34,9 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from imap_l3_processing.constants import (
-    ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     ALPHA_PARTICLE_MASS_KG,
     ONE_SECOND_IN_NANOSECONDS,
     PROTON_MASS_KG,
-    PROTON_MASS_PER_CHARGE_M_P_PER_E,
 )
 from imap_l3_processing.swapi.constants import (
     SWAPI_BIN_PERIOD_S,
@@ -70,12 +67,24 @@ from imap_l3_processing.swapi.l3a.utils import (
 )
 from imap_l3_processing.swapi.response.deadtime import deadtime_factor
 from imap_l3_processing.utils import SpiceKernelTypes
-from figure_utils import FIGURES_DIR, load_swapi_response
+from imap_l3_processing.swapi.species import Species
+from figure_utils import (
+    require_imap_api_key,
+    FIGURES_DIR,
+    NOMINAL_EPOCH_TT2000,
+    find_sweep_start_index,
+    load_swapi_response,
+    save_figure,
+)
 
 DATE_YYYYMMDD = "20260101"
 N_SWEEPS = 5
 
-_CASES = [475, 250, 550]
+_CASE_SWEEP_START_TIMES_UTC = [
+    "2026-01-01T07:54:04.981",
+    "2026-01-01T04:09:04.993",
+    "2026-01-01T09:09:04.977",
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -186,9 +195,15 @@ def _read_5_sweep_block(
 
 
 def _coarse_measurement_times_ns(epoch_ns: np.ndarray) -> np.ndarray:
+    # Claude: TODO `epoch` is the sweep centre, not the sweep start, so every
+    # bin time below lands ~6 s late. Build these from `sci_start_time` instead.
     coarse_bins = np.arange(SWAPI_COARSE_SWEEP_BINS.start, SWAPI_COARSE_SWEEP_BINS.stop)
-    seconds_into_sweep = coarse_bins * SWAPI_BIN_PERIOD_S + SWAPI_LIVETIME_CENTER_OFFSET_S
-    return (epoch_ns[:, None] + seconds_into_sweep * ONE_SECOND_IN_NANOSECONDS).flatten()
+    seconds_into_sweep = (
+        coarse_bins * SWAPI_BIN_PERIOD_S + SWAPI_LIVETIME_CENTER_OFFSET_S
+    )
+    return (
+        epoch_ns[:, None] + seconds_into_sweep * ONE_SECOND_IN_NANOSECONDS
+    ).flatten()
 
 
 # --------------------------------------------------------------------------- #
@@ -196,8 +211,8 @@ def _coarse_measurement_times_ns(epoch_ns: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 
 
-def _plot_case(ax, swapi_response, cdf_path, mag_data, chunk_index):
-    sweep_start = chunk_index * N_SWEEPS
+def _plot_case(ax, swapi_response, cdf_path, mag_data, sweep_start_time_utc):
+    sweep_start = find_sweep_start_index(cdf_path, sweep_start_time_utc)
     epoch_ns, count_rate_full, esa_energy_full = _read_5_sweep_block(
         cdf_path, sweep_start, N_SWEEPS
     )
@@ -214,10 +229,9 @@ def _plot_case(ax, swapi_response, cdf_path, mag_data, chunk_index):
         count_rate=count_rates,
         esa_voltage=voltages,
         swapi_response=swapi_response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_EPOCH_TT2000,
+        species=Species.PROTON,
         rotation_matrices=rotation_matrices,
-        mass_kg=PROTON_MASS_KG,
-        mass_per_charge_m_p_per_e=PROTON_MASS_PER_CHARGE_M_P_PER_E,
     )
     proton_moments = fit_solar_wind_proton_model(proton_ctx)
     proton_velocity_rtn = proton_moments.velocity_rtn_nominal()
@@ -234,10 +248,9 @@ def _plot_case(ax, swapi_response, cdf_path, mag_data, chunk_index):
         count_rate=count_rates,
         esa_voltage=voltages,
         swapi_response=swapi_response,
-        central_effective_area_scale=1.0,
+        time_as_tt2000=NOMINAL_EPOCH_TT2000,
+        species=Species.ALPHA,
         rotation_matrices=rotation_matrices,
-        mass_kg=ALPHA_PARTICLE_MASS_KG,
-        mass_per_charge_m_p_per_e=ALPHA_MASS_PER_CHARGE_M_P_PER_E,
     )
     seed = calculate_initial_guess(
         alpha_ctx=alpha_ctx,
@@ -261,9 +274,7 @@ def _plot_case(ax, swapi_response, cdf_path, mag_data, chunk_index):
         proton_moments=proton_moments,
         magnetic_field_direction=b_hat,
     )
-    alpha_velocity_rtn = np.array(
-        [c.nominal_value for c in alpha_moments.velocity_rtn]
-    )
+    alpha_velocity_rtn = np.array([c.nominal_value for c in alpha_moments.velocity_rtn])
     alpha_sw = SolarWindParams(
         density=alpha_moments.density.nominal_value,
         velocity_rtn=alpha_velocity_rtn,
@@ -347,11 +358,7 @@ def _plot_case(ax, swapi_response, cdf_path, mag_data, chunk_index):
 
 
 def main():
-    if not os.environ.get("IMAP_API_KEY"):
-        raise SystemExit(
-            "IMAP_API_KEY environment variable is not set. "
-            "Export it before running this script."
-        )
+    require_imap_api_key()
     print(f"Downloading L2 for {DATE_YYYYMMDD}…")
     cdf_path = _download_l2(DATE_YYYYMMDD)
     print("Downloading MAG RTN…")
@@ -364,7 +371,7 @@ def main():
     print("Loading calibration data…")
     swapi_response = load_swapi_response()
 
-    n_cases = len(_CASES)
+    n_cases = len(_CASE_SWEEP_START_TIMES_UTC)
     fig, axes = plt.subplots(
         1,
         n_cases,
@@ -373,9 +380,9 @@ def main():
         gridspec_kw={"wspace": 0},
     )
 
-    for ax, chunk_index in zip(axes, _CASES):
-        print(f"Plotting chunk {chunk_index}…")
-        _plot_case(ax, swapi_response, cdf_path, mag_data, chunk_index)
+    for ax, sweep_start_time_utc in zip(axes, _CASE_SWEEP_START_TIMES_UTC):
+        print(f"Plotting chunk starting {sweep_start_time_utc}…")
+        _plot_case(ax, swapi_response, cdf_path, mag_data, sweep_start_time_utc)
 
     axes[0].set_ylabel("Count rate [Hz]")
     for ax in axes[1:]:
@@ -393,8 +400,8 @@ def main():
 
     fig.tight_layout(rect=(0.0, 0.06, 1.0, 1.0))
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    out = FIGURES_DIR / "alpha_peak_finding.svg"
-    fig.savefig(out, bbox_inches="tight")
+    out = FIGURES_DIR / "alpha_peak_finding.png"
+    save_figure(fig, out)
     print(f"Saved {out}")
 
 
