@@ -75,7 +75,11 @@ def _quantize_in_place(png_path: Path) -> None:
     with Image.open(png_path) as rendered:
         # Claude: quantize() needs RGB, and the flattened figure is opaque.
         opaque = rendered.convert("RGB")
-        quantized = opaque.quantize(colors=DEFAULT_PNG_PALETTE_COLORS)
+        # Claude: median cut spends the palette on the spectrogram gradients and
+        # Claude: shifts the small red and orange markers; octree keeps them.
+        quantized = opaque.quantize(
+            colors=DEFAULT_PNG_PALETTE_COLORS, method=Image.Quantize.FASTOCTREE
+        )
     quantized.save(png_path, optimize=True)
 
 

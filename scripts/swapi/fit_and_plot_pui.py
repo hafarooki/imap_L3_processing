@@ -10,7 +10,7 @@ Usage:
 Requires the environment variable IMAP_API_KEY to be set.
 Downloads land in /tmp/swapi_fit_and_plot_data; the fit pickle lands in
 /tmp/swapi_pui_fit_<YYYYMMDD>.pkl and the spectrogram pickle in
-/tmp/swapi_pui_spectrograms_<YYYYMMDD>.pkl. --use-cache reuses both pickles
+/tmp/swapi_pui_gof_window_spectrograms_<YYYYMMDD>.pkl. --use-cache reuses both pickles
 and skips the SWAPI network fetch. --output-dir saves the figure as
 pui_fit_<YYYYMMDD>.png in the given directory instead of opening an
 interactive window.
@@ -64,33 +64,27 @@ from imap_l3_processing.swapi.species import Species
 
 
 def replay_chunk_spectrum(dependencies, fit_input, ionization_rate, cutoff_speed):
-    """Re-evaluate the forward model on the fit window for one 50-sweep chunk.
+    """Re-evaluate the forward model for one 50-sweep chunk on every coarse step
+    above the lower fitting boundary.
 
-    Mirrors the energy windowing and grid bounds in calculate_pickup_ion_values,
-    and adds the same constant background, so the energies and modeled rate
-    match what the fitter was minimising against.
+    That is the window the production goodness-of-fit check scores (the fit
+    itself also stops at the nominal 16 E_p upper boundary). Mirrors the grid
+    bounds in calculate_pickup_ion_values and adds the same constant
+    background, so the modeled rate matches what the fitter compared against.
     """
     solar_wind_speed_inertial_frame = float(
         np.linalg.norm(fit_input.solar_wind_velocity_rtn_sun)
     )
 
-    lower_energy_cutoff, upper_energy_cutoff = calculate_pickup_ion_fit_energy_range(
+    lower_energy_cutoff, _upper_energy_cutoff = calculate_pickup_ion_fit_energy_range(
         solar_wind_speed_inertial_frame
     )
-    shared_esa_step_mask = fit_input.esa_energies > lower_energy_cutoff
-    fitting_esa_step_mask = (
-        fit_input.esa_energies[shared_esa_step_mask] < upper_energy_cutoff
-    )
-
-    # Claude: fold the two-stage production mask into one coarse-step mask so
-    # Claude: the caller can scatter the model back onto the full sweep.
-    bin_mask = shared_esa_step_mask.copy()
-    bin_mask[shared_esa_step_mask] = fitting_esa_step_mask
-    fitting_energies = fit_input.esa_energies[bin_mask]
+    bin_mask = fit_input.esa_energies > lower_energy_cutoff
+    shared_energies = fit_input.esa_energies[bin_mask]
 
     chunk_response = build_chunk_collapsed_response(
         swapi_response=dependencies.swapi_response,
-        voltages_v=fitting_energies / SWAPI_L2_K_FACTOR,
+        voltages_v=shared_energies / SWAPI_L2_K_FACTOR,
         bulk_sw_per_bin_kms=fit_input.bulk_sw_per_bin_swapi_kms[:, bin_mask, :],
         time_as_tt2000=fit_input.time_as_tt2000,
         species=Species.HELIUM_PLUS,
@@ -113,7 +107,7 @@ def replay_chunk_spectrum(dependencies, fit_input, ionization_rate, cutoff_speed
         + SWAPI_BACKGROUND_RATE
     )
     return {
-        "energies_ev": fitting_energies,
+        "energies_ev": shared_energies,
         "observed_rate_per_sweep": fit_input.coincidence_count_rates[:, bin_mask],
         "modeled_rate_per_sweep": modeled_per_sweep,
         "bin_mask": bin_mask,
@@ -272,7 +266,7 @@ if __name__ == "__main__":
     )
 
     spectrogram_cache_path = Path(
-        f"/tmp/swapi_pui_spectrograms_per_sweep_{compact_date}.pkl"
+        f"/tmp/swapi_pui_gof_window_spectrograms_{compact_date}.pkl"
     )
     all_chunks = list(chunk_l2_data(dependencies.data, 50))
 

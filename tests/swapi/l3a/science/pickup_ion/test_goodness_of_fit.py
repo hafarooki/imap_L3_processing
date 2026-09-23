@@ -10,6 +10,7 @@ from imap_l3_processing.swapi.l3a.science.pickup_ion.goodness_of_fit import (
     MIN_CUTOFF_SPEED_RATIO,
     MIN_IONIZATION_RATE,
     CUTOFF_DROP_RATIO,
+    goodness_of_fit_metrics,
     goodness_of_fit_upper_energy,
     is_good_fit,
 )
@@ -77,6 +78,58 @@ class TestGoodnessOfFit(TestCase):
                     expected_energy,
                     goodness_of_fit_upper_energy(esa_energies, chunk_mean_model_rates),
                 )
+
+    def test_goodness_of_fit_metrics(self):
+        esa_energies = np.array([100.0, 200.0, 400.0, 800.0])
+        # Claude: the sweeps average to [2, 4, 1, 0]; the 1 at 400 eV is exactly
+        # Claude: CUTOFF_DROP_RATIO of the peak, so E_1/4 = 400 eV and only the
+        # Claude: 800 eV step counts toward the past-peak ratio.
+        model_rates = np.array(
+            [
+                [1.0, 3.0, 0.5, 0.0],
+                [3.0, 5.0, 1.5, 0.0],
+            ]
+        )
+        self.assertEqual(0.25, CUTOFF_DROP_RATIO)
+        chunk_mean_model_with_background = (
+            np.array([2.0, 4.0, 1.0, 0.0]) + SWAPI_BACKGROUND_RATE
+        )
+
+        # Claude: observed means sit 10% above, 10% below, and on the model at
+        # Claude: the three in-range steps; the sweeps straddle those means.
+        chunk_mean_observed_rates = np.array(
+            [
+                1.1 * chunk_mean_model_with_background[0],
+                0.9 * chunk_mean_model_with_background[1],
+                chunk_mean_model_with_background[2],
+                0.6,
+            ]
+        )
+        observed_rates = np.stack(
+            [chunk_mean_observed_rates - 0.2, chunk_mean_observed_rates + 0.2]
+        )
+
+        mean_relative_error, past_peak_ratio = goodness_of_fit_metrics(
+            esa_energies, model_rates, observed_rates
+        )
+
+        self.assertAlmostEqual((0.1 + 0.1 + 0.0) / 3, mean_relative_error)
+        self.assertAlmostEqual(0.6 / 4.0, past_peak_ratio)
+
+    def test_goodness_of_fit_metrics_perfect_fit(self):
+        esa_energies, model_rates = _make_pui_model()
+        observed_rates = model_rates + SWAPI_BACKGROUND_RATE
+        observed_rates[:, model_rates.mean(axis=0) == 0] = 0.0
+
+        mean_relative_error, past_peak_ratio = goodness_of_fit_metrics(
+            esa_energies, model_rates, observed_rates
+        )
+
+        self.assertAlmostEqual(0.0, mean_relative_error)
+        # Claude: the one nonzero past-peak step is the 0.2 rolloff point.
+        self.assertAlmostEqual(
+            (0.2 * 100.0 + SWAPI_BACKGROUND_RATE) / 4 / 100.0, past_peak_ratio
+        )
 
     def test_fit_acceptance_criteria(self):
         esa_energies, model_rates = _make_pui_model()

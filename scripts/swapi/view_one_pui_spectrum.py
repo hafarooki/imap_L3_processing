@@ -4,9 +4,14 @@ production-model (replayed) rate.
 Loads the cached pickle output of fit_and_plot_pui.py (observed and
 production-model spectrograms, fit parameters) and plots the selected chunk's
 sweep-averaged spectrum above per-sweep spectrograms of the observed and
-modeled rates over the PUI fit energy window. The modeled rate already
-includes the constant instrument background, so it is directly comparable to
-the observed coincidence rate.
+modeled rates over the goodness-of-fit window (every coarse step above the
+lower fitting boundary). The modeled rate already includes the constant
+instrument background, so it is directly comparable to the observed
+coincidence rate.
+
+The spectrum panel shades the energy range the fit minimises over and marks
+which observed steps feed each goodness-of-fit metric: the mean relative error
+up to E_1/4, and the past-peak ratio above it.
 
 Usage:
     scripts/swapi/view_one_pui_spectrum.py <YYYY-MM-DD> <HH:MM[:SS]>
@@ -30,6 +35,20 @@ from spacepy.pycdf import lib as cdf_library
 
 from imap_processing.swapi.l2 import swapi_l2
 
+from imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_pickup_ion_values import (
+    calculate_pickup_ion_fit_energy_range,
+)
+from imap_l3_processing.swapi.l3a.science.pickup_ion.goodness_of_fit import (
+    MAX_CUTOFF_SPEED_KMS,
+    MAX_CUTOFF_SPEED_RATIO,
+    MAX_IONIZATION_RATE,
+    MAX_MEAN_RELATIVE_ERROR,
+    MAX_PAST_PEAK_RATIO,
+    MIN_CUTOFF_SPEED_RATIO,
+    MIN_IONIZATION_RATE,
+    goodness_of_fit_metrics,
+    goodness_of_fit_upper_energy,
+)
 from imap_l3_processing.swapi.constants import (
     SWAPI_BACKGROUND_RATE,
     SWAPI_L2_K_FACTOR,
@@ -70,7 +89,7 @@ target_datetime_utc = datetime.combine(
 compact_date = target_date.strftime("%Y%m%d")
 fit_cache_path = Path(f"/tmp/swapi_pui_fit_{compact_date}.pkl")
 spectrogram_cache_path = Path(
-    f"/tmp/swapi_pui_spectrograms_per_sweep_{compact_date}.pkl"
+    f"/tmp/swapi_pui_gof_window_spectrograms_{compact_date}.pkl"
 )
 if not fit_cache_path.exists() or not spectrogram_cache_path.exists():
     sys.exit(
@@ -79,7 +98,7 @@ if not fit_cache_path.exists() or not spectrogram_cache_path.exists():
     )
 
 with fit_cache_path.open("rb") as cache_file:
-    pickup_ion_data, _pui_fit_input_by_chunk_epoch = pickle.load(cache_file)
+    pickup_ion_data, pui_fit_input_by_chunk_epoch = pickle.load(cache_file)
 with spectrogram_cache_path.open("rb") as spectrogram_file:
     (
         energies_per_sweep_ev,
@@ -134,6 +153,33 @@ chunk_observed_uncertainty = np.sqrt(
     chunk_observed_mean / (valid_sweeps_per_bin * swapi_l2.SWAPI_LIVETIME)
 )
 
+# Claude: rebuild the production windows from the same per-chunk fit input the
+# Claude: fitter saw, so the step selection matches calculate_pickup_ion_values.
+fit_input = pui_fit_input_by_chunk_epoch[int(pickup_ion_data.epoch[chunk_index])]
+solar_wind_speed_kms = float(np.linalg.norm(fit_input.solar_wind_velocity_rtn_sun))
+fit_lower_energy_ev, fit_upper_energy_ev = calculate_pickup_ion_fit_energy_range(
+    solar_wind_speed_kms
+)
+goodness_window_step_mask = fit_input.esa_energies > fit_lower_energy_ev
+# Claude: is_good_fit takes the model rate without background.
+goodness_upper_energy_ev = goodness_of_fit_upper_energy(
+    fit_input.esa_energies[goodness_window_step_mask],
+    chunk_model_mean[goodness_window_step_mask] - SWAPI_BACKGROUND_RATE,
+)
+relative_error_step_mask = goodness_window_step_mask & (
+    fit_input.esa_energies <= goodness_upper_energy_ev
+)
+past_peak_step_mask = goodness_window_step_mask & (
+    fit_input.esa_energies > goodness_upper_energy_ev
+)
+
+mean_relative_error, past_peak_ratio = goodness_of_fit_metrics(
+    fit_input.esa_energies[goodness_window_step_mask],
+    chunk_model_per_sweep[:, goodness_window_step_mask] - SWAPI_BACKGROUND_RATE,
+    fit_input.coincidence_count_rates[:, goodness_window_step_mask],
+)
+cutoff_speed_ratio = fit_cutoff_speed_kms / solar_wind_speed_kms
+
 pickup_ion_window_bin_mask = ~np.all(np.isnan(chunk_model_per_sweep), axis=0)
 
 mean_energies_ev_per_step = np.nanmean(
@@ -160,14 +206,26 @@ else:
     spectrogram_vmin, spectrogram_vmax = 1e-3, 1.0
 spectrogram_norm = LogNorm(vmin=spectrogram_vmin, vmax=spectrogram_vmax)
 
-figure = plt.figure(figsize=(10, 9), constrained_layout=True)
-grid_spec = figure.add_gridspec(3, 1, height_ratios=[1.3, 0.8, 0.8])
-line_axis = figure.add_subplot(grid_spec[0])
-observed_spectrogram_axis = figure.add_subplot(grid_spec[1])
+figure = plt.figure(figsize=(11, 7.5), constrained_layout=True)
+grid_spec = figure.add_gridspec(2, 1, height_ratios=[1.3, 1])
+spectrum_row_grid_spec = grid_spec[0].subgridspec(1, 2, width_ratios=[1.6, 1.2])
+line_axis = figure.add_subplot(spectrum_row_grid_spec[0])
+table_axis = figure.add_subplot(spectrum_row_grid_spec[1])
+spectrogram_row_grid_spec = grid_spec[1].subgridspec(1, 2)
+observed_spectrogram_axis = figure.add_subplot(spectrogram_row_grid_spec[0])
 model_spectrogram_axis = figure.add_subplot(
-    grid_spec[2], sharex=observed_spectrogram_axis, sharey=observed_spectrogram_axis
+    spectrogram_row_grid_spec[1],
+    sharex=observed_spectrogram_axis,
+    sharey=observed_spectrogram_axis,
 )
 
+line_axis.axvspan(
+    fit_lower_energy_ev,
+    fit_upper_energy_ev,
+    color="0.85",
+    zorder=0,
+    label="Fitting range",
+)
 line_axis.errorbar(
     chunk_energies_mean_ev,
     chunk_observed_mean,
@@ -185,27 +243,142 @@ line_axis.plot(
     color="tab:orange",
     label="Model + background",
 )
+line_axis.plot(
+    chunk_energies_mean_ev[relative_error_step_mask],
+    chunk_observed_mean[relative_error_step_mask],
+    "o",
+    markersize=9,
+    markerfacecolor="none",
+    markeredgecolor="tab:green",
+    label=r"Mean relative error steps ($E \leq E_{1/4}$)",
+)
+line_axis.plot(
+    chunk_energies_mean_ev[past_peak_step_mask],
+    chunk_observed_mean[past_peak_step_mask],
+    "s",
+    markersize=9,
+    markerfacecolor="none",
+    markeredgecolor="tab:red",
+    label=r"Past-peak ratio steps ($E > E_{1/4}$)",
+)
 line_axis.set_xscale("log")
+# Claude: pin the limits to the measured steps; the shaded fitting range would
+# Claude: otherwise stretch the axis past the last step when 16 E_p exceeds it.
+line_axis.set_xlim(
+    np.nanmin(chunk_energies_mean_ev) / 1.15, np.nanmax(chunk_energies_mean_ev) * 1.15
+)
 line_axis.set_yscale("log")
 line_axis.set_xlabel("Energy / eV")
 line_axis.set_ylabel("Coincidence rate [Hz]")
-line_axis.set_title(
-    f"SWAPI He+ PUI spectrum — {chunk_central_datetimes[chunk_index].isoformat()} UT"
-    f" (chunk {chunk_index})\n"
-    f"α={SWAPI_PUI_COOLING_INDEX:.2f} (fixed)  "
-    f"v_b={fit_cutoff_speed_kms:.0f} km/s  "
-    f"β_E={fit_ionization_rate_hz:.2e} 1/s  "
-    f"bg={background_offset_hz:.3f} Hz (fixed)"
-)
 line_axis.grid(True, which="both", alpha=0.3)
-line_axis.legend()
+line_axis.legend(fontsize=8)
+
+
+def _scientific_mathtext(value: float, digits: int = 2) -> str:
+    mantissa, exponent = f"{value:.{digits}e}".split("e")
+    return rf"{mantissa} \times 10^{{{int(exponent)}}}"
+
+
+def _uncertain_mathtext(quantity, scientific: bool) -> str:
+    """`quantity` (a ufloat) as mathtext, rounded to two significant figures of
+    its uncertainty."""
+    value, sigma = float(quantity.n), float(quantity.s)
+    exponent = int(np.floor(np.log10(abs(value)))) if scientific else 0
+    value, sigma = value / 10**exponent, sigma / 10**exponent
+    decimals = max(0, 1 - int(np.floor(np.log10(sigma))))
+    body = rf"{value:.{decimals}f} \pm {sigma:.{decimals}f}"
+    if not scientific:
+        return f"${body}$"
+    return rf"$({body}) \times 10^{{{exponent}}}$"
+
+
+parameter_rows = [
+    ("Chunk centre (UT)", f"{chunk_central_datetimes[chunk_index]:%Y-%m-%d %H:%M:%S}"),
+    (
+        r"$v_b$",
+        _uncertain_mathtext(pickup_ion_data.cutoff_speed[chunk_index], False) + " km/s",
+    ),
+    (
+        r"$\beta_E$",
+        _uncertain_mathtext(pickup_ion_data.ionization_rate[chunk_index], True)
+        + r" s$^{-1}$",
+    ),
+    (
+        r"$n_\mathrm{PUI}$ (derived)",
+        _uncertain_mathtext(pickup_ion_data.density[chunk_index], True) + r" cm$^{-3}$",
+    ),
+    (
+        r"$T_\mathrm{PUI}$ (derived)",
+        _uncertain_mathtext(pickup_ion_data.temperature[chunk_index], True) + " K",
+    ),
+    (r"$\alpha_\mathrm{PUI}$", f"{SWAPI_PUI_COOLING_INDEX:.2f} (fixed)"),
+    (r"$C_\mathrm{bg}$", f"{background_offset_hz:.3f} Hz (fixed)"),
+    (r"$v_\mathrm{sw}$", f"{solar_wind_speed_kms:.0f} km/s"),
+]
+# Claude: each criterion is written with this chunk's value in place of the
+# Claude: symbol, and paired with whether it passes, as is_good_fit checks it.
+criterion_rows = [
+    (
+        rf"${fit_cutoff_speed_kms:.0f} \leq {MAX_CUTOFF_SPEED_KMS:.0f}$ km/s",
+        r"$v_b$",
+        fit_cutoff_speed_kms <= MAX_CUTOFF_SPEED_KMS,
+    ),
+    (
+        rf"${MIN_CUTOFF_SPEED_RATIO} \leq {cutoff_speed_ratio:.2f}"
+        rf" \leq {MAX_CUTOFF_SPEED_RATIO}$",
+        r"$v_b / v_\mathrm{sw}$",
+        MIN_CUTOFF_SPEED_RATIO <= cutoff_speed_ratio <= MAX_CUTOFF_SPEED_RATIO,
+    ),
+    (
+        rf"${_scientific_mathtext(MIN_IONIZATION_RATE, 1)} \leq"
+        rf" {_scientific_mathtext(fit_ionization_rate_hz)} \leq"
+        rf" {_scientific_mathtext(MAX_IONIZATION_RATE, 1)}$",
+        r"$\beta_E$ [s$^{-1}$]",
+        MIN_IONIZATION_RATE <= fit_ionization_rate_hz <= MAX_IONIZATION_RATE,
+    ),
+    (
+        rf"${mean_relative_error:.3f} \leq {MAX_MEAN_RELATIVE_ERROR}$",
+        r"$\Delta_\mathrm{rel}$",
+        mean_relative_error <= MAX_MEAN_RELATIVE_ERROR,
+    ),
+    (
+        rf"${past_peak_ratio:.3f} \leq {MAX_PAST_PEAK_RATIO}$",
+        r"$R_\mathrm{past\ peak}$",
+        past_peak_ratio <= MAX_PAST_PEAK_RATIO,
+    ),
+]
+
+table_axis.axis("off")
+parameter_table = table_axis.table(
+    cellText=[[name, value] for name, value in parameter_rows],
+    colLabels=["Parameter", "Value"],
+    colWidths=[0.38, 0.62],
+    cellLoc="left",
+    bbox=[0.0, 0.42, 1.0, 0.58],
+)
+criterion_table = table_axis.table(
+    cellText=[[name, inequality] for inequality, name, _ in criterion_rows],
+    colLabels=["Goodness of fit", "Criterion"],
+    colWidths=[0.26, 0.74],
+    cellLoc="left",
+    bbox=[0.0, 0.0, 1.0, 0.36],
+)
+for table in (parameter_table, criterion_table):
+    table.auto_set_font_size(False)
+    table.set_fontsize(8.5)
+    for (row, _column), cell in table.get_celld().items():
+        if row == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("0.9")
+for row, (_inequality, _name, passes) in enumerate(criterion_rows, start=1):
+    criterion_table[row, 1].get_text().set_color("tab:green" if passes else "tab:red")
 
 sweep_indices_in_chunk = np.arange(n_sweeps_in_chunk)
 for axis_for_spectrogram, spectrogram_values, label in (
     (
         observed_spectrogram_axis,
         observed_spectrogram_sorted,
-        "Observed (50 sweeps × PUI fit window)",
+        "Observed",
     ),
     (model_spectrogram_axis, model_spectrogram_sorted, "Model"),
 ):
@@ -219,7 +392,7 @@ for axis_for_spectrogram, spectrogram_values, label in (
         rasterized=True,
     )
     axis_for_spectrogram.set_yscale("log")
-    axis_for_spectrogram.set_ylabel("Energy / eV")
+    axis_for_spectrogram.set_xlabel("Sweep index within chunk")
     axis_for_spectrogram.text(
         0.01,
         0.95,
@@ -230,8 +403,8 @@ for axis_for_spectrogram, spectrogram_values, label in (
         fontsize=10,
         bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.85, ec="none"),
     )
-plt.setp(observed_spectrogram_axis.get_xticklabels(), visible=False)
-model_spectrogram_axis.set_xlabel("Sweep index within chunk")
+observed_spectrogram_axis.set_ylabel("Energy / eV")
+model_spectrogram_axis.tick_params(axis="y", which="both", labelleft=False)
 figure.colorbar(
     mesh,
     ax=[observed_spectrogram_axis, model_spectrogram_axis],
