@@ -5,7 +5,7 @@ Loads the cached pickle output of fit_and_plot_pui.py (observed and
 production-model spectrograms, fit parameters) and plots the selected chunk's
 sweep-averaged spectrum above per-sweep spectrograms of the observed and
 modeled rates over the goodness-of-fit window (every coarse step above the
-lower fitting boundary). The modeled rate already includes the constant
+lower fitting boundary); the spectrum shows the model at every coarse step. The modeled rate already includes the constant
 instrument background, so it is directly comparable to the observed
 coincidence rate.
 
@@ -31,6 +31,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm
+from matplotlib.ticker import FixedLocator, NullLocator, StrMethodFormatter
 from spacepy.pycdf import lib as cdf_library
 
 from imap_processing.swapi.l2 import swapi_l2
@@ -180,7 +181,7 @@ mean_relative_error, past_peak_ratio = goodness_of_fit_metrics(
 )
 cutoff_speed_ratio = fit_cutoff_speed_kms / solar_wind_speed_kms
 
-pickup_ion_window_bin_mask = ~np.all(np.isnan(chunk_model_per_sweep), axis=0)
+pickup_ion_window_bin_mask = goodness_window_step_mask
 
 mean_energies_ev_per_step = np.nanmean(
     chunk_voltages_per_sweep * SWAPI_L2_K_FACTOR, axis=0
@@ -239,7 +240,7 @@ line_axis.errorbar(
 line_axis.plot(
     chunk_energies_mean_ev,
     chunk_model_mean,
-    "x-",
+    "-",
     color="tab:orange",
     label="Model + background",
 )
@@ -293,7 +294,10 @@ def _uncertain_mathtext(quantity, scientific: bool) -> str:
 
 
 parameter_rows = [
-    ("Chunk centre (UT)", f"{chunk_central_datetimes[chunk_index]:%Y-%m-%d %H:%M:%S}"),
+    (
+        "10-minute chunk center (UTC)",
+        f"{chunk_central_datetimes[chunk_index]:%Y-%m-%d %H:%M:%S}",
+    ),
     (
         r"$v_b$",
         _uncertain_mathtext(pickup_ion_data.cutoff_speed[chunk_index], False) + " km/s",
@@ -352,7 +356,7 @@ table_axis.axis("off")
 parameter_table = table_axis.table(
     cellText=[[name, value] for name, value in parameter_rows],
     colLabels=["Parameter", "Value"],
-    colWidths=[0.38, 0.62],
+    colWidths=[0.47, 0.53],
     cellLoc="left",
     bbox=[0.0, 0.42, 1.0, 0.58],
 )
@@ -404,6 +408,20 @@ for axis_for_spectrogram, spectrogram_values, label in (
         bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.85, ec="none"),
     )
 observed_spectrogram_axis.set_ylabel("Energy / eV")
+# Claude: the window spans well under a decade, so the default log ticks leave
+# Claude: only 10^4 and 2x10^4; label round energies inside it instead.
+spectrogram_energy_min, spectrogram_energy_max = observed_spectrogram_axis.get_ylim()
+observed_spectrogram_axis.yaxis.set_major_locator(
+    FixedLocator(
+        [
+            energy
+            for energy in (2000, 3000, 5000, 7000, 10000, 15000, 20000)
+            if spectrogram_energy_min <= energy <= spectrogram_energy_max
+        ]
+    )
+)
+observed_spectrogram_axis.yaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
+observed_spectrogram_axis.yaxis.set_minor_locator(NullLocator())
 model_spectrogram_axis.tick_params(axis="y", which="both", labelleft=False)
 figure.colorbar(
     mesh,

@@ -42,9 +42,6 @@ from imap_l3_processing.swapi.constants import (
 from imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_coincidence_rate import (
     calculate_coincidence_rate,
 )
-from imap_l3_processing.swapi.l3a.science.pickup_ion.calculate_pickup_ion_values import (
-    calculate_pickup_ion_fit_energy_range,
-)
 from imap_l3_processing.swapi.l3a.science.pickup_ion.collapsed_response_grid import (
     build_chunk_collapsed_response,
 )
@@ -64,23 +61,19 @@ from imap_l3_processing.swapi.species import Species
 
 
 def replay_chunk_spectrum(dependencies, fit_input, ionization_rate, cutoff_speed):
-    """Re-evaluate the forward model for one 50-sweep chunk on every coarse step
-    above the lower fitting boundary.
+    """Re-evaluate the forward model for one 50-sweep chunk on every coarse step.
 
-    That is the window the production goodness-of-fit check scores (the fit
-    itself also stops at the nominal 16 E_p upper boundary). Mirrors the grid
-    bounds in calculate_pickup_ion_values and adds the same constant
+    The fit and the goodness-of-fit check only see the steps above the lower
+    fitting boundary; the rest show how far the model reaches below it. Mirrors
+    the grid bounds in calculate_pickup_ion_values and adds the same constant
     background, so the modeled rate matches what the fitter compared against.
     """
     solar_wind_speed_inertial_frame = float(
         np.linalg.norm(fit_input.solar_wind_velocity_rtn_sun)
     )
 
-    lower_energy_cutoff, _upper_energy_cutoff = calculate_pickup_ion_fit_energy_range(
-        solar_wind_speed_inertial_frame
-    )
-    bin_mask = fit_input.esa_energies > lower_energy_cutoff
-    shared_energies = fit_input.esa_energies[bin_mask]
+    bin_mask = np.ones_like(fit_input.esa_energies, dtype=bool)
+    shared_energies = fit_input.esa_energies
 
     chunk_response = build_chunk_collapsed_response(
         swapi_response=dependencies.swapi_response,

@@ -6,7 +6,7 @@ modeled rates over the PUI fit energy window.
 
 Runs the production helium PUI fit over the whole day via
 `scripts/swapi/fit_and_plot_pui.py`, then renders the single chunk nearest
-15:54:05 UT via `scripts/swapi/view_one_pui_spectrum.py`.
+20:54:57 UT via `scripts/swapi/view_one_pui_spectrum.py`.
 
 Requires the environment variable IMAP_API_KEY to be set (the fit downloads its
 L2 and SPICE inputs from the SDC).
@@ -42,8 +42,8 @@ from PIL import Image
 
 from figure_utils import DEFAULT_PNG_PALETTE_COLORS, FIGURES_DIR, require_imap_api_key
 
-_DATE = "2026-01-01"
-_CHUNK_TIME = "15:54:05"
+_DATE = "2025-11-09"
+_CHUNK_TIME = "20:54:57"
 _OUTPUT_PATH = FIGURES_DIR / "pui_flight_model_comparison.png"
 
 _SCRIPTS_DIR = REPO_ROOT / "scripts" / "swapi"
