@@ -311,9 +311,9 @@ parameter_rows = [
         r"$T_\mathrm{PUI}$ (derived)",
         _uncertain_mathtext(pickup_ion_data.temperature[chunk_index], True) + " K",
     ),
-    (r"$\alpha_\mathrm{PUI}$", f"{SWAPI_PUI_COOLING_INDEX:.2f} (fixed)"),
-    (r"$C_\mathrm{bg}$", f"{background_offset_hz:.3f} Hz (fixed)"),
-    (r"$v_\mathrm{sw}$", f"{solar_wind_speed_kms:.0f} km/s"),
+    (r"$\alpha_\mathrm{PUI}$ (fixed)", f"{SWAPI_PUI_COOLING_INDEX:.2f}"),
+    (r"$C_\mathrm{bg}$ (fixed)", f"{background_offset_hz:.3f} Hz"),
+    (r"$v_\mathrm{sw}$ (input)", f"{solar_wind_speed_kms:.0f} km/s"),
 ]
 # Claude: each criterion is written with this chunk's value in place of the
 # Claude: symbol, and paired with whether it passes, as is_good_fit checks it.
